@@ -1,0 +1,33 @@
+name: bitsend
+description: "Offline Solana transfer app with real local wallet, hotspot HTTP, and BLE transport."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  solana: ^0.32.0
+  http: ^1.6.0
+  sqflite: ^2.4.2
+  path: ^1.9.1
+  path_provider: ^2.1.5
+  connectivity_plus: ^7.0.0
+  network_info_plus: ^7.0.0
+  permission_handler: ^12.0.1
+  flutter_secure_storage: ^10.0.0
+  uuid: ^4.5.3
+  crypto: ^3.0.7
+  bip39: ^1.0.6
+  bluetooth_low_energy: ^6.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
