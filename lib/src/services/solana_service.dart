@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:solana/dto.dart'
+    show
+        BalanceResult,
+        ConfirmationStatus,
+        LatestBlockhash,
+        SignatureStatus,
+        SignatureStatusesResult;
 import 'package:solana/encoder.dart';
 import 'package:solana/solana.dart';
-import 'package:solana/src/encoder/signed_tx.dart';
-import 'package:solana/src/rpc/dto/dto.dart'
-    show BalanceResult, LatestBlockhash, SignatureStatus, SignatureStatusesResult;
 
 import '../models/app_models.dart';
 
@@ -20,42 +24,62 @@ class SolanaService {
     _rpcEndpoint = value;
   }
 
+  static const Duration _defaultConfirmationTimeout = Duration(seconds: 60);
+
   SolanaClient get client => SolanaClient(
         rpcUrl: Uri.parse(_rpcEndpoint),
         websocketUrl: _websocketEndpoint(_rpcEndpoint),
       );
 
+  RpcClient get rpcClient => client.rpcClient;
+
   Future<bool> isDevnetReachable() async {
     try {
-      final String health = await client.rpcClient.getHealth();
-      return health == 'ok';
+      await rpcClient.getLatestBlockhash(commitment: Commitment.confirmed);
+      return true;
     } catch (_) {
       return false;
     }
   }
 
   Future<int> getBalanceLamports(String address) async {
-    final BalanceResult result =
-        await client.rpcClient.getBalance(address, commitment: Commitment.confirmed);
+    final BalanceResult result = await rpcClient.getBalance(
+      address,
+      commitment: Commitment.confirmed,
+    );
     return result.value;
   }
 
-  Future<void> requestAirdrop(String address, {double sol = 1}) async {
-    await client.requestAirdrop(
-      address: Ed25519HDPublicKey.fromBase58(address),
-      lamports: (sol * lamportsPerSol).round(),
+  Future<String> requestAirdrop(String address, {double sol = 1}) async {
+    final String signature = await rpcClient.requestAirdrop(
+      address,
+      (sol * lamportsPerSol).round(),
       commitment: Commitment.confirmed,
     );
+    await waitForConfirmation(
+      signature,
+      desiredStatus: ConfirmationStatus.confirmed,
+    );
+    return signature;
   }
 
   Future<CachedBlockhash> getFreshBlockhash() async {
     final LatestBlockhash latest =
-        (await client.rpcClient.getLatestBlockhash(commitment: Commitment.confirmed)).value;
+        (await rpcClient.getLatestBlockhash(commitment: Commitment.confirmed))
+            .value;
     return CachedBlockhash(
       blockhash: latest.blockhash,
       lastValidBlockHeight: latest.lastValidBlockHeight,
       fetchedAt: DateTime.now(),
     );
+  }
+
+  Future<bool> isBlockhashValid(String blockhash) async {
+    return (await rpcClient.isBlockhashValid(
+      blockhash,
+      commitment: Commitment.confirmed,
+    ))
+        .value;
   }
 
   Future<OfflineEnvelope> createSignedEnvelope({
@@ -181,15 +205,17 @@ class SolanaService {
   }
 
   Future<String> broadcastSignedTransaction(String encodedTransaction) async {
-    return client.rpcClient.sendTransaction(
+    return rpcClient.sendTransaction(
       encodedTransaction,
       preflightCommitment: Commitment.confirmed,
     );
   }
 
   Future<SignatureStatus?> getSignatureStatus(String signature) async {
-    final SignatureStatusesResult result =
-        await client.rpcClient.getSignatureStatuses(<String>[signature], searchTransactionHistory: true);
+    final SignatureStatusesResult result = await rpcClient.getSignatureStatuses(
+      <String>[signature],
+      searchTransactionHistory: true,
+    );
     if (result.value.isEmpty) {
       return null;
     }
@@ -198,7 +224,8 @@ class SolanaService {
 
   Future<void> waitForConfirmation(
     String signature, {
-    Duration timeout = const Duration(seconds: 25),
+    ConfirmationStatus desiredStatus = ConfirmationStatus.confirmed,
+    Duration timeout = _defaultConfirmationTimeout,
     Duration pollInterval = const Duration(seconds: 2),
   }) async {
     final DateTime deadline = DateTime.now().add(timeout);
@@ -208,8 +235,10 @@ class SolanaService {
         if (status.err != null) {
           throw StateError('Transaction failed: ${status.err}');
         }
-        if (status.confirmationStatus == Commitment.confirmed ||
-            status.confirmationStatus == Commitment.finalized) {
+        if (_hasReachedConfirmation(
+          current: status.confirmationStatus,
+          desired: desiredStatus,
+        )) {
           return;
         }
       }
@@ -221,6 +250,19 @@ class SolanaService {
 
   Uri explorerUrlFor(String signature) =>
       Uri.parse('https://explorer.solana.com/tx/$signature?cluster=devnet');
+
+  bool _hasReachedConfirmation({
+    required ConfirmationStatus current,
+    required ConfirmationStatus desired,
+  }) {
+    return switch (desired) {
+      ConfirmationStatus.processed => true,
+      ConfirmationStatus.confirmed =>
+        current == ConfirmationStatus.confirmed ||
+            current == ConfirmationStatus.finalized,
+      ConfirmationStatus.finalized => current == ConfirmationStatus.finalized,
+    };
+  }
 
   Uri _websocketEndpoint(String rpcEndpoint) {
     final Uri parsed = Uri.parse(rpcEndpoint);

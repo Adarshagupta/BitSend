@@ -79,16 +79,16 @@ class _BootScreenState extends State<BootScreen> {
                 const SizedBox(height: 24),
                 Text(
                   'bitsend',
-                  style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                        color: Colors.white,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.displaySmall?.copyWith(color: Colors.white),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   'Offline handoff now. Online settlement later.',
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: Colors.white70,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
                 ),
                 const SizedBox(height: 32),
                 if (_error == null)
@@ -103,9 +103,9 @@ class _BootScreenState extends State<BootScreen> {
                     children: <Widget>[
                       Text(
                         _error!,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Colors.white,
-                            ),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodyMedium?.copyWith(color: Colors.white),
                       ),
                       const SizedBox(height: 16),
                       OutlinedButton(
@@ -133,9 +133,9 @@ class WelcomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BitsendPageScaffold(
-      title: 'Move a signed Solana payment before the internet returns.',
+      title: 'Send now. Settle later.',
       subtitle:
-          'bitsend signs a real devnet transfer locally, hands the signed payload to the receiver over a local link, and broadcasts it later when either device gets online.',
+          'Sign a real devnet transfer, pass it over a local link, and broadcast it once either device is back online.',
       showBack: false,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -146,42 +146,45 @@ class WelcomeScreen extends StatelessWidget {
               children: <Widget>[
                 _FeatureRow(
                   icon: Icons.account_balance_wallet_rounded,
-                  title: 'Local non-custodial wallet',
-                  caption: 'Each device creates or restores its own Solana devnet keypair.',
+                  title: 'Wallet on each device',
+                  caption: 'Create or restore a Solana devnet wallet locally.',
                 ),
                 SizedBox(height: 18),
                 _FeatureRow(
                   icon: Icons.account_tree_rounded,
                   title: 'Derived offline wallet',
-                  caption: 'A second real account is derived from the same recovery phrase and can be topped up while online.',
+                  caption: 'A second wallet is derived for offline signing.',
                 ),
                 SizedBox(height: 18),
                 _FeatureRow(
                   icon: Icons.swap_horiz_rounded,
-                  title: 'Two real local transports',
-                  caption: 'Hotspot HTTP is primary, and BLE is available as a real secondary handoff path.',
+                  title: 'Local handoff',
+                  caption:
+                      'Use hotspot HTTP or BLE to pass the signed transfer.',
                 ),
                 SizedBox(height: 18),
                 _FeatureRow(
                   icon: Icons.cloud_upload_rounded,
-                  title: 'Delayed settlement',
-                  caption: 'The signed offline-wallet transfer is only on-chain after the receiver or sender later broadcasts it.',
+                  title: 'Later settlement',
+                  caption: 'Funds move on-chain only after a later broadcast.',
                 ),
               ],
             ),
           ),
           const SizedBox(height: 16),
           const InlineBanner(
-            title: 'Operational constraints',
+            title: 'Before you start',
             caption:
-                'Wallet setup stays fully online. Offline mode starts only after you move funds into the derived offline wallet and hand off the signed transaction locally.',
+                'Finish setup online, fund the offline wallet, then use local handoff when internet drops.',
             icon: Icons.fact_check_rounded,
           ),
         ],
       ),
       bottom: ElevatedButton(
         onPressed: () {
-          Navigator.of(context).pushReplacementNamed(AppRoutes.onboardingWallet);
+          Navigator.of(
+            context,
+          ).pushReplacementNamed(AppRoutes.onboardingWallet);
         },
         child: const Text('Set up wallet'),
       ),
@@ -233,9 +236,8 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
     return BitsendPageScaffold(
-      title: 'Create or restore your device wallet',
-      subtitle:
-          'Both the sender and receiver use the same app. The role changes only by the action they pick next.',
+      title: 'Set up this device',
+      subtitle: 'Create a wallet or restore an existing one.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -243,10 +245,13 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('Create new wallet', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  'New wallet',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 8),
                 Text(
-                  'Generate a fresh local wallet for this device and continue to funding.',
+                  'Generate a wallet for this device and continue to funding.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 18),
@@ -262,10 +267,13 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('Restore from phrase', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  'Restore wallet',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 8),
                 Text(
-                  'Paste the 12-word recovery phrase if you want to continue with an existing wallet on this device.',
+                  'Paste the recovery phrase used by this wallet.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 18),
@@ -289,7 +297,7 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
             InlineBanner(
               title: 'Wallet ready',
               caption:
-                  'Active address ${state.wallet!.displayAddress}. Save the recovery phrase before moving to funding.',
+                  'Address ${state.wallet!.displayAddress}. Save the recovery phrase before you continue.',
               icon: Icons.verified_user_rounded,
             ),
           ],
@@ -302,10 +310,16 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
 class FundWalletScreen extends StatelessWidget {
   const FundWalletScreen({super.key});
 
-  Future<void> _requestAirdrop(BuildContext context, BitsendAppState state) async {
+  Future<void> _requestAirdrop(
+    BuildContext context,
+    BitsendAppState state,
+  ) async {
     try {
       await state.requestAirdrop();
     } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
       _showSnack(context, _messageFor(error));
     }
   }
@@ -317,6 +331,9 @@ class FundWalletScreen extends StatelessWidget {
         await state.refreshWalletData();
       }
     } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
       _showSnack(context, _messageFor(error));
     }
   }
@@ -326,12 +343,13 @@ class FundWalletScreen extends StatelessWidget {
     final BitsendAppState state = BitsendStateScope.of(context);
     final bool funded = state.hasEnoughFunding;
     return BitsendPageScaffold(
-      title: 'Fund the device wallet',
+      title: 'Fund wallet',
       subtitle:
-          'Fund the main wallet first. After onboarding, you can move part of this balance into the derived offline wallet for hotspot or BLE handoff.',
+          'Add devnet SOL so setup can finish and the offline wallet can be topped up later.',
       actions: <Widget>[
         IconButton(
           onPressed: () => _refresh(context, state),
+          tooltip: 'Refresh balances',
           icon: const Icon(Icons.refresh_rounded),
         ),
       ],
@@ -344,24 +362,26 @@ class FundWalletScreen extends StatelessWidget {
                 MetricCard(
                   label: 'Device address',
                   value: state.wallet?.displayAddress ?? 'Wallet missing',
-                  caption: state.wallet?.address ?? 'Create or restore a wallet first.',
+                  caption:
+                      state.wallet?.address ??
+                      'Create or restore a wallet first.',
                 ),
                 const SizedBox(height: 12),
                 MetricCard(
                   label: 'Available balance',
                   value: Formatters.sol(state.mainBalanceSol),
                   caption: funded
-                      ? 'Enough to finish setup and open the dashboard.'
-                      : 'Reach at least ${Formatters.sol(minimumFundingSol)} before continuing.',
+                      ? 'Enough to continue.'
+                      : 'Reach at least ${Formatters.sol(minimumFundingSol)} to continue.',
                 ),
               ],
             ),
           ),
           const SizedBox(height: 16),
           InlineBanner(
-            title: 'Funding rule',
+            title: 'Minimum funding',
             caption:
-                'Continue unlocks only after the wallet has enough devnet SOL for a transfer amount plus some fee headroom.',
+                'Use an airdrop until the wallet clears the setup threshold.',
             icon: Icons.savings_rounded,
             action: TextButton(
               onPressed: () => _requestAirdrop(context, state),
@@ -379,12 +399,12 @@ class FundWalletScreen extends StatelessWidget {
                     Navigator.of(context).pushReplacementNamed(AppRoutes.home);
                   }
                 : null,
-            child: const Text('Continue to home'),
+            child: const Text('Continue'),
           ),
           const SizedBox(height: 10),
           OutlinedButton(
             onPressed: () => _requestAirdrop(context, state),
-            child: const Text('Request devnet airdrop'),
+            child: const Text('Request airdrop'),
           ),
         ],
       ),
@@ -400,9 +420,9 @@ class OnboardingPrepareScreen extends StatelessWidget {
     final BitsendAppState state = BitsendStateScope.of(context);
     final WalletSummary summary = state.walletSummary;
     return BitsendPageScaffold(
-      title: 'Offline wallet comes next',
+      title: 'Offline wallet',
       subtitle:
-          'Main wallet setup is complete. From the dashboard, top up the derived offline wallet and refresh send readiness right before the local handoff.',
+          'A second wallet is derived automatically. Top it up from Home before any offline send.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -412,7 +432,7 @@ class OnboardingPrepareScreen extends StatelessWidget {
                 MetricCard(
                   label: 'Main wallet balance',
                   value: Formatters.sol(summary.balanceSol),
-                  caption: 'Source balance for later offline-wallet top ups.',
+                  caption: 'Source balance for later top-ups.',
                 ),
                 const SizedBox(height: 12),
                 MetricCard(
@@ -420,20 +440,20 @@ class OnboardingPrepareScreen extends StatelessWidget {
                   value: summary.offlineWalletAddress == null
                       ? 'Unavailable'
                       : Formatters.shortAddress(summary.offlineWalletAddress!),
-                  caption: 'Derived automatically from the same recovery phrase.',
+                  caption: 'Derived from the same recovery phrase.',
                 ),
                 const SizedBox(height: 12),
                 MetricCard(
                   label: 'Offline wallet balance',
                   value: Formatters.sol(summary.offlineBalanceSol),
-                  caption: 'Move funds here from the dashboard before attempting an offline send.',
+                  caption: 'Move funds here before any offline send.',
                 ),
                 const SizedBox(height: 12),
                 MetricCard(
                   label: 'Local endpoint',
                   value: summary.localEndpoint ?? 'Not available yet',
                   caption:
-                      'The receiver shares this endpoint while listening on the hotspot or local Wi-Fi.',
+                      'The receiver shares this while listening on hotspot.',
                 ),
               ],
             ),
@@ -442,8 +462,8 @@ class OnboardingPrepareScreen extends StatelessWidget {
           InlineBanner(
             title: 'Permissions',
             caption: state.localPermissionsGranted
-                ? 'Local network permissions are already granted.'
-                : 'Location and nearby-device permissions are requested here because Android uses them for local transport.',
+                ? 'Local transport access is already granted.'
+                : 'Android needs location and nearby-device access for local transport.',
             icon: Icons.perm_device_information_rounded,
           ),
         ],
@@ -452,7 +472,7 @@ class OnboardingPrepareScreen extends StatelessWidget {
         onPressed: () {
           Navigator.of(context).pushReplacementNamed(AppRoutes.home);
         },
-        child: const Text('Continue to home'),
+        child: const Text('Go to home'),
       ),
     );
   }
@@ -467,25 +487,26 @@ class HomeDashboardScreen extends StatelessWidget {
     final HomeStatus status = state.homeStatus;
     final WalletSummary summary = state.walletSummary;
     final List<PendingTransfer> recent = state.recentActivity();
-    final bool canSend = state.hasWallet && state.hasOfflineFunds && state.hasOfflineReadyBlockhash;
+    final bool canSend =
+        state.hasWallet &&
+        state.hasOfflineFunds &&
+        state.hasOfflineReadyBlockhash;
 
     return BitsendPageScaffold(
       title: 'Home',
-      subtitle:
-          'The dashboard answers three things immediately: internet reachability, offline send readiness, and the next action to take.',
       actions: <Widget>[
         IconButton(
           onPressed: state.refreshStatus,
+          tooltip: 'Refresh status',
           icon: const Icon(Icons.refresh_rounded),
-        ),
-        IconButton(
-          onPressed: () {
-            Navigator.of(context).pushNamed(AppRoutes.settings);
-          },
-          icon: const Icon(Icons.tune_rounded),
         ),
       ],
       showBack: false,
+      showHeader: false,
+      primaryTab: BitsendPrimaryTab.home,
+      onPrimaryTabSelected: (BitsendPrimaryTab tab) {
+        _navigatePrimaryTab(context, tab);
+      },
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -510,97 +531,57 @@ class HomeDashboardScreen extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 18),
-          FadeSlideIn(
-            delay: 0,
-            child: _DashboardHero(summary: summary),
-          ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+          FadeSlideIn(delay: 0, child: _DashboardHero(summary: summary)),
+          const SizedBox(height: 14),
           FadeSlideIn(
             delay: 40,
-            child: SectionCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text('Readiness', style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 14),
-                  _ChecklistRow(
-                    label: 'Wallet created',
-                    complete: state.hasWallet,
-                    caption: 'A local device wallet exists.',
-                  ),
-                  const SizedBox(height: 12),
-                  _ChecklistRow(
-                    label: 'Main wallet funded',
-                    complete: state.hasEnoughFunding,
-                    caption: 'Balance is above ${Formatters.sol(minimumFundingSol)}.',
-                  ),
-                  const SizedBox(height: 12),
-                  _ChecklistRow(
-                    label: 'Offline wallet funded',
-                    complete: state.hasOfflineFunds,
-                    caption: state.hasOfflineFunds
-                        ? 'Funds are available to sign from the offline wallet.'
-                        : 'Use Offline Wallet to move funds from the main wallet first.',
-                  ),
-                  const SizedBox(height: 12),
-                  _ChecklistRow(
-                    label: 'Send readiness refreshed',
-                    complete: state.hasOfflineReadyBlockhash,
-                    caption: state.hasOfflineReadyBlockhash
-                        ? 'Fresh blockhash is cached.'
-                        : 'Refresh readiness right before the offline handoff.',
-                  ),
-                ],
-              ),
+            child: _HomeSituationCard(
+              hasOfflineFunds: state.hasOfflineFunds,
+              hasReadyBlockhash: state.hasOfflineReadyBlockhash,
+              hasLocalLink: status.hasLocalLink,
+              canSend: canSend,
+              onPrimary: () {
+                Navigator.of(context).pushNamed(
+                  canSend ? AppRoutes.sendTransport : AppRoutes.prepare,
+                );
+              },
             ),
           ),
-          if (!canSend) ...<Widget>[
-            const SizedBox(height: 16),
-            FadeSlideIn(
-              delay: 80,
-              child: InlineBanner(
-                title: 'Send is locked',
-                caption: !state.hasOfflineFunds
-                    ? 'Move funds into the offline wallet first.'
-                    : 'Refresh send readiness before sending so the app has a fresh blockhash.',
-                icon: Icons.lock_clock_rounded,
-                action: TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pushNamed(AppRoutes.prepare);
-                  },
-                  child: const Text('Offline Wallet'),
-                ),
-              ),
-            ),
-          ],
           const SizedBox(height: 20),
           Text('Actions', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 14),
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: 14,
-            crossAxisSpacing: 14,
-            childAspectRatio: 0.98,
+          Column(
             children: <Widget>[
               FadeSlideIn(
                 delay: 100,
                 child: ActionTile(
+                  title: 'Deposit',
+                  caption: 'Receive SOL',
+                  icon: Icons.south_west_rounded,
+                  onTap: () {
+                    Navigator.of(context).pushNamed(AppRoutes.deposit);
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              FadeSlideIn(
+                delay: 120,
+                child: ActionTile(
                   title: 'Offline Wallet',
-                  caption: 'Top up the derived offline wallet and refresh send readiness.',
+                  caption: 'Fund + refresh',
                   icon: Icons.account_balance_wallet_outlined,
                   onTap: () {
                     Navigator.of(context).pushNamed(AppRoutes.prepare);
                   },
                 ),
               ),
+              const SizedBox(height: 12),
               FadeSlideIn(
-                delay: 140,
+                delay: 160,
                 child: ActionTile(
                   title: 'Send',
-                  caption: 'Sign a real transfer and deliver it over hotspot or BLE.',
+                  caption: 'Handoff',
                   icon: Icons.send_rounded,
                   enabled: canSend,
                   onTap: () {
@@ -608,11 +589,12 @@ class HomeDashboardScreen extends StatelessWidget {
                   },
                 ),
               ),
+              const SizedBox(height: 12),
               FadeSlideIn(
-                delay: 180,
+                delay: 200,
                 child: ActionTile(
                   title: 'Receive',
-                  caption: 'Expose a hotspot or BLE listener and store inbound transfers.',
+                  caption: 'Listen',
                   icon: Icons.call_received_rounded,
                   enabled: state.hasWallet,
                   onTap: () {
@@ -620,11 +602,12 @@ class HomeDashboardScreen extends StatelessWidget {
                   },
                 ),
               ),
+              const SizedBox(height: 12),
               FadeSlideIn(
-                delay: 220,
+                delay: 240,
                 child: ActionTile(
                   title: 'Pending',
-                  caption: 'Track offline handoffs, broadcasts, and confirmations.',
+                  caption: 'Queue',
                   icon: Icons.schedule_send_rounded,
                   enabled: true,
                   onTap: () {
@@ -635,12 +618,12 @@ class HomeDashboardScreen extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 20),
-          Text('Recent activity', style: Theme.of(context).textTheme.titleLarge),
+          Text('Queue', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 14),
           if (recent.isEmpty)
             const EmptyStateCard(
               title: 'No transfers yet',
-              caption: 'Send or receive the first signed transfer to populate the queue.',
+              caption: 'Your queue will show up here.',
               icon: Icons.receipt_long_rounded,
             )
           else
@@ -661,6 +644,169 @@ class HomeDashboardScreen extends StatelessWidget {
                   )
                   .toList(growable: false),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _DepositTarget { main, offline }
+
+class DepositScreen extends StatefulWidget {
+  const DepositScreen({super.key});
+
+  @override
+  State<DepositScreen> createState() => _DepositScreenState();
+}
+
+class _DepositScreenState extends State<DepositScreen> {
+  _DepositTarget _target = _DepositTarget.main;
+
+  Future<void> _copyAddress(BuildContext context, String address) async {
+    await Clipboard.setData(ClipboardData(text: address));
+    if (!context.mounted) {
+      return;
+    }
+    _showSnack(context, 'Address copied.');
+  }
+
+  Future<void> _requestAirdrop(BitsendAppState state) async {
+    try {
+      await state.requestAirdrop(
+        toOfflineWallet: _target == _DepositTarget.offline,
+      );
+      if (!mounted) {
+        return;
+      }
+      _showSnack(context, 'Airdrop requested.');
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showSnack(context, _messageFor(error));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final BitsendAppState state = BitsendStateScope.of(context);
+    final WalletProfile? targetWallet = _target == _DepositTarget.main
+        ? state.wallet
+        : state.offlineWallet;
+    final String title = _target == _DepositTarget.main
+        ? 'Main wallet'
+        : 'Offline wallet';
+    final String? fullAddress = targetWallet?.address;
+    final String shortAddress = targetWallet?.displayAddress ?? 'Unavailable';
+    final String balance = _target == _DepositTarget.main
+        ? Formatters.sol(state.mainBalanceSol)
+        : Formatters.sol(state.offlineBalanceSol);
+
+    return BitsendPageScaffold(
+      title: 'Deposit SOL',
+      subtitle: 'Pick a wallet and share the address.',
+      actions: <Widget>[
+        IconButton(
+          onPressed: () async {
+            try {
+              await state.refreshWalletData();
+            } catch (error) {
+              if (!context.mounted) {
+                return;
+              }
+              _showSnack(context, _messageFor(error));
+            }
+          },
+          tooltip: 'Refresh balances',
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      ],
+      showBack: false,
+      primaryTab: BitsendPrimaryTab.deposit,
+      onPrimaryTabSelected: (BitsendPrimaryTab tab) {
+        _navigatePrimaryTab(context, tab);
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SegmentedButton<_DepositTarget>(
+            segments: const <ButtonSegment<_DepositTarget>>[
+              ButtonSegment<_DepositTarget>(
+                value: _DepositTarget.main,
+                label: Text('Main'),
+                icon: Icon(Icons.account_balance_wallet_rounded),
+              ),
+              ButtonSegment<_DepositTarget>(
+                value: _DepositTarget.offline,
+                label: Text('Offline'),
+                icon: Icon(Icons.lock_clock_rounded),
+              ),
+            ],
+            selected: <_DepositTarget>{_target},
+            onSelectionChanged: (Set<_DepositTarget> value) {
+              setState(() {
+                _target = value.first;
+              });
+            },
+          ),
+          const SizedBox(height: 16),
+          _DepositHero(
+            title: title,
+            shortAddress: shortAddress,
+            balance: balance,
+            statusLabel: _target == _DepositTarget.main
+                ? 'Devnet'
+                : state.hasOfflineReadyBlockhash
+                ? 'Ready'
+                : 'Needs refresh',
+            statusIcon: _target == _DepositTarget.main
+                ? Icons.cloud_done_rounded
+                : state.hasOfflineReadyBlockhash
+                ? Icons.check_circle_outline_rounded
+                : Icons.update_rounded,
+            statusActive:
+                _target == _DepositTarget.main ||
+                state.hasOfflineReadyBlockhash,
+          ),
+          const SizedBox(height: 16),
+          SectionCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text('Address', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 12),
+                SelectableText(
+                  fullAddress ?? 'Wallet unavailable',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.ink,
+                    height: 1.6,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: fullAddress == null
+                            ? null
+                            : () => _copyAddress(context, fullAddress),
+                        child: const Text('Copy address'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: state.working || fullAddress == null
+                            ? null
+                            : () => _requestAirdrop(state),
+                        child: const Text('Airdrop'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -720,72 +866,47 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
     final WalletSummary summary = state.walletSummary;
     return BitsendPageScaffold(
       title: 'Offline Wallet',
-      subtitle:
-          'This real Solana account is derived from the same recovery phrase. Top it up while online, then sign offline transfers from it later.',
+      subtitle: 'Fund once. Refresh before handoff.',
       actions: <Widget>[
         IconButton(
           onPressed: state.refreshStatus,
+          tooltip: 'Refresh balances',
           icon: const Icon(Icons.refresh_rounded),
         ),
       ],
+      showBack: false,
+      primaryTab: BitsendPrimaryTab.offline,
+      onPrimaryTabSelected: (BitsendPrimaryTab tab) {
+        _navigatePrimaryTab(context, tab);
+      },
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          SectionCard(
-            child: Column(
-              children: <Widget>[
-                MetricCard(
-                  label: 'Main wallet balance',
-                  value: Formatters.sol(summary.balanceSol),
-                  caption: state.wallet?.displayAddress ?? 'Main wallet missing.',
-                ),
-                const SizedBox(height: 12),
-                MetricCard(
-                  label: 'Offline wallet address',
-                  value: summary.offlineWalletAddress == null
-                      ? 'Unavailable'
-                      : Formatters.shortAddress(summary.offlineWalletAddress!),
-                  caption: summary.offlineWalletAddress ?? 'Derived from the same recovery phrase.',
-                ),
-                const SizedBox(height: 12),
-                MetricCard(
-                  label: 'Offline wallet balance',
-                  value: Formatters.sol(summary.offlineBalanceSol),
-                  caption:
-                      'Available on-chain in the offline wallet before app-side reservations.',
-                ),
-                const SizedBox(height: 12),
-                MetricCard(
-                  label: 'Available to send',
-                  value: Formatters.sol(summary.offlineAvailableSol),
-                  caption: 'Pending offline handoffs are reserved from this amount.',
-                ),
-                const SizedBox(height: 12),
-                MetricCard(
-                  label: 'Send readiness',
-                  value: summary.readyForOffline ? 'Fresh blockhash cached' : 'Needs refresh',
-                  caption: summary.readyForOffline
-                      ? 'Fetched ${Formatters.durationLabel(summary.blockhashAge)}.'
-                      : 'Refresh this shortly before going offline.',
-                ),
-              ],
-            ),
+          _OfflineWalletScene(
+            mainBalance: Formatters.sol(summary.balanceSol),
+            offlineBalance: Formatters.sol(summary.offlineBalanceSol),
+            spendableBalance: Formatters.sol(summary.offlineAvailableSol),
+            mainAddress: state.wallet?.displayAddress ?? 'Main unavailable',
+            offlineAddress: summary.offlineWalletAddress == null
+                ? 'Offline unavailable'
+                : Formatters.shortAddress(summary.offlineWalletAddress!),
+            readyForOffline: summary.readyForOffline,
+            readinessAge: summary.blockhashAge == null
+                ? 'Refresh'
+                : Formatters.durationLabel(summary.blockhashAge),
           ),
           const SizedBox(height: 16),
           SectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('Top up offline wallet', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
-                Text(
-                  'This sends a real on-chain transfer from the main wallet into the derived offline wallet.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 16),
+                Text('Move SOL', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 14),
                 TextField(
                   controller: _topUpController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   inputFormatters: <TextInputFormatter>[
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                   ],
@@ -794,26 +915,26 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
                     hintText: '0.100',
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 14),
                 ElevatedButton(
                   onPressed: state.working ? null : () => _topUp(state),
-                  child: const Text('Move funds to offline wallet'),
+                  child: const Text('Top up offline wallet'),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton(
+                  onPressed: state.working
+                      ? null
+                      : () => _refreshReadiness(state),
+                  child: Text(
+                    summary.readyForOffline
+                        ? 'Refresh again'
+                        : 'Refresh readiness',
+                  ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 16),
-          InlineBanner(
-            title: 'Operational note',
-            caption:
-                'Because the offline payment still uses a standard Solana transaction, refresh send readiness shortly before the judged handoff to minimize blockhash expiry risk.',
-            icon: Icons.timelapse_rounded,
-          ),
         ],
-      ),
-      bottom: ElevatedButton(
-        onPressed: state.working ? null : () => _refreshReadiness(state),
-        child: const Text('Refresh send readiness'),
       ),
     );
   }
@@ -891,8 +1012,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
     final TransportKind transport = state.sendDraft.transport;
     return BitsendPageScaffold(
       title: 'Choose receiver',
-      subtitle:
-          'Choose the real transport you will use for the handoff, then enter the receiver address shown on the other device.',
+      subtitle: 'Pick the handoff method, then enter the receiver details.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -923,22 +1043,30 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('Receiver address', style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Receiver address',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: _addressController,
                   decoration: const InputDecoration(
-                    hintText: 'Solana devnet address',
+                    labelText: 'Receiver address',
+                    hintText: 'Receiver devnet address',
                   ),
                 ),
                 if (transport == TransportKind.hotspot) ...<Widget>[
                   const SizedBox(height: 18),
-                  Text('Receiver endpoint', style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    'Receiver endpoint',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 10),
                   TextField(
                     controller: _endpointController,
                     decoration: const InputDecoration(
-                      hintText: '192.168.1.22:8787 or http://192.168.1.22:8787',
+                      labelText: 'Receiver endpoint',
+                      hintText: 'http://192.168.1.22:8787',
                     ),
                   ),
                 ] else ...<Widget>[
@@ -964,16 +1092,18 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                                   _showSnack(context, _messageFor(error));
                                 }
                               },
-                        child: Text(state.bleDiscovering ? 'Scanning...' : 'Scan'),
+                        child: Text(
+                          state.bleDiscovering ? 'Scanning...' : 'Scan',
+                        ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
                   if (state.bleReceivers.isEmpty)
                     const InlineBanner(
-                      title: 'No BLE receiver selected',
+                      title: 'No receiver selected',
                       caption:
-                          'Ask the other device to switch Receive to BLE and start advertising, then scan again here.',
+                          'Open Receive on the other device, switch to BLE, then scan again.',
                       icon: Icons.bluetooth_searching_rounded,
                     )
                   else
@@ -1005,7 +1135,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
       ),
       bottom: ElevatedButton(
         onPressed: () => _continue(state),
-        child: const Text('Continue to amount'),
+        child: const Text('Continue'),
       ),
     );
   }
@@ -1056,17 +1186,16 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
     final double amount = double.tryParse(_amountController.text.trim()) ?? 0;
     final int lamports = (amount * 1000000000).round();
     return BitsendPageScaffold(
-      title: 'Enter amount',
-      subtitle:
-          'Amount entry stays in SOL for readability, with the raw lamport value shown underneath for the signed offline-wallet transaction.',
+      title: 'Amount',
+      subtitle: 'Enter the amount in SOL.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           if (!state.hasOfflineReadyBlockhash)
             const InlineBanner(
-              title: 'Refresh send readiness first',
+              title: 'Refresh readiness first',
               caption:
-                  'This flow signs from the offline wallet. Refresh a fresh blockhash while online right before the offline exchange.',
+                  'This flow signs from the offline wallet and needs a fresh blockhash.',
               icon: Icons.lock_clock_rounded,
             ),
           if (!state.hasOfflineReadyBlockhash) const SizedBox(height: 16),
@@ -1076,7 +1205,9 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
               children: <Widget>[
                 TextField(
                   controller: _amountController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   inputFormatters: <TextInputFormatter>[
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                   ],
@@ -1127,10 +1258,10 @@ class SendReviewScreen extends StatelessWidget {
     if (!draft.hasReceiver || !draft.hasAmount) {
       return BitsendPageScaffold(
         title: 'Review transfer',
-        subtitle: 'Receiver and amount are both required before signing.',
+        subtitle: 'Receiver and amount are required before signing.',
         child: const EmptyStateCard(
           title: 'Transfer not ready',
-          caption: 'Go back and complete the receiver and amount steps first.',
+          caption: 'Go back and finish the receiver and amount steps.',
           icon: Icons.assignment_late_rounded,
         ),
       );
@@ -1138,33 +1269,42 @@ class SendReviewScreen extends StatelessWidget {
 
     return BitsendPageScaffold(
       title: 'Review transfer',
-      subtitle:
-          'This signs a real Solana devnet transfer from the derived offline wallet and sends the signed envelope over the local link.',
+      subtitle: 'Check the receiver, amount, and transport before signing.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           const InlineBanner(
-            title: 'Settlement timing',
+            title: 'When funds move',
             caption:
-                'The receiver gets a signed transaction offline, but the actual deduction happens only after later broadcast.',
+                'The receiver gets a signed transaction now. Settlement happens after broadcast.',
             icon: Icons.info_outline_rounded,
           ),
           const SizedBox(height: 16),
           SectionCard(
             child: Column(
               children: <Widget>[
-                DetailRow(label: 'Receiver', value: Formatters.shortAddress(draft.receiverAddress)),
                 DetailRow(
-                  label: 'Source wallet',
-                  value: state.offlineWallet?.displayAddress ?? 'Offline wallet unavailable',
+                  label: 'Receiver',
+                  value: Formatters.shortAddress(draft.receiverAddress),
                 ),
                 DetailRow(
-                  label: draft.transport == TransportKind.hotspot ? 'Endpoint' : 'BLE receiver',
+                  label: 'Source wallet',
+                  value:
+                      state.offlineWallet?.displayAddress ??
+                      'Offline wallet unavailable',
+                ),
+                DetailRow(
+                  label: draft.transport == TransportKind.hotspot
+                      ? 'Endpoint'
+                      : 'BLE receiver',
                   value: draft.transport == TransportKind.hotspot
                       ? draft.receiverEndpoint
                       : draft.receiverPeripheralName,
                 ),
-                DetailRow(label: 'Amount', value: Formatters.sol(draft.amountSol)),
+                DetailRow(
+                  label: 'Amount',
+                  value: Formatters.sol(draft.amountSol),
+                ),
                 DetailRow(
                   label: 'Offline balance left',
                   value: Formatters.sol(
@@ -1177,10 +1317,7 @@ class SendReviewScreen extends StatelessWidget {
                   label: 'Blockhash age',
                   value: Formatters.durationLabel(summary.blockhashAge),
                 ),
-                DetailRow(
-                  label: 'Transport',
-                  value: draft.transport.label,
-                ),
+                DetailRow(label: 'Transport', value: draft.transport.label),
               ],
             ),
           ),
@@ -1190,7 +1327,7 @@ class SendReviewScreen extends StatelessWidget {
         onPressed: () {
           Navigator.of(context).pushNamed(AppRoutes.sendProgress);
         },
-        child: const Text('Sign and send offline'),
+        child: const Text('Sign and send'),
       ),
     );
   }
@@ -1254,32 +1391,32 @@ class _SendProgressScreenState extends State<SendProgressScreen> {
     final TransportKind transport = state.sendDraft.transport;
     final List<_ProgressStep> steps = <_ProgressStep>[
       _ProgressStep(
-        title: 'Signing from offline wallet',
-        caption: 'The derived offline wallet creates the Solana transfer locally.',
+        title: 'Sign transfer',
+        caption: 'The offline wallet signs the transfer locally.',
         complete: _stage > 0,
         current: _stage == 0,
       ),
       _ProgressStep(
-        title: 'Sending offline',
+        title: 'Deliver offline',
         caption: transport == TransportKind.hotspot
-            ? 'The signed envelope is posted to the receiver endpoint over the local network.'
-            : 'The signed envelope is streamed over BLE to the receiver device.',
+            ? 'The signed envelope is sent to the receiver over the local network.'
+            : 'The signed envelope is sent to the receiver over BLE.',
         complete: _stage > 1,
         current: _stage == 1,
       ),
       _ProgressStep(
         title: 'Delivered',
-        caption: 'Receiver accepted the signed transfer and stored it.',
+        caption: 'The receiver stored the signed transfer.',
         complete: _stage > 1 && _error == null,
         current: _stage == 2,
       ),
     ];
 
     return BitsendPageScaffold(
-      title: 'Sending transfer',
+      title: 'Sending',
       subtitle: _error == null
-          ? 'The sender signs first, then the app pushes the signed envelope across the selected local transport.'
-          : 'Transport or validation failed before delivery.',
+          ? 'Signing locally and delivering over the selected link.'
+          : 'Delivery stopped before completion.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -1298,7 +1435,9 @@ class _SendProgressScreenState extends State<SendProgressScreen> {
                   .entries
                   .map(
                     (MapEntry<int, _ProgressStep> entry) => Padding(
-                      padding: EdgeInsets.only(bottom: entry.key == steps.length - 1 ? 0 : 16),
+                      padding: EdgeInsets.only(
+                        bottom: entry.key == steps.length - 1 ? 0 : 16,
+                      ),
                       child: _ProgressTile(step: entry.value),
                     ),
                   )
@@ -1310,9 +1449,7 @@ class _SendProgressScreenState extends State<SendProgressScreen> {
       bottom: _error == null
           ? const SizedBox(
               height: 56,
-              child: Center(
-                child: CircularProgressIndicator(),
-              ),
+              child: Center(child: CircularProgressIndicator()),
             )
           : Column(
               mainAxisSize: MainAxisSize.min,
@@ -1325,14 +1462,14 @@ class _SendProgressScreenState extends State<SendProgressScreen> {
                     });
                     _run();
                   },
-                  child: const Text('Retry transfer'),
+                  child: const Text('Try again'),
                 ),
                 const SizedBox(height: 10),
                 OutlinedButton(
                   onPressed: () {
                     Navigator.of(context).pop();
                   },
-                  child: const Text('Back to review'),
+                  child: const Text('Back'),
                 ),
               ],
             ),
@@ -1348,9 +1485,9 @@ class SendSuccessScreen extends StatelessWidget {
     final BitsendAppState state = BitsendStateScope.of(context);
     final PendingTransfer? transfer = state.lastSentTransfer;
     return BitsendPageScaffold(
-      title: 'Transfer delivered',
+      title: 'Delivered',
       subtitle:
-          'The offline-wallet transaction was handed off offline and is now waiting for later broadcast.',
+          'The signed transfer was delivered and is waiting for broadcast.',
       child: transfer == null
           ? const EmptyStateCard(
               title: 'No transfer found',
@@ -1363,11 +1500,14 @@ class SendSuccessScreen extends StatelessWidget {
                 children: <Widget>[
                   Row(
                     children: <Widget>[
-                      const Icon(Icons.check_circle_rounded, color: AppColors.emerald),
+                      const Icon(
+                        Icons.check_circle_rounded,
+                        color: AppColors.emerald,
+                      ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'Sent offline - awaiting internet for settlement.',
+                          'Sent offline and queued for later settlement.',
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                       ),
@@ -1380,12 +1520,20 @@ class SendSuccessScreen extends StatelessWidget {
                     value: Formatters.shortAddress(transfer.senderAddress),
                   ),
                   DetailRow(label: 'Receiver', value: transfer.receiverAddress),
-                  DetailRow(label: 'Amount', value: Formatters.sol(transfer.amountSol)),
-                  DetailRow(label: 'Transport', value: transfer.transport.label),
+                  DetailRow(
+                    label: 'Amount',
+                    value: Formatters.sol(transfer.amountSol),
+                  ),
+                  DetailRow(
+                    label: 'Transport',
+                    value: transfer.transport.label,
+                  ),
                   if (transfer.transactionSignature != null)
                     DetailRow(
                       label: 'Signature',
-                      value: Formatters.shortAddress(transfer.transactionSignature!),
+                      value: Formatters.shortAddress(
+                        transfer.transactionSignature!,
+                      ),
                     ),
                 ],
               ),
@@ -1397,7 +1545,7 @@ class SendSuccessScreen extends StatelessWidget {
             ModalRoute.withName(AppRoutes.home),
           );
         },
-        child: const Text('View pending'),
+        child: const Text('Open pending'),
       ),
     );
   }
@@ -1425,7 +1573,8 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
         _startListening(state);
       });
     }
-    if (state.announcementMessage != null && state.announcementMessage != _seenAnnouncement) {
+    if (state.announcementMessage != null &&
+        state.announcementMessage != _seenAnnouncement) {
       _seenAnnouncement = state.announcementMessage;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) {
@@ -1435,7 +1584,8 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
         state.clearAnnouncement();
       });
     }
-    if (state.lastReceivedTransferId != null && state.lastReceivedTransferId != _seenTransferId) {
+    if (state.lastReceivedTransferId != null &&
+        state.lastReceivedTransferId != _seenTransferId) {
       _seenTransferId = state.lastReceivedTransferId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) {
@@ -1465,6 +1615,9 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
         await state.startReceiver();
       }
     } catch (error) {
+      if (!mounted) {
+        return;
+      }
       _showSnack(context, _messageFor(error));
     }
   }
@@ -1478,11 +1631,11 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
         : state.bleListenerRunning;
     return BitsendPageScaffold(
       title: 'Receive',
-      subtitle:
-          'This device can receive over hotspot HTTP or BLE, validate the signed transfer, and store it for later broadcast.',
+      subtitle: 'Listen on hotspot or BLE and store validated transfers.',
       actions: <Widget>[
         IconButton(
           onPressed: state.refreshStatus,
+          tooltip: 'Refresh status',
           icon: const Icon(Icons.refresh_rounded),
         ),
       ],
@@ -1519,9 +1672,9 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
                   value: activeListener ? 'Ready to receive' : 'Stopped',
                   caption: activeListener
                       ? (transport == TransportKind.hotspot
-                          ? 'The local HTTP server is listening on port 8787.'
-                          : 'The device is advertising the bitsend BLE service.')
-                      : 'Tap start to accept incoming transfers.',
+                            ? 'The local HTTP server is listening on port 8787.'
+                            : 'The device is advertising the bitsend BLE service.')
+                      : 'Tap start to accept transfers.',
                 ),
                 const SizedBox(height: 12),
                 MetricCard(
@@ -1531,22 +1684,24 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
                 ),
                 const SizedBox(height: 12),
                 MetricCard(
-                  label: transport == TransportKind.hotspot ? 'Local endpoint' : 'BLE service',
+                  label: transport == TransportKind.hotspot
+                      ? 'Local endpoint'
+                      : 'BLE service',
                   value: transport == TransportKind.hotspot
                       ? (state.localEndpoint ?? 'No local IP available')
                       : 'bitsend BLE receiver',
                   caption: transport == TransportKind.hotspot
-                      ? 'Share this with the sender. They can enter it manually in the Send flow.'
-                      : 'Ask the sender to pick BLE in Send and scan for this device.',
+                      ? 'Share this with the sender.'
+                      : 'Ask the sender to pick BLE and scan for this device.',
                 ),
               ],
             ),
           ),
           const SizedBox(height: 16),
           InlineBanner(
-            title: 'Validation rules',
+            title: 'Validation',
             caption:
-                'The receiver only stores envelopes whose signer, recipient, amount, and checksum all match the signed transaction bytes.',
+                'Only envelopes with matching signer, receiver, amount, and checksum are stored.',
             icon: Icons.rule_rounded,
           ),
         ],
@@ -1563,7 +1718,7 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
             onPressed: () {
               Navigator.of(context).pushNamed(AppRoutes.pending);
             },
-            child: const Text('View pending queue'),
+            child: const Text('Open pending'),
           ),
         ],
       ),
@@ -1579,12 +1734,13 @@ class ReceiveResultScreen extends StatelessWidget {
     final BitsendAppState state = BitsendStateScope.of(context);
     final PendingTransfer? transfer = state.lastReceivedTransfer;
     return BitsendPageScaffold(
-      title: 'Transfer received',
-      subtitle: 'The inbound envelope has been validated locally and queued for broadcast.',
+      title: 'Received',
+      subtitle: 'The signed transfer was saved and is waiting for broadcast.',
       child: transfer == null
           ? const EmptyStateCard(
               title: 'No transfer stored yet',
-              caption: 'Start the listener and wait for the sender to post the signed envelope.',
+              caption:
+                  'Start listening and wait for the sender to deliver a transfer.',
               icon: Icons.inbox_rounded,
             )
           : SectionCard(
@@ -1593,11 +1749,14 @@ class ReceiveResultScreen extends StatelessWidget {
                 children: <Widget>[
                   Row(
                     children: <Widget>[
-                      const Icon(Icons.inventory_2_rounded, color: AppColors.amber),
+                      const Icon(
+                        Icons.inventory_2_rounded,
+                        color: AppColors.amber,
+                      ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'Received incoming transfer - pending broadcast.',
+                          'Received and queued for broadcast.',
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                       ),
@@ -1606,11 +1765,16 @@ class ReceiveResultScreen extends StatelessWidget {
                   const SizedBox(height: 20),
                   DetailRow(label: 'Transfer ID', value: transfer.transferId),
                   DetailRow(label: 'Sender', value: transfer.senderAddress),
-                  DetailRow(label: 'Amount', value: Formatters.sol(transfer.amountSol)),
+                  DetailRow(
+                    label: 'Amount',
+                    value: Formatters.sol(transfer.amountSol),
+                  ),
                   if (transfer.transactionSignature != null)
                     DetailRow(
                       label: 'Signature',
-                      value: Formatters.shortAddress(transfer.transactionSignature!),
+                      value: Formatters.shortAddress(
+                        transfer.transactionSignature!,
+                      ),
                     ),
                 ],
               ),
@@ -1622,7 +1786,7 @@ class ReceiveResultScreen extends StatelessWidget {
             ModalRoute.withName(AppRoutes.home),
           );
         },
-        child: const Text('View pending'),
+        child: const Text('Open pending'),
       ),
     );
   }
@@ -1644,8 +1808,7 @@ class _PendingScreenState extends State<PendingScreen> {
     final List<PendingTransfer> transfers = state.transfersFor(_direction);
     return BitsendPageScaffold(
       title: 'Pending',
-      subtitle:
-          'Outbound items show what was handed off offline. Inbound items show whether broadcast has started, failed, or confirmed.',
+      subtitle: 'Track offline handoffs and broadcast status.',
       actions: <Widget>[
         IconButton(
           onPressed: () async {
@@ -1658,9 +1821,15 @@ class _PendingScreenState extends State<PendingScreen> {
               _showSnack(context, _messageFor(error));
             }
           },
+          tooltip: 'Refresh status',
           icon: const Icon(Icons.refresh_rounded),
         ),
       ],
+      showBack: false,
+      primaryTab: BitsendPrimaryTab.pending,
+      onPrimaryTabSelected: (BitsendPrimaryTab tab) {
+        _navigatePrimaryTab(context, tab);
+      },
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -1722,17 +1891,21 @@ class _PendingScreenState extends State<PendingScreen> {
 }
 
 class TransferDetailScreen extends StatelessWidget {
-  const TransferDetailScreen({
-    super.key,
-    required this.transferId,
-  });
+  const TransferDetailScreen({super.key, required this.transferId});
 
   final String transferId;
 
-  Future<void> _retry(BuildContext context, BitsendAppState state, PendingTransfer transfer) async {
+  Future<void> _retry(
+    BuildContext context,
+    BitsendAppState state,
+    PendingTransfer transfer,
+  ) async {
     try {
       await state.retryBroadcast(transfer.transferId);
     } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
       _showSnack(context, _messageFor(error));
     }
   }
@@ -1743,8 +1916,8 @@ class TransferDetailScreen extends StatelessWidget {
     final PendingTransfer? transfer = state.transferById(transferId);
     if (transfer == null) {
       return const BitsendPageScaffold(
-        title: 'Unknown transfer',
-        subtitle: 'This transfer was not found in the local queue.',
+        title: 'Transfer not found',
+        subtitle: 'This transfer is not in the local queue.',
         child: EmptyStateCard(
           title: 'Missing transfer',
           caption: 'Return to Pending and choose another item.',
@@ -1756,8 +1929,7 @@ class TransferDetailScreen extends StatelessWidget {
     final List<TransferTimelineState> timeline = state.timelineFor(transfer);
     return BitsendPageScaffold(
       title: 'Transfer detail',
-      subtitle:
-          'Everything the judges need is on one screen: timeline, transaction metadata, and the next available action.',
+      subtitle: 'Timeline, transfer data, and the next available action.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -1769,7 +1941,9 @@ class TransferDetailScreen extends StatelessWidget {
                   children: <Widget>[
                     Expanded(
                       child: Text(
-                        transfer.isInbound ? 'Inbound transfer' : 'Outbound transfer',
+                        transfer.isInbound
+                            ? 'Inbound transfer'
+                            : 'Outbound transfer',
                         style: Theme.of(context).textTheme.titleLarge,
                       ),
                     ),
@@ -1780,13 +1954,25 @@ class TransferDetailScreen extends StatelessWidget {
                 DetailRow(label: 'Transfer ID', value: transfer.transferId),
                 DetailRow(label: 'Sender', value: transfer.senderAddress),
                 DetailRow(label: 'Receiver', value: transfer.receiverAddress),
-                DetailRow(label: 'Amount', value: Formatters.sol(transfer.amountSol)),
-                DetailRow(label: 'Created', value: Formatters.dateTime(transfer.createdAt)),
-                DetailRow(label: 'Updated', value: Formatters.dateTime(transfer.updatedAt)),
+                DetailRow(
+                  label: 'Amount',
+                  value: Formatters.sol(transfer.amountSol),
+                ),
+                DetailRow(
+                  label: 'Created',
+                  value: Formatters.dateTime(transfer.createdAt),
+                ),
+                DetailRow(
+                  label: 'Updated',
+                  value: Formatters.dateTime(transfer.updatedAt),
+                ),
                 if (transfer.remoteEndpoint != null)
                   DetailRow(label: 'Endpoint', value: transfer.remoteEndpoint!),
                 if (transfer.transactionSignature != null)
-                  DetailRow(label: 'Signature', value: transfer.transactionSignature!),
+                  DetailRow(
+                    label: 'Signature',
+                    value: transfer.transactionSignature!,
+                  ),
               ],
             ),
           ),
@@ -1813,10 +1999,11 @@ class TransferDetailScreen extends StatelessWidget {
                       .asMap()
                       .entries
                       .map(
-                        (MapEntry<int, TransferTimelineState> entry) => TimelineStepTile(
-                          step: entry.value,
-                          isLast: entry.key == timeline.length - 1,
-                        ),
+                        (MapEntry<int, TransferTimelineState> entry) =>
+                            TimelineStepTile(
+                              step: entry.value,
+                              isLast: entry.key == timeline.length - 1,
+                            ),
                       )
                       .toList(growable: false),
                 ),
@@ -1829,9 +2016,15 @@ class TransferDetailScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text('Explorer', style: Theme.of(context).textTheme.titleLarge),
+                  Text(
+                    'Explorer',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
                   const SizedBox(height: 10),
-                  Text(transfer.explorerUrl!, style: Theme.of(context).textTheme.bodyMedium),
+                  SelectableText(
+                    transfer.explorerUrl!,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
                   const SizedBox(height: 16),
                   OutlinedButton(
                     onPressed: () async {
@@ -1853,7 +2046,8 @@ class TransferDetailScreen extends StatelessWidget {
       ),
       bottom: _TransferDetailActions(
         transfer: transfer,
-        onRetry: transfer.isInbound &&
+        onRetry:
+            transfer.isInbound &&
                 (transfer.status == TransferStatus.broadcastFailed ||
                     transfer.status == TransferStatus.receivedPendingBroadcast)
             ? () => _retry(context, state, transfer)
@@ -1923,8 +2117,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final BitsendAppState state = BitsendStateScope.of(context);
     return BitsendPageScaffold(
       title: 'Settings',
-      subtitle:
-          'Recovery phrase, permissions, RPC endpoint, and a hard reset of local queue data are kept here.',
+      subtitle: 'Recovery phrase, RPC, permissions, and reset.',
+      showBack: false,
+      primaryTab: BitsendPrimaryTab.settings,
+      onPrimaryTabSelected: (BitsendPrimaryTab tab) {
+        _navigatePrimaryTab(context, tab);
+      },
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -1932,9 +2130,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('Recovery phrase', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
                 Text(
+                  'Recovery phrase',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
                   state.wallet?.seedPhrase ?? 'Wallet not created yet.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
@@ -1942,7 +2143,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Text(
                   state.offlineWallet == null
                       ? 'Offline wallet unavailable.'
-                      : 'Offline wallet ${state.offlineWallet!.displayAddress} is derived from this same recovery phrase.',
+                      : 'Offline wallet ${state.offlineWallet!.displayAddress} is derived from this phrase.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 16),
@@ -1968,7 +2169,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('RPC endpoint', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  'RPC endpoint',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _rpcController,
@@ -1979,7 +2183,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: () => _saveRpc(state),
-                  child: const Text('Save RPC endpoint'),
+                  child: const Text('Save RPC'),
                 ),
               ],
             ),
@@ -1989,18 +2193,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('Permissions', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  'Permissions',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 8),
                 Text(
                   state.localPermissionsGranted
-                      ? 'Local transport permissions granted.'
-                      : 'Local transport permissions still need approval.',
+                      ? 'Local transport access granted.'
+                      : 'Local transport access still needs approval.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 16),
                 OutlinedButton(
                   onPressed: state.requestLocalPermissions,
-                  child: const Text('Request permissions'),
+                  child: const Text('Request access'),
                 ),
               ],
             ),
@@ -2009,7 +2216,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const InlineBanner(
             title: 'Reset',
             caption:
-                'Clearing local data removes the wallet, queue, cached blockhash, and saved RPC endpoint from this device.',
+                'Clearing local data removes the wallet, queue, cached blockhash, and saved RPC settings from this device.',
             icon: Icons.delete_outline_rounded,
           ),
         ],
@@ -2022,65 +2229,620 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-class _DashboardHero extends StatelessWidget {
-  const _DashboardHero({
-    required this.summary,
+class _DepositHero extends StatelessWidget {
+  const _DepositHero({
+    required this.title,
+    required this.shortAddress,
+    required this.balance,
+    required this.statusLabel,
+    required this.statusIcon,
+    required this.statusActive,
   });
 
-  final WalletSummary summary;
+  final String title;
+  final String shortAddress;
+  final String balance;
+  final String statusLabel;
+  final IconData statusIcon;
+  final bool statusActive;
+
+  @override
+  Widget build(BuildContext context) {
+    return SectionCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              const _DepositSourceIcon(icon: Icons.south_west_rounded),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              _MiniCue(
+                icon: statusIcon,
+                label: statusLabel,
+                active: statusActive,
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: <Widget>[
+              const _DepositSourceIcon(
+                icon: Icons.call_received_rounded,
+                faint: true,
+              ),
+              Expanded(
+                child: Container(
+                  height: 2,
+                  margin: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.line,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              const _DepositSourceIcon(
+                icon: Icons.account_balance_wallet_rounded,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(balance, style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 6),
+          Text(
+            shortAddress,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DepositSourceIcon extends StatelessWidget {
+  const _DepositSourceIcon({required this.icon, this.faint = false});
+
+  final IconData icon;
+  final bool faint;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(22),
+      width: 42,
+      height: 42,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: <Color>[AppColors.heroStart, AppColors.heroEnd],
-        ),
-        borderRadius: BorderRadius.circular(30),
+        color: faint
+            ? AppColors.canvasTint
+            : AppColors.emeraldTint.withValues(alpha: 0.8),
+        shape: BoxShape.circle,
       ),
+      child: Icon(
+        icon,
+        color: faint ? AppColors.slate : AppColors.emerald,
+        size: 20,
+      ),
+    );
+  }
+}
+
+class _HomeSituationCard extends StatelessWidget {
+  const _HomeSituationCard({
+    required this.hasOfflineFunds,
+    required this.hasReadyBlockhash,
+    required this.hasLocalLink,
+    required this.canSend,
+    required this.onPrimary,
+  });
+
+  final bool hasOfflineFunds;
+  final bool hasReadyBlockhash;
+  final bool hasLocalLink;
+  final bool canSend;
+  final VoidCallback onPrimary;
+
+  @override
+  Widget build(BuildContext context) {
+    final String title = canSend
+        ? 'Ready to send'
+        : !hasOfflineFunds
+        ? 'Fund offline wallet'
+        : 'Refresh before send';
+
+    return SectionCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text(
-            'Main wallet balance',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Colors.white70,
-                ),
+          Row(
+            children: <Widget>[
+              Text(title, style: Theme.of(context).textTheme.titleLarge),
+              const Spacer(),
+              TextButton(
+                onPressed: onPrimary,
+                child: Text(canSend ? 'Send' : 'Open'),
+              ),
+            ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            Formatters.sol(summary.balanceSol),
-            style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                  color: Colors.white,
-                ),
+          const SizedBox(height: 18),
+          _SituationFlow(
+            hasOfflineFunds: hasOfflineFunds,
+            hasReadyBlockhash: hasReadyBlockhash,
+            canSend: canSend,
           ),
           const SizedBox(height: 18),
           Wrap(
             spacing: 10,
             runSpacing: 10,
             children: <Widget>[
-              _HeroMetric(
-                label: 'Offline wallet',
-                value: Formatters.sol(summary.offlineBalanceSol),
+              _MiniCue(
+                icon: Icons.account_balance_wallet_outlined,
+                label: 'Offline',
+                active: hasOfflineFunds,
               ),
-              _HeroMetric(
-                label: 'Available to send',
-                value: Formatters.sol(summary.offlineAvailableSol),
+              _MiniCue(
+                icon: Icons.bolt_rounded,
+                label: 'Ready',
+                active: hasReadyBlockhash,
               ),
-              _HeroMetric(
-                label: 'Readiness',
-                value: summary.readyForOffline ? 'Ready' : 'Refresh',
-              ),
-              _HeroMetric(
-                label: 'Endpoint',
-                value: summary.localEndpoint == null ? 'Unavailable' : 'Shared in Receive',
+              _MiniCue(
+                icon: Icons.wifi_tethering_rounded,
+                label: 'Link',
+                active: hasLocalLink,
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SituationFlow extends StatelessWidget {
+  const _SituationFlow({
+    required this.hasOfflineFunds,
+    required this.hasReadyBlockhash,
+    required this.canSend,
+  });
+
+  final bool hasOfflineFunds;
+  final bool hasReadyBlockhash;
+  final bool canSend;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        const Expanded(
+          child: _SituationNode(
+            icon: Icons.account_balance_wallet_rounded,
+            label: 'Main',
+            active: true,
+          ),
+        ),
+        _FlowConnector(active: hasOfflineFunds),
+        Expanded(
+          child: _SituationNode(
+            icon: Icons.account_balance_wallet_outlined,
+            label: 'Offline',
+            active: hasOfflineFunds,
+          ),
+        ),
+        _FlowConnector(active: hasReadyBlockhash),
+        Expanded(
+          child: _SituationNode(
+            icon: Icons.send_rounded,
+            label: 'Send',
+            active: canSend,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SituationNode extends StatelessWidget {
+  const _SituationNode({
+    required this.icon,
+    required this.label,
+    required this.active,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: <Widget>[
+        Container(
+          width: 54,
+          height: 54,
+          decoration: BoxDecoration(
+            color: active
+                ? AppColors.emeraldTint
+                : Colors.white.withValues(alpha: 0.7),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            icon,
+            color: active ? AppColors.emerald : AppColors.slate,
+            size: 24,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    );
+  }
+}
+
+class _FlowConnector extends StatelessWidget {
+  const _FlowConnector({required this.active});
+
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        height: 2,
+        margin: const EdgeInsets.only(bottom: 22),
+        decoration: BoxDecoration(
+          color: active ? AppColors.emerald : AppColors.line,
+          borderRadius: BorderRadius.circular(999),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniCue extends StatelessWidget {
+  const _MiniCue({
+    required this.icon,
+    required this.label,
+    required this.active,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: active
+            ? AppColors.emeraldTint
+            : Colors.white.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(
+            icon,
+            size: 16,
+            color: active ? AppColors.emerald : AppColors.slate,
+          ),
+          const SizedBox(width: 7),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: active ? AppColors.emerald : AppColors.slate,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OfflineWalletScene extends StatelessWidget {
+  const _OfflineWalletScene({
+    required this.mainBalance,
+    required this.offlineBalance,
+    required this.spendableBalance,
+    required this.mainAddress,
+    required this.offlineAddress,
+    required this.readyForOffline,
+    required this.readinessAge,
+  });
+
+  final String mainBalance;
+  final String offlineBalance;
+  final String spendableBalance;
+  final String mainAddress;
+  final String offlineAddress;
+  final bool readyForOffline;
+  final String readinessAge;
+
+  @override
+  Widget build(BuildContext context) {
+    return SectionCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Text(
+                'Main to offline',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const Spacer(),
+              _MiniCue(
+                icon: readyForOffline
+                    ? Icons.check_circle_outline_rounded
+                    : Icons.update_rounded,
+                label: readyForOffline ? 'Ready' : 'Refresh',
+                active: readyForOffline,
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _WalletBalanceNode(
+                  title: 'Main',
+                  value: mainBalance,
+                  caption: mainAddress,
+                  icon: Icons.account_balance_wallet_rounded,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Icon(
+                  Icons.arrow_forward_rounded,
+                  color: AppColors.emerald,
+                  size: 26,
+                ),
+              ),
+              Expanded(
+                child: _WalletBalanceNode(
+                  title: 'Offline',
+                  value: offlineBalance,
+                  caption: offlineAddress,
+                  icon: Icons.lock_clock_rounded,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: <Widget>[
+              _ValueCue(
+                icon: Icons.arrow_outward_rounded,
+                label: 'Spendable',
+                value: spendableBalance,
+              ),
+              _ValueCue(
+                icon: Icons.bolt_rounded,
+                label: 'Age',
+                value: readinessAge,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WalletBalanceNode extends StatelessWidget {
+  const _WalletBalanceNode({
+    required this.title,
+    required this.value,
+    required this.caption,
+    required this.icon,
+  });
+
+  final String title;
+  final String value;
+  final String caption;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.canvasTint.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Icon(icon, color: AppColors.ink, size: 22),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
+          ),
+          const SizedBox(height: 4),
+          Text(value, style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          Text(caption, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+}
+
+class _ValueCue extends StatelessWidget {
+  const _ValueCue({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(icon, size: 16, color: AppColors.slate),
+          const SizedBox(width: 8),
+          Text(
+            '$label $value',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: AppColors.ink),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DashboardHero extends StatelessWidget {
+  const _DashboardHero({required this.summary});
+
+  final WalletSummary summary;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      container: true,
+      label: 'Wallet overview',
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final int columns = constraints.maxWidth < 340 ? 1 : 2;
+          const double spacing = 14;
+          final double statWidth = columns == 1
+              ? constraints.maxWidth
+              : (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+
+          return Container(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: <Color>[
+                  AppColors.heroStart,
+                  Color(0xFF1A5646),
+                  AppColors.heroEnd,
+                ],
+                stops: <double>[0, 0.58, 1],
+              ),
+              borderRadius: BorderRadius.circular(34),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: AppColors.heroStart.withValues(alpha: 0.18),
+                  blurRadius: 28,
+                  offset: const Offset(0, 16),
+                ),
+              ],
+            ),
+            child: Stack(
+              children: <Widget>[
+                Positioned(
+                  right: -22,
+                  top: -14,
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 96,
+                      height: 96,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white.withValues(alpha: 0.08),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 38,
+                  bottom: -36,
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 112,
+                      height: 112,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white.withValues(alpha: 0.05),
+                      ),
+                    ),
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Text(
+                          'Main',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Colors.white70,
+                                letterSpacing: 0.7,
+                              ),
+                        ),
+                        const Spacer(),
+                        _HeroStatusChip(ready: summary.readyForOffline),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      Formatters.sol(summary.balanceSol),
+                      style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                        color: Colors.white,
+                        fontSize: 36,
+                        height: 1,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: spacing,
+                      runSpacing: 12,
+                      children: <Widget>[
+                        SizedBox(
+                          width: statWidth,
+                          child: _HeroMetric(
+                            label: 'Offline',
+                            value: Formatters.sol(summary.offlineBalanceSol),
+                            icon: Icons.account_balance_wallet_outlined,
+                          ),
+                        ),
+                        SizedBox(
+                          width: statWidth,
+                          child: _HeroMetric(
+                            label: 'Spendable',
+                            value: Formatters.sol(summary.offlineAvailableSol),
+                            icon: Icons.arrow_outward_rounded,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -2090,34 +2852,45 @@ class _HeroMetric extends StatelessWidget {
   const _HeroMetric({
     required this.label,
     required this.value,
+    required this.icon,
   });
 
   final String label;
   final String value;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-      ),
+    return Semantics(
+      label: label,
+      value: value,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Text(
-            label,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Colors.white70,
+          Row(
+            children: <Widget>[
+              Icon(icon, size: 14, color: Colors.white70),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  label,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(
+                    color: Colors.white70,
+                    height: 1,
+                  ),
                 ),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 5),
           Text(
             value,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: Colors.white,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(color: Colors.white, height: 1.1),
           ),
         ],
       ),
@@ -2125,39 +2898,43 @@ class _HeroMetric extends StatelessWidget {
   }
 }
 
-class _ChecklistRow extends StatelessWidget {
-  const _ChecklistRow({
-    required this.label,
-    required this.complete,
-    required this.caption,
-  });
+class _HeroStatusChip extends StatelessWidget {
+  const _HeroStatusChip({required this.ready});
 
-  final String label;
-  final bool complete;
-  final String caption;
+  final bool ready;
 
   @override
   Widget build(BuildContext context) {
-    final Color color = complete ? AppColors.emerald : AppColors.amber;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Icon(
-          complete ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
-          color: color,
+    final Color textColor = ready ? Colors.white : AppColors.amberTint;
+    return Semantics(
+      label: 'Offline readiness',
+      value: ready ? 'Ready' : 'Needs refresh',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: ready
+              ? Colors.white.withValues(alpha: 0.12)
+              : AppColors.amber.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(999),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(label, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text(caption, style: Theme.of(context).textTheme.bodyMedium),
-            ],
-          ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(
+              ready ? Icons.check_circle_outline_rounded : Icons.update_rounded,
+              size: 14,
+              color: textColor,
+            ),
+            const SizedBox(width: 5),
+            Text(
+              ready ? 'Ready' : 'Refresh',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: textColor, height: 1),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
@@ -2175,89 +2952,99 @@ class _FeatureRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            color: AppColors.canvas,
-            borderRadius: BorderRadius.circular(16),
+    return Semantics(
+      label: title,
+      hint: caption,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: AppColors.canvas,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(icon, color: AppColors.ink),
           ),
-          child: Icon(icon, color: AppColors.ink),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text(caption, style: Theme.of(context).textTheme.bodyMedium),
-            ],
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(title, style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 4),
+                Text(caption, style: Theme.of(context).textTheme.bodyMedium),
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
 class _TransferCard extends StatelessWidget {
-  const _TransferCard({
-    required this.transfer,
-    required this.onTap,
-  });
+  const _TransferCard({required this.transfer, required this.onTap});
 
   final PendingTransfer transfer;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: AppColors.canvasWarm,
-      borderRadius: BorderRadius.circular(28),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(28),
-        child: Ink(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: AppColors.line),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      transfer.isInbound ? 'Inbound transfer' : 'Outbound transfer',
-                      style: Theme.of(context).textTheme.titleMedium,
+    final String directionLabel = transfer.isInbound
+        ? 'Inbound transfer'
+        : 'Outbound transfer';
+    return Semantics(
+      button: true,
+      label: directionLabel,
+      value: '${Formatters.sol(transfer.amountSol)}, ${transfer.status.label}',
+      hint: 'Open transfer details',
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(22),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(22),
+          child: Ink(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.58),
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        directionLabel,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
                     ),
-                  ),
-                  StatusPill(status: transfer.status),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Text(
-                Formatters.sol(transfer.amountSol),
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                transfer.isInbound
-                    ? 'From ${Formatters.shortAddress(transfer.senderAddress)}'
-                    : 'To ${Formatters.shortAddress(transfer.receiverAddress)}',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Updated ${Formatters.relativeAge(transfer.updatedAt, DateTime.now())}',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ],
+                    StatusPill(status: transfer.status),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  Formatters.sol(transfer.amountSol),
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  transfer.isInbound
+                      ? 'From ${Formatters.shortAddress(transfer.senderAddress)}'
+                      : 'To ${Formatters.shortAddress(transfer.receiverAddress)}',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Updated ${Formatters.relativeAge(transfer.updatedAt, DateTime.now())}',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -2280,38 +3067,52 @@ class _SelectableReceiverCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: selected ? AppColors.emeraldTint : AppColors.canvasWarm,
-      borderRadius: BorderRadius.circular(24),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(24),
-        child: Ink(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(
-              color: selected ? AppColors.emerald : AppColors.line,
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: title,
+      hint: caption,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: Ink(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: selected
+                  ? AppColors.emeraldTint.withValues(alpha: 0.88)
+                  : Colors.white.withValues(alpha: 0.56),
+              borderRadius: BorderRadius.circular(20),
             ),
-          ),
-          child: Row(
-            children: <Widget>[
-              Icon(
-                selected ? Icons.radio_button_checked : Icons.radio_button_off,
-                color: selected ? AppColors.emerald : AppColors.mutedInk,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(title, style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 4),
-                    Text(caption, style: Theme.of(context).textTheme.bodyMedium),
-                  ],
+            child: Row(
+              children: <Widget>[
+                Icon(
+                  selected
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
+                  color: selected ? AppColors.emerald : AppColors.mutedInk,
                 ),
-              ),
-            ],
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        caption,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -2320,10 +3121,7 @@ class _SelectableReceiverCard extends StatelessWidget {
 }
 
 class _TransferDetailActions extends StatelessWidget {
-  const _TransferDetailActions({
-    required this.transfer,
-    this.onRetry,
-  });
+  const _TransferDetailActions({required this.transfer, this.onRetry});
 
   final PendingTransfer transfer;
   final VoidCallback? onRetry;
@@ -2360,52 +3158,79 @@ class _ProgressStep {
 }
 
 class _ProgressTile extends StatelessWidget {
-  const _ProgressTile({
-    required this.step,
-  });
+  const _ProgressTile({required this.step});
 
   final _ProgressStep step;
 
   @override
   Widget build(BuildContext context) {
-    final Color color =
-        step.complete || step.current ? AppColors.ink : AppColors.line;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Container(
-          width: 18,
-          height: 18,
-          margin: const EdgeInsets.only(top: 2),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: step.complete ? AppColors.emerald : Colors.transparent,
-            border: Border.all(color: color, width: 2),
+    final Color color = step.complete || step.current
+        ? AppColors.ink
+        : AppColors.line;
+    return Semantics(
+      label: step.title,
+      value: step.complete
+          ? 'Complete'
+          : step.current
+          ? 'In progress'
+          : 'Pending',
+      hint: step.caption,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Container(
+            width: 16,
+            height: 16,
+            margin: const EdgeInsets.only(top: 2),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: step.complete ? AppColors.emerald : Colors.transparent,
+              border: Border.all(color: color, width: 2),
+            ),
+            child: step.complete
+                ? const Icon(Icons.check, size: 10, color: Colors.white)
+                : null,
           ),
-          child: step.complete
-              ? const Icon(Icons.check, size: 10, color: Colors.white)
-              : null,
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(step.title, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text(step.caption, style: Theme.of(context).textTheme.bodyMedium),
-            ],
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  step.title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  step.caption,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
+void _navigatePrimaryTab(BuildContext context, BitsendPrimaryTab tab) {
+  final String route = switch (tab) {
+    BitsendPrimaryTab.home => AppRoutes.home,
+    BitsendPrimaryTab.deposit => AppRoutes.deposit,
+    BitsendPrimaryTab.offline => AppRoutes.prepare,
+    BitsendPrimaryTab.pending => AppRoutes.pending,
+    BitsendPrimaryTab.settings => AppRoutes.settings,
+  };
+  final String? currentRoute = ModalRoute.of(context)?.settings.name;
+  if (currentRoute == route) {
+    return;
+  }
+  Navigator.of(context).pushReplacementNamed(route);
+}
+
 void _showSnack(BuildContext context, String message) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(message)),
-  );
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
 }
 
 String _messageFor(Object error) {

@@ -5,8 +5,10 @@ class AppColors {
 
   static const Color canvas = Color(0xFFF6F0E7);
   static const Color canvasWarm = Color(0xFFFFFAF4);
+  static const Color canvasTint = Color(0xFFF9F5EE);
+  static const Color surface = Color(0xFFFDF8F1);
   static const Color ink = Color(0xFF17171B);
-  static const Color mutedInk = Color(0xFF54545E);
+  static const Color mutedInk = Color(0xFF484C55);
   static const Color line = Color(0xFFE4D8C7);
   static const Color heroStart = Color(0xFF123C31);
   static const Color heroEnd = Color(0xFF2C7560);
@@ -34,51 +36,59 @@ ThemeData buildBitsendTheme() {
     onError: Colors.white,
   );
 
-  final TextTheme textTheme = Typography.blackMountainView.apply(
-    bodyColor: AppColors.ink,
-    displayColor: AppColors.ink,
-    fontFamily: 'Manrope',
-  ).copyWith(
-    displaySmall: const TextStyle(
-      fontSize: 38,
-      height: 1.05,
-      fontWeight: FontWeight.w800,
-      letterSpacing: -1.2,
-    ),
-    headlineSmall: const TextStyle(
-      fontSize: 26,
-      height: 1.15,
-      fontWeight: FontWeight.w800,
-      letterSpacing: -0.7,
-    ),
-    titleLarge: const TextStyle(
-      fontSize: 20,
-      height: 1.2,
-      fontWeight: FontWeight.w700,
-    ),
-    titleMedium: const TextStyle(
-      fontSize: 16,
-      height: 1.2,
-      fontWeight: FontWeight.w700,
-    ),
-    bodyLarge: const TextStyle(
-      fontSize: 16,
-      height: 1.45,
-      fontWeight: FontWeight.w500,
-    ),
-    bodyMedium: const TextStyle(
-      fontSize: 14,
-      height: 1.45,
-      fontWeight: FontWeight.w500,
-      color: AppColors.mutedInk,
-    ),
-    labelLarge: const TextStyle(
-      fontSize: 14,
-      height: 1.1,
-      fontWeight: FontWeight.w700,
-      letterSpacing: 0.1,
-    ),
-  );
+  final TextTheme textTheme = Typography.blackMountainView
+      .apply(
+        bodyColor: AppColors.ink,
+        displayColor: AppColors.ink,
+        fontFamily: 'Manrope',
+      )
+      .copyWith(
+        displaySmall: const TextStyle(
+          fontSize: 40,
+          height: 1.02,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -1.2,
+        ),
+        headlineSmall: const TextStyle(
+          fontSize: 28,
+          height: 1.1,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -0.7,
+        ),
+        titleLarge: const TextStyle(
+          fontSize: 20,
+          height: 1.25,
+          fontWeight: FontWeight.w700,
+        ),
+        titleMedium: const TextStyle(
+          fontSize: 16,
+          height: 1.3,
+          fontWeight: FontWeight.w700,
+        ),
+        bodyLarge: const TextStyle(
+          fontSize: 16,
+          height: 1.55,
+          fontWeight: FontWeight.w500,
+        ),
+        bodyMedium: const TextStyle(
+          fontSize: 15,
+          height: 1.55,
+          fontWeight: FontWeight.w500,
+          color: AppColors.mutedInk,
+        ),
+        bodySmall: const TextStyle(
+          fontSize: 13,
+          height: 1.45,
+          fontWeight: FontWeight.w600,
+          color: AppColors.mutedInk,
+        ),
+        labelLarge: const TextStyle(
+          fontSize: 14,
+          height: 1.1,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.1,
+        ),
+      );
 
   return ThemeData(
     useMaterial3: true,
@@ -91,6 +101,7 @@ ThemeData buildBitsendTheme() {
       foregroundColor: AppColors.ink,
       elevation: 0,
       scrolledUnderElevation: 0,
+      surfaceTintColor: Colors.transparent,
       centerTitle: false,
       titleTextStyle: TextStyle(
         fontFamily: 'Manrope',
@@ -101,10 +112,12 @@ ThemeData buildBitsendTheme() {
     ),
     cardTheme: CardThemeData(
       elevation: 0,
-      color: AppColors.canvasWarm,
+      shadowColor: AppColors.ink.withValues(alpha: 0.06),
+      color: AppColors.surface.withValues(alpha: 0.88),
+      surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(28),
-        side: const BorderSide(color: AppColors.line),
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.7)),
       ),
       margin: EdgeInsets.zero,
     ),
@@ -117,27 +130,29 @@ ThemeData buildBitsendTheme() {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: AppColors.canvasWarm,
+      fillColor: Colors.white.withValues(alpha: 0.72),
       hintStyle: textTheme.bodyMedium,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      labelStyle: textTheme.bodyMedium?.copyWith(color: AppColors.ink),
+      floatingLabelStyle: textTheme.bodySmall?.copyWith(color: AppColors.ink),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 17),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(22),
-        borderSide: const BorderSide(color: AppColors.line),
+        borderRadius: BorderRadius.circular(20),
+        borderSide: BorderSide(color: AppColors.line.withValues(alpha: 0.5)),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(22),
-        borderSide: const BorderSide(color: AppColors.line),
+        borderRadius: BorderRadius.circular(20),
+        borderSide: BorderSide(color: AppColors.line.withValues(alpha: 0.5)),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(20),
         borderSide: const BorderSide(color: AppColors.ink, width: 1.2),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(20),
         borderSide: const BorderSide(color: AppColors.red),
       ),
       focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(20),
         borderSide: const BorderSide(color: AppColors.red),
       ),
     ),
@@ -147,7 +162,7 @@ ThemeData buildBitsendTheme() {
         backgroundColor: AppColors.ink,
         foregroundColor: Colors.white,
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         textStyle: textTheme.labelLarge,
       ),
     ),
@@ -155,30 +170,49 @@ ThemeData buildBitsendTheme() {
       style: OutlinedButton.styleFrom(
         minimumSize: const Size.fromHeight(56),
         foregroundColor: AppColors.ink,
-        side: const BorderSide(color: AppColors.line),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        backgroundColor: Colors.white.withValues(alpha: 0.48),
+        side: BorderSide(color: AppColors.line.withValues(alpha: 0.7)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         textStyle: textTheme.labelLarge,
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(
+        foregroundColor: AppColors.ink,
+        textStyle: textTheme.labelLarge,
+      ),
+    ),
+    iconButtonTheme: IconButtonThemeData(
+      style: IconButton.styleFrom(
+        foregroundColor: AppColors.ink,
+        backgroundColor: Colors.white.withValues(alpha: 0.68),
+        minimumSize: const Size(42, 42),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
     ),
     segmentedButtonTheme: SegmentedButtonThemeData(
       style: ButtonStyle(
-        backgroundColor:
-            WidgetStateProperty.resolveWith((Set<WidgetState> states) {
+        backgroundColor: WidgetStateProperty.resolveWith((
+          Set<WidgetState> states,
+        ) {
           if (states.contains(WidgetState.selected)) {
             return AppColors.ink;
           }
-          return AppColors.canvasWarm;
+          return Colors.white.withValues(alpha: 0.58);
         }),
-        foregroundColor:
-            WidgetStateProperty.resolveWith((Set<WidgetState> states) {
+        foregroundColor: WidgetStateProperty.resolveWith((
+          Set<WidgetState> states,
+        ) {
           if (states.contains(WidgetState.selected)) {
             return Colors.white;
           }
           return AppColors.ink;
         }),
-        side: const WidgetStatePropertyAll(BorderSide(color: AppColors.line)),
+        side: WidgetStatePropertyAll(
+          BorderSide(color: AppColors.line.withValues(alpha: 0.7)),
+        ),
         shape: WidgetStatePropertyAll(
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
       ),
     ),

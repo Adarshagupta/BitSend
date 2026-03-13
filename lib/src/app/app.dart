@@ -11,6 +11,7 @@ abstract final class AppRoutes {
   static const String onboardingFund = '/onboarding/fund';
   static const String onboardingPrepare = '/onboarding/prepare';
   static const String home = '/home';
+  static const String deposit = '/deposit';
   static const String prepare = '/prepare';
   static const String sendTransport = '/send/transport';
   static const String sendAmount = '/send/amount';
@@ -26,10 +27,7 @@ abstract final class AppRoutes {
 }
 
 class BitsendApp extends StatelessWidget {
-  const BitsendApp({
-    super.key,
-    required this.appState,
-  });
+  const BitsendApp({super.key, required this.appState});
 
   final BitsendAppState appState;
 
@@ -56,16 +54,17 @@ class BitsendApp extends StatelessWidget {
 
     return switch (name) {
       AppRoutes.boot => _page(settings, const BootScreen()),
-      AppRoutes.onboardingWelcome =>
-        _page(settings, const WelcomeScreen()),
+      AppRoutes.onboardingWelcome => _page(settings, const WelcomeScreen()),
       AppRoutes.onboardingWallet => _page(settings, const WalletSetupScreen()),
       AppRoutes.onboardingFund => _page(settings, const FundWalletScreen()),
-      AppRoutes.onboardingPrepare =>
-        _page(settings, const OnboardingPrepareScreen()),
+      AppRoutes.onboardingPrepare => _page(
+        settings,
+        const OnboardingPrepareScreen(),
+      ),
       AppRoutes.home => _page(settings, const HomeDashboardScreen()),
+      AppRoutes.deposit => _page(settings, const DepositScreen()),
       AppRoutes.prepare => _page(settings, const PrepareOfflineScreen()),
-      AppRoutes.sendTransport =>
-        _page(settings, const SendTransportScreen()),
+      AppRoutes.sendTransport => _page(settings, const SendTransportScreen()),
       AppRoutes.sendAmount => _page(settings, const SendAmountScreen()),
       AppRoutes.sendReview => _page(settings, const SendReviewScreen()),
       AppRoutes.sendProgress => _page(settings, const SendProgressScreen()),
@@ -94,8 +93,8 @@ class BitsendStateScope extends InheritedNotifier<BitsendAppState> {
   }) : super(notifier: notifier, child: child);
 
   static BitsendAppState of(BuildContext context) {
-    final BitsendStateScope? scope =
-        context.dependOnInheritedWidgetOfExactType<BitsendStateScope>();
+    final BitsendStateScope? scope = context
+        .dependOnInheritedWidgetOfExactType<BitsendStateScope>();
     assert(scope != null, 'BitsendStateScope is missing from the widget tree.');
     return scope!.notifier!;
   }

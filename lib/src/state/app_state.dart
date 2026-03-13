@@ -5,8 +5,8 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:solana/dto.dart' show ConfirmationStatus, SignatureStatus;
 import 'package:solana/solana.dart';
-import 'package:solana/src/rpc/dto/dto.dart' show SignatureStatus;
 import 'package:uuid/uuid.dart';
 
 import '../models/app_models.dart';
@@ -30,18 +30,18 @@ class BitsendAppState extends ChangeNotifier {
     BleTransportService? bleTransportService,
     Connectivity? connectivity,
     NetworkInfo? networkInfo,
+    SolanaService? solanaService,
     Uuid? uuid,
     DateTime Function()? clock,
-  })  : _store = store ?? LocalStore(),
-        _walletService = walletService ?? WalletService(),
-        _hotspotTransportService = transportService ?? HotspotTransportService(),
-        _bleTransportService = bleTransportService ?? BleTransportService(),
-        _connectivity = connectivity ?? Connectivity(),
-        _networkInfo = networkInfo ?? NetworkInfo(),
-        _uuid = uuid ?? const Uuid(),
-        _clock = clock ?? DateTime.now {
-    _solanaService = SolanaService(rpcEndpoint: defaultRpcEndpoint);
-  }
+  }) : _store = store ?? LocalStore(),
+       _walletService = walletService ?? WalletService(),
+       _hotspotTransportService = transportService ?? HotspotTransportService(),
+       _bleTransportService = bleTransportService ?? BleTransportService(),
+       _connectivity = connectivity ?? Connectivity(),
+       _networkInfo = networkInfo ?? NetworkInfo(),
+       _solanaService = solanaService ?? SolanaService(rpcEndpoint: defaultRpcEndpoint),
+       _uuid = uuid ?? const Uuid(),
+       _clock = clock ?? DateTime.now;
 
   final LocalStore _store;
   final WalletService _walletService;
@@ -49,10 +49,10 @@ class BitsendAppState extends ChangeNotifier {
   final BleTransportService _bleTransportService;
   final Connectivity _connectivity;
   final NetworkInfo _networkInfo;
+  final SolanaService _solanaService;
   final Uuid _uuid;
   final DateTime Function() _clock;
 
-  late SolanaService _solanaService;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
   bool _initialized = false;
@@ -91,15 +91,19 @@ class BitsendAppState extends ChangeNotifier {
   bool get hasLocalLink => _hasLocalLink;
   bool get hasDevnet => _hasDevnet;
   bool get localPermissionsGranted => _localPermissionsGranted;
-  bool get hasOfflineReadyBlockhash => _cachedBlockhash != null && !_isCachedBlockhashExpired;
+  bool get hasOfflineReadyBlockhash =>
+      _cachedBlockhash != null && !_isCachedBlockhashExpired;
   bool get hasEnoughFunding => mainBalanceSol >= minimumFundingSol;
   bool get hasOfflineFunds => offlineSpendableLamports > 0;
   double get mainBalanceSol => _mainBalanceLamports / lamportsPerSol;
   double get offlineBalanceSol => _offlineBalanceLamports / lamportsPerSol;
-  double get offlineSpendableBalanceSol => offlineSpendableLamports / lamportsPerSol;
+  double get offlineSpendableBalanceSol =>
+      offlineSpendableLamports / lamportsPerSol;
   String get rpcEndpoint => _rpcEndpoint;
   String? get localIp => _localIp;
-  String? get localEndpoint => _localIp == null ? null : 'http://$_localIp:${HotspotTransportService.port}';
+  String? get localEndpoint => _localIp == null
+      ? null
+      : 'http://$_localIp:${HotspotTransportService.port}';
   String? get announcementMessage => _announcementMessage;
   SendDraft get sendDraft => _sendDraft;
   TransportKind get receiveTransport => _receiveTransport;
@@ -114,10 +118,10 @@ class BitsendAppState extends ChangeNotifier {
   bool get bleListenerRunning => _bleTransportService.isListening;
 
   HomeStatus get homeStatus => HomeStatus(
-        hasInternet: _hasInternet,
-        hasLocalLink: _hasLocalLink,
-        hasDevnet: _hasDevnet,
-      );
+    hasInternet: _hasInternet,
+    hasLocalLink: _hasLocalLink,
+    hasDevnet: _hasDevnet,
+  );
 
   int get reservedOfflineLamports => _pendingTransfers
       .where((PendingTransfer transfer) {
@@ -125,7 +129,11 @@ class BitsendAppState extends ChangeNotifier {
             transfer.senderAddress == _offlineWallet?.address &&
             transfer.status == TransferStatus.sentOffline;
       })
-      .fold<int>(0, (int total, PendingTransfer transfer) => total + transfer.amountLamports);
+      .fold<int>(
+        0,
+        (int total, PendingTransfer transfer) =>
+            total + transfer.amountLamports,
+      );
 
   int get offlineSpendableLamports {
     final int remaining = _offlineBalanceLamports - reservedOfflineLamports;
@@ -133,26 +141,32 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   WalletSummary get walletSummary => WalletSummary(
-        balanceSol: mainBalanceSol,
-        offlineBalanceSol: offlineBalanceSol,
-        offlineAvailableSol: offlineSpendableBalanceSol,
-        offlineWalletAddress: _offlineWallet?.address,
-        readyForOffline: hasOfflineReadyBlockhash,
-        blockhashAge: _cachedBlockhash == null ? null : _clock().difference(_cachedBlockhash!.fetchedAt),
-        localEndpoint: localEndpoint,
-      );
+    balanceSol: mainBalanceSol,
+    offlineBalanceSol: offlineBalanceSol,
+    offlineAvailableSol: offlineSpendableBalanceSol,
+    offlineWalletAddress: _offlineWallet?.address,
+    readyForOffline: hasOfflineReadyBlockhash,
+    blockhashAge: _cachedBlockhash == null
+        ? null
+        : _clock().difference(_cachedBlockhash!.fetchedAt),
+    localEndpoint: localEndpoint,
+  );
 
   List<PendingTransfer> get pendingTransfers {
-    final List<PendingTransfer> sorted = List<PendingTransfer>.from(_pendingTransfers)
-      ..sort((PendingTransfer a, PendingTransfer b) => b.updatedAt.compareTo(a.updatedAt));
+    final List<PendingTransfer> sorted =
+        List<PendingTransfer>.from(_pendingTransfers)..sort(
+          (PendingTransfer a, PendingTransfer b) =>
+              b.updatedAt.compareTo(a.updatedAt),
+        );
     return sorted;
   }
 
   PendingTransfer? get lastSentTransfer =>
       _lastSentTransferId == null ? null : transferById(_lastSentTransferId!);
 
-  PendingTransfer? get lastReceivedTransfer =>
-      _lastReceivedTransferId == null ? null : transferById(_lastReceivedTransferId!);
+  PendingTransfer? get lastReceivedTransfer => _lastReceivedTransferId == null
+      ? null
+      : transferById(_lastReceivedTransferId!);
 
   String get bootRoute {
     if (!hasWallet) {
@@ -169,13 +183,14 @@ class BitsendAppState extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _rpcEndpoint = await _walletService.loadRpcEndpoint() ?? defaultRpcEndpoint;
+      _rpcEndpoint =
+          await _walletService.loadRpcEndpoint() ?? defaultRpcEndpoint;
       _solanaService.rpcEndpoint = _rpcEndpoint;
       _wallet = await _walletService.loadWallet();
       _offlineWallet = await _walletService.loadOfflineWallet();
 
-      final Map<String, dynamic>? cachedBlockhashJson =
-          await _store.loadSetting<Map<String, dynamic>>('cached_blockhash');
+      final Map<String, dynamic>? cachedBlockhashJson = await _store
+          .loadSetting<Map<String, dynamic>>('cached_blockhash');
       if (cachedBlockhashJson != null) {
         _cachedBlockhash = CachedBlockhash.fromJson(cachedBlockhashJson);
       }
@@ -191,7 +206,9 @@ class BitsendAppState extends ChangeNotifier {
         }
       }
 
-      _connectivitySubscription = _connectivity.onConnectivityChanged.listen((_) async {
+      _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
+        _,
+      ) async {
         await _refreshConnectivityState();
         if (_hasInternet) {
           await refreshWalletData();
@@ -225,85 +242,101 @@ class BitsendAppState extends ChangeNotifier {
     }
 
     try {
-      _mainBalanceLamports = await _solanaService.getBalanceLamports(_wallet!.address);
+      _mainBalanceLamports = await _solanaService.getBalanceLamports(
+        _wallet!.address,
+      );
       _offlineBalanceLamports = _offlineWallet == null
           ? 0
           : await _solanaService.getBalanceLamports(_offlineWallet!.address);
-      _hasDevnet = await _solanaService.isDevnetReachable();
-      notifyListeners();
+      _hasDevnet = true;
+      _hasInternet = true;
+      _statusMessage = null;
+      try {
+        await _syncCachedBlockhashValidity();
+      } catch (_) {
+        await _clearCachedBlockhash();
+      }
     } catch (error) {
       _hasDevnet = false;
+      _hasInternet = false;
       _statusMessage = error.toString();
-      notifyListeners();
     }
+    notifyListeners();
   }
 
-  Future<void> requestAirdrop() async {
-    if (_wallet == null) {
+  Future<void> requestAirdrop({bool toOfflineWallet = false}) async {
+    final WalletProfile? targetWallet = toOfflineWallet
+        ? _offlineWallet
+        : _wallet;
+    if (targetWallet == null) {
       return;
     }
     await _runTask(
-      'Requesting devnet airdrop...',
+      toOfflineWallet
+          ? 'Requesting offline wallet devnet airdrop...'
+          : 'Requesting devnet airdrop...',
       () async {
-        await _solanaService.requestAirdrop(_wallet!.address, sol: 1);
+        await _refreshConnectivityState();
+        if (!_hasDevnet) {
+          throw const SocketException(
+            'Solana devnet RPC is unavailable right now.',
+          );
+        }
+        await _solanaService.requestAirdrop(targetWallet.address, sol: 1);
         await refreshWalletData();
       },
     );
   }
 
   Future<void> prepareForOffline() async {
-    await _runTask(
-      'Refreshing offline transaction readiness...',
-      () async {
-        if (_offlineWallet == null) {
-          throw const FormatException('Create or restore a wallet first.');
-        }
-        await requestLocalPermissions();
-        await _refreshConnectivityState();
-        if (!_hasInternet) {
-          throw const SocketException('Internet is required to fetch a fresh blockhash.');
-        }
-        _cachedBlockhash = await _solanaService.getFreshBlockhash();
-        await _store.saveSetting('cached_blockhash', _cachedBlockhash!.toJson());
-        await refreshWalletData();
-      },
-    );
+    await _runTask('Refreshing offline transaction readiness...', () async {
+      if (_offlineWallet == null) {
+        throw const FormatException('Create or restore a wallet first.');
+      }
+      await requestLocalPermissions();
+      await _refreshConnectivityState();
+      if (!_hasInternet) {
+        throw const SocketException(
+          'Internet is required to fetch a fresh blockhash.',
+        );
+      }
+      await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+      await refreshWalletData();
+    });
   }
 
   Future<void> topUpOfflineWallet(double amountSol) async {
-    await _runTask(
-      'Moving funds into the offline wallet...',
-      () async {
-        if (_wallet == null || _offlineWallet == null) {
-          throw const FormatException('Create or restore a wallet first.');
-        }
-        await _refreshConnectivityState();
-        if (!_hasInternet) {
-          throw const SocketException('Internet is required to top up the offline wallet.');
-        }
-
-        final int lamports = (amountSol * lamportsPerSol).round();
-        if (lamports <= 0) {
-          throw const FormatException('Enter an amount greater than zero.');
-        }
-        if (lamports + solFeeHeadroomLamports > _mainBalanceLamports) {
-          throw const FormatException(
-            'Main wallet balance is too low for that top up amount plus network fees.',
-          );
-        }
-
-        final Ed25519HDKeyPair sender = await _walletService.loadSigningKeyPair();
-        final String signature = await _solanaService.sendTransferNow(
-          sender: sender,
-          receiverAddress: _offlineWallet!.address,
-          lamports: lamports,
+    await _runTask('Moving funds into the offline wallet...', () async {
+      if (_wallet == null || _offlineWallet == null) {
+        throw const FormatException('Create or restore a wallet first.');
+      }
+      await _refreshConnectivityState();
+      if (!_hasInternet) {
+        throw const SocketException(
+          'Internet is required to top up the offline wallet.',
         );
-        await _solanaService.waitForConfirmation(signature);
-        _cachedBlockhash = await _solanaService.getFreshBlockhash();
-        await _store.saveSetting('cached_blockhash', _cachedBlockhash!.toJson());
-        await refreshWalletData();
-      },
-    );
+      }
+
+      final int lamports = (amountSol * lamportsPerSol).round();
+      if (lamports <= 0) {
+        throw const FormatException('Enter an amount greater than zero.');
+      }
+      if (lamports + solFeeHeadroomLamports > _mainBalanceLamports) {
+        throw const FormatException(
+          'Main wallet balance is too low for that top up amount plus network fees.',
+        );
+      }
+
+      final Ed25519HDKeyPair sender = await _walletService.loadSigningKeyPair();
+      final String signature = await _solanaService.sendTransferNow(
+        sender: sender,
+        receiverAddress: _offlineWallet!.address,
+        lamports: lamports,
+      );
+      await _solanaService.waitForConfirmation(signature);
+      await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+      await refreshWalletData();
+    });
   }
 
   Future<void> requestLocalPermissions() async {
@@ -315,7 +348,8 @@ class BitsendAppState extends ChangeNotifier {
     ].request();
     _localPermissionsGranted = statuses.values.every(
       (PermissionStatus status) =>
-          status == PermissionStatus.granted || status == PermissionStatus.limited,
+          status == PermissionStatus.granted ||
+          status == PermissionStatus.limited,
     );
     notifyListeners();
   }
@@ -349,10 +383,7 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   void setSendTransport(TransportKind kind) {
-    _sendDraft = _sendDraft.copyWith(
-      transport: kind,
-      clearReceiver: true,
-    );
+    _sendDraft = _sendDraft.copyWith(transport: kind, clearReceiver: true);
     notifyListeners();
   }
 
@@ -408,34 +439,32 @@ class BitsendAppState extends ChangeNotifier {
     }
     if (_sendDraft.transport == TransportKind.hotspot &&
         _sendDraft.receiverEndpoint.isEmpty) {
-      throw const FormatException('Receiver endpoint is required for hotspot transfer.');
+      throw const FormatException(
+        'Receiver endpoint is required for hotspot transfer.',
+      );
     }
     if (_sendDraft.transport == TransportKind.ble &&
         _sendDraft.receiverPeripheralId.isEmpty) {
       throw const FormatException('Select a BLE receiver before sending.');
     }
     if (!isValidAddress(_sendDraft.receiverAddress)) {
-      throw const FormatException('Receiver address is not a valid Solana address.');
+      throw const FormatException(
+        'Receiver address is not a valid Solana address.',
+      );
     }
     final int lamports = (_sendDraft.amountSol * 1000000000).round();
     if (lamports <= 0) {
       throw const FormatException('Enter an amount greater than zero.');
     }
     if (lamports > offlineSpendableLamports) {
-      throw const FormatException('Amount exceeds the available offline wallet balance.');
+      throw const FormatException(
+        'Amount exceeds the available offline wallet balance.',
+      );
     }
 
-    final Ed25519HDKeyPair sender = await _walletService.loadOfflineSigningKeyPair();
-    if (_cachedBlockhash == null || _isCachedBlockhashExpired) {
-      if (_hasInternet) {
-        _cachedBlockhash = await _solanaService.getFreshBlockhash();
-        await _store.saveSetting('cached_blockhash', _cachedBlockhash!.toJson());
-      } else {
-        throw const FormatException(
-          'Refresh offline send readiness while online before sending from the offline wallet.',
-        );
-      }
-    }
+    final Ed25519HDKeyPair sender = await _walletService
+        .loadOfflineSigningKeyPair();
+    await _ensureFreshCachedBlockhash();
 
     final String transferId = _uuid.v4();
     final DateTime createdAt = _clock();
@@ -448,11 +477,16 @@ class BitsendAppState extends ChangeNotifier {
       createdAt: createdAt,
       transportKind: _sendDraft.transport,
     );
-    final ValidatedTransactionDetails details = _solanaService.validateEnvelope(envelope);
+    final ValidatedTransactionDetails details = _solanaService.validateEnvelope(
+      envelope,
+    );
 
     if (_sendDraft.transport == TransportKind.hotspot) {
       final Uri endpoint = Uri.parse(_sendDraft.receiverEndpoint);
-      await _hotspotTransportService.send(endpoint: endpoint, envelope: envelope);
+      await _hotspotTransportService.send(
+        endpoint: endpoint,
+        envelope: envelope,
+      );
     } else {
       await _bleTransportService.send(
         peripheralId: _sendDraft.receiverPeripheralId,
@@ -517,11 +551,13 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   Future<void> broadcastPendingInboundTransfers() async {
-    final List<PendingTransfer> pending = _pendingTransfers.where((PendingTransfer transfer) {
-      return transfer.direction == TransferDirection.inbound &&
-          (transfer.status == TransferStatus.receivedPendingBroadcast ||
-              transfer.status == TransferStatus.broadcastFailed);
-    }).toList(growable: false);
+    final List<PendingTransfer> pending = _pendingTransfers
+        .where((PendingTransfer transfer) {
+          return transfer.direction == TransferDirection.inbound &&
+              (transfer.status == TransferStatus.receivedPendingBroadcast ||
+                  transfer.status == TransferStatus.broadcastFailed);
+        })
+        .toList(growable: false);
 
     for (final PendingTransfer transfer in pending) {
       await _broadcastTransfer(transfer);
@@ -529,16 +565,19 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   Future<void> refreshSubmittedTransfers() async {
-    final List<PendingTransfer> submitted = _pendingTransfers.where((PendingTransfer transfer) {
-      return transfer.transactionSignature != null &&
-          (transfer.status == TransferStatus.sentOffline ||
-              transfer.status == TransferStatus.broadcastSubmitted ||
-              transfer.status == TransferStatus.broadcasting);
-    }).toList(growable: false);
+    final List<PendingTransfer> submitted = _pendingTransfers
+        .where((PendingTransfer transfer) {
+          return transfer.transactionSignature != null &&
+              (transfer.status == TransferStatus.sentOffline ||
+                  transfer.status == TransferStatus.broadcastSubmitted ||
+                  transfer.status == TransferStatus.broadcasting);
+        })
+        .toList(growable: false);
 
     for (final PendingTransfer transfer in submitted) {
-      final SignatureStatus? status =
-          await _solanaService.getSignatureStatus(transfer.transactionSignature!);
+      final SignatureStatus? status = await _solanaService.getSignatureStatus(
+        transfer.transactionSignature!,
+      );
       if (status == null) {
         continue;
       }
@@ -552,26 +591,35 @@ class BitsendAppState extends ChangeNotifier {
         );
         continue;
       }
-      if (status.confirmationStatus == Commitment.processed &&
-          transfer.status == TransferStatus.sentOffline) {
+      final TransferStatus? nextStatus = _nextStatusForSignature(status);
+      if (nextStatus == null) {
+        continue;
+      }
+      if (nextStatus == TransferStatus.broadcastSubmitted &&
+          transfer.status != TransferStatus.broadcastSubmitted) {
         await _persistTransfer(
           transfer.copyWith(
-            status: TransferStatus.broadcastSubmitted,
+            status: nextStatus,
             updatedAt: _clock(),
             explorerUrl: _solanaService
                 .explorerUrlFor(transfer.transactionSignature!)
                 .toString(),
+            clearLastError: true,
           ),
         );
         continue;
       }
-      if (status.confirmationStatus == Commitment.confirmed ||
-          status.confirmationStatus == Commitment.finalized) {
+      if (nextStatus == TransferStatus.confirmed &&
+          transfer.status != TransferStatus.confirmed) {
         await _persistTransfer(
           transfer.copyWith(
-            status: TransferStatus.confirmed,
+            status: nextStatus,
             updatedAt: _clock(),
+            explorerUrl: _solanaService
+                .explorerUrlFor(transfer.transactionSignature!)
+                .toString(),
             confirmedAt: _clock(),
+            clearLastError: true,
           ),
         );
       }
@@ -591,7 +639,9 @@ class BitsendAppState extends ChangeNotifier {
           (PendingTransfer transfer) => PendingTransferListItem(
             transferId: transfer.transferId,
             amountLabel: Formatters.sol(transfer.amountSol),
-            counterpartyLabel: Formatters.shortAddress(transfer.counterpartyAddress),
+            counterpartyLabel: Formatters.shortAddress(
+              transfer.counterpartyAddress,
+            ),
             ageLabel: Formatters.relativeAge(transfer.updatedAt, now),
             status: transfer.status,
             direction: transfer.direction,
@@ -600,7 +650,8 @@ class BitsendAppState extends ChangeNotifier {
         .toList(growable: false);
   }
 
-  List<PendingTransfer> recentActivity() => pendingTransfers.take(3).toList(growable: false);
+  List<PendingTransfer> recentActivity() =>
+      pendingTransfers.take(3).toList(growable: false);
 
   PendingTransfer? transferById(String transferId) {
     for (final PendingTransfer transfer in _pendingTransfers) {
@@ -615,7 +666,8 @@ class BitsendAppState extends ChangeNotifier {
     final List<_TimelineNode> steps = <_TimelineNode>[
       const _TimelineNode(
         title: 'Signed',
-        caption: 'Transaction was signed locally with the sender offline wallet.',
+        caption:
+            'Transaction was signed locally with the sender offline wallet.',
       ),
       _TimelineNode(
         title: transfer.isInbound ? 'Received offline' : 'Sent offline',
@@ -625,7 +677,8 @@ class BitsendAppState extends ChangeNotifier {
       ),
       const _TimelineNode(
         title: 'Broadcasting',
-        caption: 'An online device is submitting the signed transaction to Solana devnet.',
+        caption:
+            'An online device is submitting the signed transaction to Solana devnet.',
       ),
       const _TimelineNode(
         title: 'Submitted',
@@ -639,7 +692,8 @@ class BitsendAppState extends ChangeNotifier {
 
     final int currentIndex = switch (transfer.status) {
       TransferStatus.created => 0,
-      TransferStatus.sentOffline || TransferStatus.receivedPendingBroadcast => 1,
+      TransferStatus.sentOffline ||
+      TransferStatus.receivedPendingBroadcast => 1,
       TransferStatus.broadcasting => 2,
       TransferStatus.broadcastSubmitted => 3,
       TransferStatus.confirmed => 4,
@@ -653,8 +707,10 @@ class BitsendAppState extends ChangeNotifier {
         TransferTimelineState(
           title: step.title,
           caption: step.caption,
-          isComplete: index < currentIndex ||
-              (transfer.status == TransferStatus.confirmed && index <= currentIndex),
+          isComplete:
+              index < currentIndex ||
+              (transfer.status == TransferStatus.confirmed &&
+                  index <= currentIndex),
           isCurrent: index == currentIndex,
           isError: transfer.status.isError && index == currentIndex,
         ),
@@ -689,8 +745,9 @@ class BitsendAppState extends ChangeNotifier {
 
   Future<void> _persistTransfer(PendingTransfer transfer) async {
     await _store.upsertTransfer(transfer);
-    final int index =
-        _pendingTransfers.indexWhere((PendingTransfer item) => item.transferId == transfer.transferId);
+    final int index = _pendingTransfers.indexWhere(
+      (PendingTransfer item) => item.transferId == transfer.transferId,
+    );
     if (index == -1) {
       _pendingTransfers.add(transfer);
     } else {
@@ -699,8 +756,12 @@ class BitsendAppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<TransportReceiveResult> _handleIncomingEnvelope(OfflineEnvelope envelope) async {
-    final ValidatedTransactionDetails details = _solanaService.validateEnvelope(envelope);
+  Future<TransportReceiveResult> _handleIncomingEnvelope(
+    OfflineEnvelope envelope,
+  ) async {
+    final ValidatedTransactionDetails details = _solanaService.validateEnvelope(
+      envelope,
+    );
 
     if (_wallet == null) {
       return const TransportReceiveResult(
@@ -775,6 +836,15 @@ class BitsendAppState extends ChangeNotifier {
       );
       await refreshSubmittedTransfers();
     } catch (error) {
+      bool reconciled = false;
+      try {
+        reconciled = await _reconcileBroadcastAfterError(transfer);
+      } catch (_) {
+        reconciled = false;
+      }
+      if (reconciled) {
+        return;
+      }
       final String message = error.toString();
       final TransferStatus status = message.toLowerCase().contains('blockhash')
           ? TransferStatus.expired
@@ -790,7 +860,8 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   Future<void> _refreshConnectivityState() async {
-    final List<ConnectivityResult> results = await _connectivity.checkConnectivity();
+    final List<ConnectivityResult> results = await _connectivity
+        .checkConnectivity();
     _localIp = await _resolveLocalIp();
     _hasLocalLink = _localIp != null && _localIp!.isNotEmpty;
     final bool hasTransport = !results.contains(ConnectivityResult.none);
@@ -809,27 +880,138 @@ class BitsendAppState extends ChangeNotifier {
 
   Future<void> _refreshLocalPermissions() async {
     final PermissionStatus location = await Permission.locationWhenInUse.status;
-    final PermissionStatus bluetoothScan = await Permission.bluetoothScan.status;
-    final PermissionStatus bluetoothConnect = await Permission.bluetoothConnect.status;
-    final PermissionStatus bluetoothAdvertise = await Permission.bluetoothAdvertise.status;
-    _localPermissionsGranted = <PermissionStatus>[
-      location,
-      bluetoothScan,
-      bluetoothConnect,
-      bluetoothAdvertise,
-    ].every((PermissionStatus status) {
-      return status == PermissionStatus.granted || status == PermissionStatus.limited;
-    });
+    final PermissionStatus bluetoothScan =
+        await Permission.bluetoothScan.status;
+    final PermissionStatus bluetoothConnect =
+        await Permission.bluetoothConnect.status;
+    final PermissionStatus bluetoothAdvertise =
+        await Permission.bluetoothAdvertise.status;
+    _localPermissionsGranted =
+        <PermissionStatus>[
+          location,
+          bluetoothScan,
+          bluetoothConnect,
+          bluetoothAdvertise,
+        ].every((PermissionStatus status) {
+          return status == PermissionStatus.granted ||
+              status == PermissionStatus.limited;
+        });
   }
 
   bool get _isCachedBlockhashExpired {
     if (_cachedBlockhash == null) {
       return true;
     }
-    return _clock().difference(_cachedBlockhash!.fetchedAt) > blockhashFreshnessWindow;
+    return _clock().difference(_cachedBlockhash!.fetchedAt) >
+        blockhashFreshnessWindow;
   }
 
-  Future<void> _runTask(String status, Future<void> Function() operation) async {
+  Future<void> _ensureFreshCachedBlockhash() async {
+    if (_cachedBlockhash == null || _isCachedBlockhashExpired) {
+      try {
+        await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+        return;
+      } catch (_) {
+        throw const FormatException(
+          'Refresh offline send readiness while online before sending from the offline wallet.',
+        );
+      }
+    }
+
+    if (!_hasInternet) {
+      return;
+    }
+
+    bool stillValid;
+    try {
+      stillValid = await _solanaService.isBlockhashValid(
+        _cachedBlockhash!.blockhash,
+      );
+    } catch (_) {
+      return;
+    }
+    if (!stillValid) {
+      await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+    }
+  }
+
+  Future<void> _syncCachedBlockhashValidity() async {
+    if (_cachedBlockhash == null || !_hasDevnet) {
+      return;
+    }
+
+    final bool stillValid = await _solanaService.isBlockhashValid(
+      _cachedBlockhash!.blockhash,
+    );
+    if (!stillValid) {
+      await _clearCachedBlockhash();
+    }
+  }
+
+  Future<void> _updateCachedBlockhash(CachedBlockhash blockhash) async {
+    _cachedBlockhash = blockhash;
+    await _store.saveSetting('cached_blockhash', blockhash.toJson());
+  }
+
+  Future<void> _clearCachedBlockhash() async {
+    _cachedBlockhash = null;
+    await _store.saveSetting('cached_blockhash', null);
+  }
+
+  TransferStatus? _nextStatusForSignature(SignatureStatus status) {
+    return switch (status.confirmationStatus) {
+      ConfirmationStatus.processed => TransferStatus.broadcastSubmitted,
+      ConfirmationStatus.confirmed || ConfirmationStatus.finalized =>
+        TransferStatus.confirmed,
+    };
+  }
+
+  Future<bool> _reconcileBroadcastAfterError(PendingTransfer transfer) async {
+    final String? signature = transfer.transactionSignature;
+    if (signature == null) {
+      return false;
+    }
+
+    final SignatureStatus? status = await _solanaService.getSignatureStatus(
+      signature,
+    );
+    if (status == null) {
+      return false;
+    }
+    if (status.err != null) {
+      await _persistTransfer(
+        transfer.copyWith(
+          status: TransferStatus.broadcastFailed,
+          updatedAt: _clock(),
+          lastError: status.err.toString(),
+        ),
+      );
+      return true;
+    }
+
+    final TransferStatus? nextStatus = _nextStatusForSignature(status);
+    if (nextStatus == null) {
+      return false;
+    }
+
+    await _persistTransfer(
+      transfer.copyWith(
+        status: nextStatus,
+        updatedAt: _clock(),
+        transactionSignature: signature,
+        explorerUrl: _solanaService.explorerUrlFor(signature).toString(),
+        confirmedAt:
+            nextStatus == TransferStatus.confirmed ? _clock() : null,
+        clearLastError: true,
+      ),
+    );
+    return true;
+  }
+
+  Future<void> _runTask(
+    String status,
+    Future<void> Function() operation,
+  ) async {
     _working = true;
     _statusMessage = status;
     notifyListeners();
@@ -914,10 +1096,7 @@ class BitsendAppState extends ChangeNotifier {
 }
 
 class _TimelineNode {
-  const _TimelineNode({
-    required this.title,
-    required this.caption,
-  });
+  const _TimelineNode({required this.title, required this.caption});
 
   final String title;
   final String caption;
