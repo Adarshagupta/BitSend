@@ -82,6 +82,18 @@ void main() {
     expect(find.text('Continue to funding'), findsOneWidget);
   });
 
+  testWidgets('settings screen shows ENS payment preference controls', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(walletValue: _wallet);
+
+    await pumpWithState(tester, state: state, child: const SettingsScreen());
+
+    expect(find.text('ENS payment preference'), findsOneWidget);
+    expect(find.text('Read ENS'), findsOneWidget);
+    expect(find.text('Save to ENS'), findsOneWidget);
+  });
+
   testWidgets('fund screen allows skipping when wallet is not funded', (
     WidgetTester tester,
   ) async {
@@ -222,6 +234,8 @@ void main() {
       fileverseReceiptId: 'fv-123',
       fileverseReceiptUrl: 'https://fileverse.example/receipt/123',
       fileverseSavedAt: DateTime(2026, 3, 14, 13, 0),
+      fileverseStorageMode: 'fileverse',
+      fileverseMessage: 'Receipt details were saved to Fileverse.',
     );
     final _TestBitsendAppState state = _TestBitsendAppState(
       transferMap: <String, PendingTransfer>{inbound.transferId: inbound},
@@ -233,8 +247,10 @@ void main() {
       child: TransferDetailScreen(transferId: inbound.transferId),
     );
 
-    expect(find.text('Receipt link'), findsOneWidget);
-    expect(find.text('Copy receipt link'), findsOneWidget);
+    expect(find.text('Saved in Fileverse'), findsOneWidget);
+    expect(find.text('Fileverse ID'), findsOneWidget);
+    expect(find.text('Fileverse link'), findsOneWidget);
+    expect(find.text('Copy Fileverse link'), findsOneWidget);
   });
 
   testWidgets('receive screen hides hotspot QR until listener is live', (

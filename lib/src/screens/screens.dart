@@ -1593,6 +1593,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
   bool _syncingReceiverText = false;
   String? _resolvedReceiverLabel;
   String? _resolvedReceiverAddress;
+  EnsPaymentPreference? _resolvedReceiverPreference;
 
   @override
   void initState() {
@@ -1627,6 +1628,13 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
     _resolvedReceiverAddress = state.sendDraft.receiverLabel.isEmpty
         ? null
         : state.sendDraft.receiverAddress;
+    _resolvedReceiverPreference = state.sendDraft.receiverLabel.isEmpty
+        ? null
+        : EnsPaymentPreference(
+            ensName: state.sendDraft.receiverLabel,
+            preferredChain: state.sendDraft.receiverPreferredChain,
+            preferredToken: state.sendDraft.receiverPreferredToken,
+          );
     if (state.sendDraft.transport == TransportKind.ble &&
         !_autoScannedBle &&
         state.bleReceivers.isEmpty &&
@@ -1659,6 +1667,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
     setState(() {
       _resolvedReceiverLabel = null;
       _resolvedReceiverAddress = null;
+      _resolvedReceiverPreference = null;
     });
   }
 
@@ -1666,6 +1675,8 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
     final String rawReceiver = _addressController.text.trim();
     String receiverAddress = rawReceiver;
     String receiverLabel = '';
+    String receiverPreferredChain = '';
+    String receiverPreferredToken = '';
     if (rawReceiver.isEmpty) {
       _showSnack(context, 'Receiver address is required.');
       return;
@@ -1683,7 +1694,11 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
       });
       try {
         receiverAddress = await state.resolveEthereumEnsName(rawReceiver);
+        final EnsPaymentPreference preference = await state
+            .readEthereumEnsPaymentPreference(rawReceiver);
         receiverLabel = rawReceiver.toLowerCase();
+        receiverPreferredChain = preference.preferredChain;
+        receiverPreferredToken = preference.preferredToken;
       } catch (error) {
         if (!mounted) {
           return;
@@ -1703,6 +1718,11 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
       setState(() {
         _resolvedReceiverLabel = receiverLabel;
         _resolvedReceiverAddress = receiverAddress;
+        _resolvedReceiverPreference = EnsPaymentPreference(
+          ensName: receiverLabel,
+          preferredChain: receiverPreferredChain,
+          preferredToken: receiverPreferredToken,
+        );
       });
     }
     if (state.sendDraft.transport == TransportKind.hotspot) {
@@ -1710,6 +1730,8 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
         receiverAddress: receiverAddress,
         receiverLabel: receiverLabel,
         receiverEndpoint: _endpointController.text,
+        receiverPreferredChain: receiverPreferredChain,
+        receiverPreferredToken: receiverPreferredToken,
       );
     } else {
       state.updateReceiver(
@@ -1717,6 +1739,8 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
         receiverLabel: receiverLabel,
         receiverPeripheralId: _selectedBleReceiverId ?? '',
         receiverPeripheralName: _selectedBleReceiverName ?? '',
+        receiverPreferredChain: receiverPreferredChain,
+        receiverPreferredToken: receiverPreferredToken,
       );
     }
     if (!state.sendDraft.hasReceiver) {
@@ -1899,6 +1923,15 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                         ? Icons.alternate_email_rounded
                         : Icons.verified_rounded,
                   ),
+                  if (_resolvedReceiverPreference?.hasPreference == true) ...<Widget>[
+                    const SizedBox(height: 10),
+                    InlineBanner(
+                      title: 'ENS payment preference',
+                      caption:
+                          '${_resolvedReceiverPreference!.ensName} prefers ${_resolvedReceiverPreference!.summary}. This is advisory routing info from ENS text records.',
+                      icon: Icons.tune_rounded,
+                    ),
+                  ],
                 ],
                 if (usingBitGo &&
                     transport == TransportKind.hotspot) ...<Widget>[
@@ -2222,6 +2255,17 @@ class SendReviewScreen extends StatelessWidget {
                     label: 'Resolved address',
                     value: Formatters.shortAddress(draft.receiverAddress),
                   ),
+                if (draft.receiverPreferredChain.isNotEmpty ||
+                    draft.receiverPreferredToken.isNotEmpty)
+                  DetailRow(
+                    label: 'ENS preference',
+                    value: [
+                      if (draft.receiverPreferredChain.isNotEmpty)
+                        draft.receiverPreferredChain,
+                      if (draft.receiverPreferredToken.isNotEmpty)
+                        draft.receiverPreferredToken,
+                    ].join(' / '),
+                  ),
                 DetailRow(
                   label: 'Source wallet',
                   value: usingBitGo
@@ -2531,9 +2575,10 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
       }
       _showSnack(
         context,
-        transfer.fileverseReceiptUrl == updated.fileverseReceiptUrl
-            ? 'Receipt link copied.'
-            : 'Receipt saved online. Link copied.',
+        _receiptOnlineActionMessage(
+          previousTransfer: transfer,
+          updatedTransfer: updated,
+        ),
       );
     } catch (error) {
       if (!mounted) {
@@ -2626,9 +2671,7 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
                         label: Text(
                           _savingToFileverse
                               ? 'Saving...'
-                              : transfer.fileverseReceiptUrl == null
-                              ? 'Save receipt online'
-                              : 'Copy receipt link',
+                              : _receiptOnlineButtonLabel(transfer),
                         ),
                       ),
                     ),
@@ -2908,9 +2951,10 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
       }
       _showSnack(
         context,
-        transfer.fileverseReceiptUrl == updated.fileverseReceiptUrl
-            ? 'Receipt link copied.'
-            : 'Receipt saved online. Link copied.',
+        _receiptOnlineActionMessage(
+          previousTransfer: transfer,
+          updatedTransfer: updated,
+        ),
       );
     } catch (error) {
       if (!mounted) {
@@ -2996,9 +3040,7 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
                         label: Text(
                           _savingToFileverse
                               ? 'Saving...'
-                              : transfer.fileverseReceiptUrl == null
-                              ? 'Save receipt online'
-                              : 'Copy receipt link',
+                              : _receiptOnlineButtonLabel(transfer),
                         ),
                       ),
                     ),
@@ -3101,6 +3143,54 @@ Future<String> _captureReceiptImage(
   return file.path;
 }
 
+String _receiptOnlineButtonLabel(PendingTransfer transfer) {
+  if (transfer.fileverseReceiptUrl == null) {
+    return 'Save receipt online';
+  }
+  return transfer.isReceiptSavedInFileverse
+      ? 'Copy Fileverse link'
+      : 'Copy receipt link';
+}
+
+String _receiptOnlineActionMessage({
+  required PendingTransfer previousTransfer,
+  required PendingTransfer updatedTransfer,
+}) {
+  if (previousTransfer.fileverseReceiptUrl == updatedTransfer.fileverseReceiptUrl) {
+    return updatedTransfer.isReceiptSavedInFileverse
+        ? 'Fileverse link copied.'
+        : 'Receipt link copied.';
+  }
+  return updatedTransfer.isReceiptSavedInFileverse
+      ? 'Receipt saved in Fileverse. Link copied.'
+      : 'Receipt archived online. Link copied.';
+}
+
+String _receiptIdLabel(PendingTransfer transfer) {
+  return switch (transfer.fileverseStorageMode) {
+    'fileverse' => 'Fileverse ID',
+    'worker' => 'Archive ID',
+    _ => 'Receipt ID',
+  };
+}
+
+String _receiptLinkLabel(PendingTransfer transfer) {
+  return transfer.isReceiptSavedInFileverse ? 'Fileverse link' : 'Receipt link';
+}
+
+String? _receiptStorageCaption(PendingTransfer transfer) {
+  if (transfer.fileverseMessage != null && transfer.fileverseMessage!.isNotEmpty) {
+    return transfer.fileverseMessage!;
+  }
+  return switch (transfer.fileverseStorageMode) {
+    'fileverse' =>
+      'This link points to the Fileverse record for this receipt.',
+    'worker' =>
+      'This link points to the Bitsend archive copy, not a Fileverse record.',
+    _ => null,
+  };
+}
+
 class _TransferReceiptSurface extends StatelessWidget {
   const _TransferReceiptSurface({
     required this.boundaryKey,
@@ -3128,6 +3218,8 @@ class _TransferReceiptSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     final List<_ReceiptMilestone> milestones = _receiptMilestones(transfer);
     final List<_ReceiptIndicator> indicators = _receiptIndicators(transfer);
+    final String? receiptStorageLabel = transfer.receiptStorageLabel;
+    final String? receiptStorageCaption = _receiptStorageCaption(transfer);
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: 1),
       duration: const Duration(milliseconds: 540),
@@ -3230,6 +3322,18 @@ class _TransferReceiptSurface extends StatelessWidget {
                     )
                     .toList(growable: false),
               ),
+              if (receiptStorageLabel != null &&
+                  transfer.fileverseSavedAt != null &&
+                  receiptStorageCaption != null) ...<Widget>[
+                const SizedBox(height: 18),
+                InlineBanner(
+                  title: receiptStorageLabel,
+                  caption: receiptStorageCaption,
+                  icon: transfer.isReceiptSavedInFileverse
+                      ? Icons.verified_rounded
+                      : Icons.inventory_2_outlined,
+                ),
+              ],
               const SizedBox(height: 24),
               _ReceiptDivider(color: tone),
               const SizedBox(height: 18),
@@ -3282,6 +3386,15 @@ class _TransferReceiptSurface extends StatelessWidget {
                   label: 'Receipt saved',
                   value: Formatters.dateTime(transfer.fileverseSavedAt!),
                 ),
+              if (receiptStorageLabel != null)
+                DetailRow(label: 'Receipt provider', value: receiptStorageLabel),
+              if (transfer.fileverseReceiptId != null)
+                DetailRow(
+                  label: _receiptIdLabel(transfer),
+                  value: transfer.fileverseReceiptId!,
+                ),
+              if (transfer.fileverseMessage != null)
+                DetailRow(label: 'Receipt note', value: transfer.fileverseMessage!),
               if (transfer.lastError != null) ...<Widget>[
                 const SizedBox(height: 10),
                 Text(
@@ -3310,7 +3423,7 @@ class _TransferReceiptSurface extends StatelessWidget {
               if (transfer.fileverseReceiptUrl != null) ...<Widget>[
                 const SizedBox(height: 18),
                 Text(
-                  'Receipt link',
+                  _receiptLinkLabel(transfer),
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 8),
@@ -3952,6 +4065,21 @@ class TransferDetailScreen extends StatelessWidget {
                     label: 'Receipt saved',
                     value: Formatters.dateTime(transfer.fileverseSavedAt!),
                   ),
+                if (transfer.receiptStorageLabel != null)
+                  DetailRow(
+                    label: 'Receipt provider',
+                    value: transfer.receiptStorageLabel!,
+                  ),
+                if (transfer.fileverseReceiptId != null)
+                  DetailRow(
+                    label: _receiptIdLabel(transfer),
+                    value: transfer.fileverseReceiptId!,
+                  ),
+                if (transfer.fileverseMessage != null)
+                  DetailRow(
+                    label: 'Receipt note',
+                    value: transfer.fileverseMessage!,
+                  ),
                 if (transfer.bitgoWalletId != null)
                   DetailRow(
                     label: 'BitGo wallet',
@@ -4033,7 +4161,7 @@ class TransferDetailScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    'Receipt link',
+                    _receiptLinkLabel(transfer),
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 10),
@@ -4050,9 +4178,18 @@ class TransferDetailScreen extends StatelessWidget {
                       if (!context.mounted) {
                         return;
                       }
-                      _showSnack(context, 'Receipt link copied.');
+                      _showSnack(
+                        context,
+                        transfer.isReceiptSavedInFileverse
+                            ? 'Fileverse link copied.'
+                            : 'Receipt link copied.',
+                      );
                     },
-                    child: const Text('Copy receipt link'),
+                    child: Text(
+                      transfer.isReceiptSavedInFileverse
+                          ? 'Copy Fileverse link'
+                          : 'Copy receipt link',
+                    ),
                   ),
                 ],
               ),
@@ -4080,13 +4217,20 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _rpcController;
   late final TextEditingController _bitgoController;
+  late final TextEditingController _ensNameController;
+  late final TextEditingController _ensChainController;
+  late final TextEditingController _ensTokenController;
   String? _backupPath;
+  EnsPaymentPreference? _loadedEnsPreference;
 
   @override
   void initState() {
     super.initState();
     _rpcController = TextEditingController();
     _bitgoController = TextEditingController();
+    _ensNameController = TextEditingController();
+    _ensChainController = TextEditingController();
+    _ensTokenController = TextEditingController();
   }
 
   @override
@@ -4100,6 +4244,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _rpcController.dispose();
     _bitgoController.dispose();
+    _ensNameController.dispose();
+    _ensChainController.dispose();
+    _ensTokenController.dispose();
     super.dispose();
   }
 
@@ -4167,6 +4314,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _backupPath = export.filePath;
       });
       _showSnack(context, 'Backup saved as ${export.fileName}.');
+    } catch (error) {
+      _showSnack(context, _messageFor(error));
+    }
+  }
+
+  Future<void> _readEnsPreference(BitsendAppState state) async {
+    try {
+      final EnsPaymentPreference preference = await state
+          .readEthereumEnsPaymentPreference(_ensNameController.text.trim());
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadedEnsPreference = preference;
+        _ensChainController.text = preference.preferredChain;
+        _ensTokenController.text = preference.preferredToken;
+      });
+      _showSnack(
+        context,
+        preference.hasPreference
+            ? 'ENS payment preference loaded.'
+            : 'No Bitsend payment preference is set on this ENS name yet.',
+      );
+    } catch (error) {
+      _showSnack(context, _messageFor(error));
+    }
+  }
+
+  Future<void> _saveEnsPreference(BitsendAppState state) async {
+    try {
+      await state.saveEthereumEnsPaymentPreference(
+        ensName: _ensNameController.text.trim(),
+        preferredChain: _ensChainController.text.trim(),
+        preferredToken: _ensTokenController.text.trim(),
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadedEnsPreference = EnsPaymentPreference(
+          ensName: _ensNameController.text.trim().toLowerCase(),
+          preferredChain: _ensChainController.text.trim(),
+          preferredToken: _ensTokenController.text.trim(),
+        );
+      });
+      _showSnack(
+        context,
+        'ENS preference submitted on Ethereum mainnet. Wait for confirmation, then read it again.',
+      );
     } catch (error) {
       _showSnack(context, _messageFor(error));
     }
@@ -4256,6 +4452,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   SelectableText(
                     _backupPath!,
                     style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          SectionCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'ENS payment preference',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Use ENS text records to publish which chain and token you prefer for payments. Bitsend reads these records as routing hints; writes happen on Ethereum mainnet.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _ensNameController,
+                  decoration: const InputDecoration(
+                    labelText: 'ENS name',
+                    hintText: 'alice.eth',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _ensChainController,
+                  decoration: const InputDecoration(
+                    labelText: 'Preferred chain',
+                    hintText: 'base or arbitrum',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _ensTokenController,
+                  decoration: const InputDecoration(
+                    labelText: 'Preferred token',
+                    hintText: 'USDC or USDT',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: <Widget>[
+                    OutlinedButton(
+                      onPressed: state.working
+                          ? null
+                          : () => _readEnsPreference(state),
+                      child: const Text('Read ENS'),
+                    ),
+                    ElevatedButton(
+                      onPressed: state.working
+                          ? null
+                          : () => _saveEnsPreference(state),
+                      child: const Text('Save to ENS'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const InlineBanner(
+                  title: 'Mainnet write',
+                  caption:
+                      'Saving ENS text records requires an Ethereum mainnet transaction from the ENS manager wallet and enough ETH for gas.',
+                  icon: Icons.public_rounded,
+                ),
+                if (_loadedEnsPreference != null) ...<Widget>[
+                  const SizedBox(height: 16),
+                  DetailRow(
+                    label: 'Loaded preference',
+                    value: _loadedEnsPreference!.hasPreference
+                        ? _loadedEnsPreference!.summary
+                        : 'No Bitsend ENS preference set',
                   ),
                 ],
               ],

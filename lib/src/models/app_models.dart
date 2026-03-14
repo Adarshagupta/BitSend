@@ -303,6 +303,8 @@ class SendDraft {
     this.receiverEndpoint = '',
     this.receiverPeripheralId = '',
     this.receiverPeripheralName = '',
+    this.receiverPreferredChain = '',
+    this.receiverPreferredToken = '',
     this.amountSol = 0,
   });
 
@@ -315,6 +317,8 @@ class SendDraft {
   final String receiverEndpoint;
   final String receiverPeripheralId;
   final String receiverPeripheralName;
+  final String receiverPreferredChain;
+  final String receiverPreferredToken;
   final double amountSol;
 
   bool get hasReceiver =>
@@ -338,6 +342,8 @@ class SendDraft {
     String? receiverEndpoint,
     String? receiverPeripheralId,
     String? receiverPeripheralName,
+    String? receiverPreferredChain,
+    String? receiverPreferredToken,
     double? amountSol,
     bool clearReceiver = false,
   }) {
@@ -359,6 +365,12 @@ class SendDraft {
       receiverPeripheralName: clearReceiver
           ? ''
           : receiverPeripheralName ?? this.receiverPeripheralName,
+      receiverPreferredChain: clearReceiver
+          ? ''
+          : receiverPreferredChain ?? this.receiverPreferredChain,
+      receiverPreferredToken: clearReceiver
+          ? ''
+          : receiverPreferredToken ?? this.receiverPreferredToken,
       amountSol: amountSol ?? this.amountSol,
     );
   }
@@ -676,6 +688,33 @@ class FileverseReceiptSnapshot {
       );
 }
 
+class EnsPaymentPreference {
+  const EnsPaymentPreference({
+    required this.ensName,
+    this.preferredChain = '',
+    this.preferredToken = '',
+  });
+
+  static const String chainRecordKey = 'com.bitsend.payment.chain';
+  static const String tokenRecordKey = 'com.bitsend.payment.token';
+
+  final String ensName;
+  final String preferredChain;
+  final String preferredToken;
+
+  bool get hasPreference =>
+      preferredChain.trim().isNotEmpty || preferredToken.trim().isNotEmpty;
+
+  String get summary {
+    final String chain = preferredChain.trim();
+    final String token = preferredToken.trim();
+    if (chain.isNotEmpty && token.isNotEmpty) {
+      return '$chain / $token';
+    }
+    return chain.isNotEmpty ? chain : token;
+  }
+}
+
 class ReceiverInvitePayload {
   const ReceiverInvitePayload({
     required this.chain,
@@ -925,6 +964,8 @@ class PendingTransfer {
     this.fileverseReceiptId,
     this.fileverseReceiptUrl,
     this.fileverseSavedAt,
+    this.fileverseStorageMode,
+    this.fileverseMessage,
   });
 
   final String transferId;
@@ -951,11 +992,19 @@ class PendingTransfer {
   final String? fileverseReceiptId;
   final String? fileverseReceiptUrl;
   final DateTime? fileverseSavedAt;
+  final String? fileverseStorageMode;
+  final String? fileverseMessage;
 
   bool get isInbound => direction == TransferDirection.inbound;
   bool get isBitGo => walletEngine == WalletEngine.bitgo;
   double get amountSol => chain.amountFromBaseUnits(amountLamports);
   String get counterpartyAddress => isInbound ? senderAddress : receiverAddress;
+  bool get isReceiptSavedInFileverse => fileverseStorageMode == 'fileverse';
+  String? get receiptStorageLabel => switch (fileverseStorageMode) {
+    'fileverse' => 'Saved in Fileverse',
+    'worker' => 'Archived by Bitsend',
+    _ => null,
+  };
   bool get reservesOfflineFunds =>
       walletEngine == WalletEngine.local &&
       direction == TransferDirection.outbound &&
@@ -996,6 +1045,8 @@ class PendingTransfer {
     String? fileverseReceiptId,
     String? fileverseReceiptUrl,
     DateTime? fileverseSavedAt,
+    String? fileverseStorageMode,
+    String? fileverseMessage,
   }) {
     return PendingTransfer(
       transferId: transferId,
@@ -1022,6 +1073,9 @@ class PendingTransfer {
       fileverseReceiptId: fileverseReceiptId ?? this.fileverseReceiptId,
       fileverseReceiptUrl: fileverseReceiptUrl ?? this.fileverseReceiptUrl,
       fileverseSavedAt: fileverseSavedAt ?? this.fileverseSavedAt,
+      fileverseStorageMode:
+          fileverseStorageMode ?? this.fileverseStorageMode,
+      fileverseMessage: fileverseMessage ?? this.fileverseMessage,
     );
   }
 
@@ -1050,6 +1104,8 @@ class PendingTransfer {
     'fileverse_receipt_id': fileverseReceiptId,
     'fileverse_receipt_url': fileverseReceiptUrl,
     'fileverse_saved_at_ms': fileverseSavedAt?.millisecondsSinceEpoch,
+    'fileverse_storage_mode': fileverseStorageMode,
+    'fileverse_message': fileverseMessage,
   };
 
   factory PendingTransfer.fromDbMap(Map<String, Object?> map) {
@@ -1103,6 +1159,8 @@ class PendingTransfer {
           : DateTime.fromMillisecondsSinceEpoch(
               map['fileverse_saved_at_ms']! as int,
             ),
+      fileverseStorageMode: map['fileverse_storage_mode'] as String?,
+      fileverseMessage: map['fileverse_message'] as String?,
     );
   }
 }

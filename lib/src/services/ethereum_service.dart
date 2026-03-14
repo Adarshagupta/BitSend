@@ -46,6 +46,41 @@ class EthereumService {
 ''',
     'ENSResolver',
   ).functions.single;
+  static final ContractFunction _ensTextFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "inputs":[
+      {"internalType":"bytes32","name":"node","type":"bytes32"},
+      {"internalType":"string","name":"key","type":"string"}
+    ],
+    "name":"text",
+    "outputs":[{"internalType":"string","name":"","type":"string"}],
+    "stateMutability":"view",
+    "type":"function"
+  }
+]
+''',
+    'ENSResolver',
+  ).functions.single;
+  static final ContractFunction _ensSetTextFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "inputs":[
+      {"internalType":"bytes32","name":"node","type":"bytes32"},
+      {"internalType":"string","name":"key","type":"string"},
+      {"internalType":"string","name":"value","type":"string"}
+    ],
+    "name":"setText",
+    "outputs":[],
+    "stateMutability":"nonpayable",
+    "type":"function"
+  }
+]
+''',
+    'ENSResolver',
+  ).functions.single;
 
   String _rpcEndpoint;
   ChainNetwork network = ChainNetwork.testnet;
@@ -125,6 +160,82 @@ class EthereumService {
       );
     }
     return resolved.hexEip55;
+  }
+
+  Future<String> readEnsTextRecord({
+    required String name,
+    required String key,
+  }) async {
+    final String normalized = name.trim().toLowerCase();
+    if (!isEnsName(normalized)) {
+      throw const FormatException('Enter a valid .eth name.');
+    }
+    final Uint8List node = _ensNamehash(normalized);
+    final EthereumAddress resolver = await _resolverForNode(node);
+    final List<dynamic> record = await _callViewFunction(
+      contract: resolver,
+      function: _ensTextFunction,
+      params: <dynamic>[node, key],
+    );
+    return (record.single as String).trim();
+  }
+
+  Future<EnsPaymentPreference> readEnsPaymentPreference(String name) async {
+    final String normalized = name.trim().toLowerCase();
+    Future<String> safeRead(String key) async {
+      try {
+        return await readEnsTextRecord(name: normalized, key: key);
+      } catch (_) {
+        return '';
+      }
+    }
+
+    final List<String> values = await Future.wait(<Future<String>>[
+      safeRead(EnsPaymentPreference.chainRecordKey),
+      safeRead(EnsPaymentPreference.tokenRecordKey),
+    ]);
+    return EnsPaymentPreference(
+      ensName: normalized,
+      preferredChain: values[0],
+      preferredToken: values[1],
+    );
+  }
+
+  Future<List<String>> writeEnsPaymentPreference({
+    required EthPrivateKey signer,
+    required String name,
+    String preferredChain = '',
+    String preferredToken = '',
+  }) async {
+    final String normalized = name.trim().toLowerCase();
+    if (!isEnsName(normalized)) {
+      throw const FormatException('Enter a valid .eth name.');
+    }
+    final Uint8List node = _ensNamehash(normalized);
+    final EthereumAddress resolver = await _resolverForNode(node);
+    final Map<String, String> entries = <String, String>{
+      EnsPaymentPreference.chainRecordKey: preferredChain.trim(),
+      EnsPaymentPreference.tokenRecordKey: preferredToken.trim(),
+    };
+    if (entries.values.every((String value) => value.isEmpty)) {
+      throw const FormatException('Enter at least one ENS preference to save.');
+    }
+    return _withClient((Web3Client client) async {
+      final List<String> hashes = <String>[];
+      for (final MapEntry<String, String> entry in entries.entries) {
+        final String txHash = await client.sendTransaction(
+          signer,
+          Transaction.callContract(
+            contract: resolver,
+            function: _ensSetTextFunction,
+            parameters: <dynamic>[node, entry.key, entry.value],
+          ),
+          chainId: _expectedChainId,
+        );
+        hashes.add(txHash);
+      }
+      return hashes;
+    });
   }
 
   Future<bool> isReachable() async {
@@ -418,6 +529,21 @@ class EthereumService {
       throw const FormatException('Ethereum RPC returned malformed call data.');
     }
     return function.decodeReturnValues(result);
+  }
+
+  Future<EthereumAddress> _resolverForNode(Uint8List node) async {
+    final List<dynamic> registryResult = await _callViewFunction(
+      contract: _ensRegistryAddress,
+      function: _ensResolverFunction,
+      params: <dynamic>[node],
+    );
+    final EthereumAddress resolver = registryResult.single as EthereumAddress;
+    if (_isZeroAddress(resolver)) {
+      throw const FormatException(
+        'ENS name does not have a resolver on this network.',
+      );
+    }
+    return resolver;
   }
 
   TransactionReceipt _parseTransactionReceipt(Map<String, dynamic> json) {

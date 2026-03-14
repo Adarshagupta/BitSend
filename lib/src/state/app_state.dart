@@ -774,6 +774,8 @@ class BitsendAppState extends ChangeNotifier {
     String receiverEndpoint = '',
     String receiverPeripheralId = '',
     String receiverPeripheralName = '',
+    String receiverPreferredChain = '',
+    String receiverPreferredToken = '',
   }) {
     _sendDraft = _sendDraft.copyWith(
       receiverAddress: receiverAddress.trim(),
@@ -781,6 +783,8 @@ class BitsendAppState extends ChangeNotifier {
       receiverEndpoint: _normalizeEndpoint(receiverEndpoint),
       receiverPeripheralId: receiverPeripheralId.trim(),
       receiverPeripheralName: receiverPeripheralName.trim(),
+      receiverPreferredChain: receiverPreferredChain.trim(),
+      receiverPreferredToken: receiverPreferredToken.trim(),
     );
     notifyListeners();
   }
@@ -862,6 +866,8 @@ class BitsendAppState extends ChangeNotifier {
       fileverseReceiptId: snapshot.receiptId,
       fileverseReceiptUrl: snapshot.receiptUrl,
       fileverseSavedAt: snapshot.savedAt,
+      fileverseStorageMode: snapshot.storageMode,
+      fileverseMessage: snapshot.message,
     );
     await _persistTransfer(updated);
     return updated;
@@ -2249,7 +2255,41 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   Future<String> resolveEthereumEnsName(String value) {
-    return _ethereumService.resolveEnsAddress(value);
+    return _ethereumEnsService.resolveEnsAddress(value);
+  }
+
+  Future<EnsPaymentPreference> readEthereumEnsPaymentPreference(String value) {
+    return _ethereumEnsService.readEnsPaymentPreference(value);
+  }
+
+  Future<List<String>> saveEthereumEnsPaymentPreference({
+    required String ensName,
+    required String preferredChain,
+    required String preferredToken,
+  }) async {
+    final WalletProfile? wallet = _wallets[ChainKind.ethereum] ?? _wallet;
+    if (wallet == null) {
+      throw const FormatException('Create or restore an Ethereum wallet first.');
+    }
+    await _refreshConnectivityState();
+    if (!_hasInternet) {
+      throw const SocketException(
+        'Internet is required to read or write ENS text records.',
+      );
+    }
+    return _runTaskWithResult<List<String>>(
+      'Saving ENS payment preference...',
+      () async {
+        final EthPrivateKey signer = await _walletService
+            .loadEthereumSigningCredentials();
+        return _ethereumEnsService.writeEnsPaymentPreference(
+          signer: signer,
+          name: ensName,
+          preferredChain: preferredChain,
+          preferredToken: preferredToken,
+        );
+      },
+    );
   }
 
   int _estimatedEthereumFeeHeadroom() {
@@ -2279,6 +2319,16 @@ class BitsendAppState extends ChangeNotifier {
       return text.replaceFirst('HttpException: ', '');
     }
     return text;
+  }
+
+  EthereumService get _ethereumEnsService {
+    final EthereumService service = EthereumService(
+      rpcEndpoint:
+          _rpcEndpoints[_scopeKey(ChainKind.ethereum, ChainNetwork.mainnet)] ??
+          defaultEthereumMainnetRpcEndpoint,
+    );
+    service.network = ChainNetwork.mainnet;
+    return service;
   }
 
   Future<void> _runTask(

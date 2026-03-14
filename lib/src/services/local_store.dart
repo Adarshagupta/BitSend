@@ -18,7 +18,7 @@ class LocalStore {
     final dbPath = path.join(directory.path, 'bitsend.db');
     _database = await openDatabase(
       dbPath,
-      version: 5,
+      version: 6,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE pending_transfers (
@@ -45,7 +45,9 @@ class LocalStore {
             backend_status TEXT,
             fileverse_receipt_id TEXT,
             fileverse_receipt_url TEXT,
-            fileverse_saved_at_ms INTEGER
+            fileverse_saved_at_ms INTEGER,
+            fileverse_storage_mode TEXT,
+            fileverse_message TEXT
           )
         ''');
         await db.execute('''
@@ -89,6 +91,14 @@ class LocalStore {
           );
           await db.execute(
             'ALTER TABLE pending_transfers ADD COLUMN fileverse_saved_at_ms INTEGER',
+          );
+        }
+        if (oldVersion < 6) {
+          await db.execute(
+            'ALTER TABLE pending_transfers ADD COLUMN fileverse_storage_mode TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE pending_transfers ADD COLUMN fileverse_message TEXT',
           );
         }
       },
