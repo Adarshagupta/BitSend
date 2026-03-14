@@ -3,6 +3,7 @@ import { DurableObject } from 'cloudflare:workers';
 type AppChain = 'ethereum' | 'solana';
 type AppNetwork = 'testnet' | 'mainnet';
 type GatewayMode = 'mock' | 'live';
+type FileverseStorageMode = 'fileverse' | 'worker';
 
 type WalletRecord = {
   chain: AppChain;
@@ -71,6 +72,8 @@ type FileverseReceiptRecord = {
   receiptUrl: string;
   savedAt: string;
   upstreamUrl?: string;
+  storageMode: FileverseStorageMode;
+  message?: string;
 };
 
 type StoredFileverseReceiptRecord = FileverseReceiptRecord & {
@@ -107,6 +110,7 @@ interface Env {
   BITGO_SOL_MAINNET_ADDRESS?: string;
   FILEVERSE_API_KEY?: string;
   FILEVERSE_RECEIPT_UPSTREAM?: string;
+  FILEVERSE_DDOCS_ENDPOINT?: string;
 }
 
 const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000;
@@ -393,72 +397,181 @@ async function publishFileverseReceipt(
   origin: string,
   input: FileverseReceiptInput,
 ): Promise<FileverseReceiptRecord> {
+  const archiveReceiptId = `bitsend-${input.transferId}-${crypto.randomUUID().slice(0, 8)}`;
+  const archiveReceiptUrl = new URL(
+    `/fileverse/receipts/${encodeURIComponent(archiveReceiptId)}`,
+    origin,
+  ).toString();
+
+  const persistReceipt = async ({
+    savedAt,
+    upstreamUrl,
+    responseReceiptId,
+    responseReceiptUrl,
+    storageMode,
+    message,
+  }: {
+    savedAt?: string;
+    upstreamUrl?: string;
+    responseReceiptId?: string;
+    responseReceiptUrl?: string;
+    storageMode: FileverseStorageMode;
+    message?: string;
+  }): Promise<FileverseReceiptRecord> => {
+    const resolvedSavedAt = savedAt ?? new Date().toISOString();
+    const receipt: StoredFileverseReceiptRecord = {
+      receiptId: archiveReceiptId,
+      receiptUrl: archiveReceiptUrl,
+      savedAt: resolvedSavedAt,
+      upstreamUrl,
+      storageMode,
+      message,
+      transferId: input.transferId,
+      chain: input.chain,
+      network: input.network,
+      walletEngine: input.walletEngine,
+      direction: input.direction,
+      status: input.status,
+      amountBaseUnits: input.amountBaseUnits,
+      amountLabel: input.amountLabel,
+      senderAddress: input.senderAddress,
+      receiverAddress: input.receiverAddress,
+      transport: input.transport,
+      updatedAt: input.updatedAt,
+      createdAt: input.createdAt,
+      transactionSignature: input.transactionSignature,
+      explorerUrl: input.explorerUrl,
+      receiptPngBase64: input.receiptPngBase64,
+    };
+    await state.saveFileverseReceipt(receipt);
+    return {
+      receiptId: responseReceiptId ?? receipt.receiptId,
+      receiptUrl: responseReceiptUrl ?? receipt.receiptUrl,
+      savedAt: receipt.savedAt,
+      upstreamUrl: receipt.upstreamUrl,
+      storageMode: receipt.storageMode,
+      message: receipt.message,
+    };
+  };
+
   const apiKey = pickString(env.FILEVERSE_API_KEY);
+  const ddocsEndpoint = pickString(env.FILEVERSE_DDOCS_ENDPOINT);
   const upstream = pickString(env.FILEVERSE_RECEIPT_UPSTREAM);
+
+  if (apiKey && ddocsEndpoint) {
+    try {
+      const endpoint = appendApiKey(ddocsEndpoint, apiKey);
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title: buildFileverseReceiptTitle(input),
+          content: buildFileverseReceiptMarkdown(input, archiveReceiptUrl),
+        }),
+      });
+      const rawBody = await response.text();
+      const payload = rawBody.trim().length === 0
+        ? {}
+        : tryParseJsonObject(rawBody);
+      if (!response.ok) {
+        throw new HttpError(
+          response.status,
+          pickString(
+            payload.message,
+            payload.error,
+            payload.reason,
+          ) ?? `Fileverse ddoc publish failed (${response.status}).`,
+        );
+      }
+      const ddocData = typeof payload.data === 'object' && payload.data != null
+        ? payload.data as Record<string, unknown>
+        : payload;
+      const ddocLink = pickString(
+        ddocData.link,
+        ddocData.url,
+        ddocData.shareUrl,
+      );
+      if (!ddocLink) {
+        throw new HttpError(502, 'Fileverse ddoc response did not include a link.');
+      }
+      const ddocId = pickString(ddocData.ddocId, ddocData.id);
+      return persistReceipt({
+        savedAt: pickString(ddocData.createdAt, ddocData.updatedAt),
+        upstreamUrl: ddocLink,
+        responseReceiptId: ddocId,
+        responseReceiptUrl: ddocLink,
+        storageMode: 'fileverse',
+        message:
+          'Receipt details were saved to Fileverse. The Bitsend archive keeps the captured screenshot.',
+      });
+    } catch (error) {
+      console.error(
+        'Fileverse ddoc publish failed, trying legacy upload path.',
+        error,
+      );
+    }
+  }
+
   if (!apiKey || !upstream) {
-    throw new HttpError(
-      503,
-      'Fileverse receipt publishing is not configured on this Worker yet.',
-    );
+    return persistReceipt({
+      storageMode: 'worker',
+      message:
+        'Receipt archived on the Bitsend Worker because the Fileverse upstream is not configured yet.',
+    });
   }
-  const response = await fetch(upstream, {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-      'x-api-key': apiKey,
-    },
-    body: JSON.stringify(input),
-  });
-  const rawBody = await response.text();
-  const payload = rawBody.trim().length === 0
-    ? {}
-    : tryParseJsonObject(rawBody);
-  if (!response.ok) {
-    throw new HttpError(
-      response.status,
-      pickString(
-        payload.message,
-        payload.error,
-        payload.reason,
-      ) ?? `Fileverse upstream failed (${response.status}).`,
+
+  try {
+    const response = await fetch(upstream, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify(input),
+    });
+    const rawBody = await response.text();
+    const payload = rawBody.trim().length === 0
+      ? {}
+      : tryParseJsonObject(rawBody);
+    if (!response.ok) {
+      throw new HttpError(
+        response.status,
+        pickString(
+          payload.message,
+          payload.error,
+          payload.reason,
+        ) ?? `Fileverse upstream failed (${response.status}).`,
+      );
+    }
+    const upstreamReceipt = normalizeFileverseReceiptRecord(
+      payload,
+      input.transferId,
     );
+    return persistReceipt({
+      savedAt: upstreamReceipt.savedAt,
+      upstreamUrl: upstreamReceipt.upstreamUrl,
+      responseReceiptId: upstreamReceipt.receiptId,
+      responseReceiptUrl: upstreamReceipt.receiptUrl,
+      storageMode: upstreamReceipt.storageMode,
+      message:
+        'Receipt saved to Fileverse and mirrored to the Bitsend Worker link.',
+    });
+  } catch (error) {
+    console.error(
+      'Fileverse upstream publish failed, archiving on Worker.',
+      error,
+    );
+    return persistReceipt({
+      storageMode: 'worker',
+      message:
+        'Receipt archived on the Bitsend Worker because Fileverse was unavailable.',
+    });
   }
-  const upstreamReceipt = normalizeFileverseReceiptRecord(
-    payload,
-    input.transferId,
-  );
-  const receipt: StoredFileverseReceiptRecord = {
-    ...upstreamReceipt,
-    receiptUrl: new URL(
-      `/fileverse/receipts/${encodeURIComponent(upstreamReceipt.receiptId)}`,
-      origin,
-    ).toString(),
-    transferId: input.transferId,
-    chain: input.chain,
-    network: input.network,
-    walletEngine: input.walletEngine,
-    direction: input.direction,
-    status: input.status,
-    amountBaseUnits: input.amountBaseUnits,
-    amountLabel: input.amountLabel,
-    senderAddress: input.senderAddress,
-    receiverAddress: input.receiverAddress,
-    transport: input.transport,
-    updatedAt: input.updatedAt,
-    createdAt: input.createdAt,
-    transactionSignature: input.transactionSignature,
-    explorerUrl: input.explorerUrl,
-    receiptPngBase64: input.receiptPngBase64,
-  };
-  await state.saveFileverseReceipt(receipt);
-  return {
-    receiptId: receipt.receiptId,
-    receiptUrl: receipt.receiptUrl,
-    savedAt: receipt.savedAt,
-    upstreamUrl: receipt.upstreamUrl,
-  };
 }
 
 async function submitMockTransfer(
@@ -883,7 +996,54 @@ function normalizeFileverseReceiptRecord(
       pickString(data.savedAt, data.createdAt, data.updatedAt) ??
       new Date().toISOString(),
     upstreamUrl: receiptUrl,
+    storageMode: 'fileverse',
   };
+}
+
+function appendApiKey(endpoint: string, apiKey: string): string {
+  const url = new URL(endpoint);
+  if (!url.searchParams.has('apiKey')) {
+    url.searchParams.set('apiKey', apiKey);
+  }
+  return url.toString();
+}
+
+function buildFileverseReceiptTitle(input: FileverseReceiptInput): string {
+  return `Bitsend ${input.amountLabel} receipt ${input.transferId.slice(0, 8)}`;
+}
+
+function buildFileverseReceiptMarkdown(
+  input: FileverseReceiptInput,
+  archiveReceiptUrl: string,
+): string {
+  const explorerLine = input.explorerUrl
+    ? `- Explorer: ${input.explorerUrl}`
+    : '';
+  const signatureLine = input.transactionSignature
+    ? `- Transaction: ${input.transactionSignature}`
+    : '';
+  return [
+    `# Bitsend receipt`,
+    ``,
+    `- Transfer ID: ${input.transferId}`,
+    `- Chain: ${input.chain}`,
+    `- Network: ${input.network}`,
+    `- Wallet engine: ${input.walletEngine}`,
+    `- Direction: ${input.direction}`,
+    `- Status: ${input.status}`,
+    `- Amount: ${input.amountLabel}`,
+    `- Sender: ${input.senderAddress}`,
+    `- Receiver: ${input.receiverAddress}`,
+    `- Transport: ${input.transport}`,
+    `- Created at: ${input.createdAt}`,
+    `- Updated at: ${input.updatedAt}`,
+    signatureLine,
+    explorerLine,
+    ``,
+    `## Captured proof`,
+    ``,
+    `- Receipt archive: ${archiveReceiptUrl}`,
+  ].filter((line) => line.length > 0).join('\n');
 }
 
 function sessionStorageKey(sessionToken: string): string {
@@ -944,11 +1104,17 @@ function renderFileverseReceiptPage(
   receipt: StoredFileverseReceiptRecord,
 ): string {
   const title = `${escapeHtml(receipt.amountLabel)} receipt`;
+  const storageLabel = receipt.storageMode === 'fileverse'
+    ? 'Saved to Fileverse'
+    : 'Archived by Bitsend';
   const explorerLink = receipt.explorerUrl
     ? `<a class="action" href="${escapeHtml(receipt.explorerUrl)}" target="_blank" rel="noreferrer">Open explorer</a>`
     : '';
   const upstreamLink = receipt.upstreamUrl
     ? `<a class="action secondary" href="${escapeHtml(receipt.upstreamUrl)}" target="_blank" rel="noreferrer">Open Fileverse source</a>`
+    : '';
+  const storageNote = receipt.message
+    ? `<p class="note">${escapeHtml(receipt.message)}</p>`
     : '';
   const txLine = receipt.transactionSignature
     ? `<div class="row"><span>Transaction</span><code>${escapeHtml(receipt.transactionSignature)}</code></div>`
@@ -967,6 +1133,7 @@ function renderFileverseReceiptPage(
       .eyebrow { text-transform: uppercase; letter-spacing: 0.16em; font-size: 12px; color: #8e7d64; margin-bottom: 10px; }
       h1 { margin: 0 0 8px; font-size: 32px; }
       p { margin: 0; color: #5b5347; line-height: 1.5; }
+      .note { margin-top: 12px; }
       .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 24px; }
       .tile { background: #faf7f1; border-radius: 18px; padding: 14px 16px; }
       .tile span { display: block; font-size: 12px; color: #8e7d64; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
@@ -983,10 +1150,12 @@ function renderFileverseReceiptPage(
   <body>
     <div class="wrap">
       <div class="card">
-        <div class="eyebrow">Bitsend x Fileverse receipt</div>
+        <div class="eyebrow">Bitsend receipt archive</div>
         <h1>${title}</h1>
         <p>Saved ${escapeHtml(receipt.savedAt)} for ${escapeHtml(receipt.chain)} ${escapeHtml(receipt.network)}. This public link is hosted by the Bitsend Worker so it stays stable even if the upstream Fileverse response URL changes.</p>
+        ${storageNote}
         <div class="grid">
+          <div class="tile"><span>Storage</span><strong>${escapeHtml(storageLabel)}</strong></div>
           <div class="tile"><span>Transfer ID</span><code>${escapeHtml(receipt.transferId)}</code></div>
           <div class="tile"><span>Status</span><strong>${escapeHtml(receipt.status)}</strong></div>
           <div class="tile"><span>Sender</span><code>${escapeHtml(receipt.senderAddress)}</code></div>

@@ -843,11 +843,6 @@ class BitsendAppState extends ChangeNotifier {
     if (transfer == null) {
       throw const FormatException('Transfer not found.');
     }
-    if (transfer.fileverseReceiptUrl != null &&
-        transfer.fileverseReceiptUrl!.isNotEmpty &&
-        _isCurrentFileverseReceiptUrl(transfer.fileverseReceiptUrl!)) {
-      return transfer;
-    }
     await _refreshConnectivityState();
     if (!_hasInternet) {
       throw const SocketException(
@@ -870,18 +865,6 @@ class BitsendAppState extends ChangeNotifier {
     );
     await _persistTransfer(updated);
     return updated;
-  }
-
-  bool _isCurrentFileverseReceiptUrl(String value) {
-    final Uri? current = Uri.tryParse(value.trim());
-    final Uri? endpoint = Uri.tryParse(_bitgoEndpoint.trim());
-    if (current == null || endpoint == null) {
-      return false;
-    }
-    return current.scheme == endpoint.scheme &&
-        current.host == endpoint.host &&
-        current.port == endpoint.port &&
-        current.path.startsWith('/fileverse/receipts/');
   }
 
   Future<void> scanBleReceivers() async {

@@ -644,11 +644,15 @@ class FileverseReceiptSnapshot {
     required this.receiptId,
     required this.receiptUrl,
     required this.savedAt,
+    this.storageMode,
+    this.message,
   });
 
   final String receiptId;
   final String receiptUrl;
   final DateTime savedAt;
+  final String? storageMode;
+  final String? message;
 
   factory FileverseReceiptSnapshot.fromJson(Map<String, dynamic> json) =>
       FileverseReceiptSnapshot(
@@ -665,6 +669,10 @@ class FileverseReceiptSnapshot {
         savedAt: (json['savedAt'] as String?) == null
             ? DateTime.now()
             : DateTime.parse(json['savedAt'] as String),
+        storageMode:
+            (json['storageMode'] as String?) ??
+            (json['provider'] as String?),
+        message: json['message'] as String?,
       );
 }
 

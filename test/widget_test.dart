@@ -178,7 +178,7 @@ void main() {
 
     expect(find.text('Signed handoff stored'), findsOneWidget);
     expect(find.text('Open timeline'), findsOneWidget);
-    expect(find.text('Save to Fileverse'), findsOneWidget);
+    expect(find.text('Save receipt online'), findsOneWidget);
     expect(find.text(inbound.transferId), findsOneWidget);
   });
 
@@ -204,7 +204,7 @@ void main() {
     );
 
     expect(find.text('Save image'), findsOneWidget);
-    expect(find.text('Save to Fileverse'), findsOneWidget);
+    expect(find.text('Save receipt online'), findsOneWidget);
     expect(find.text('Open pending'), findsOneWidget);
   });
 
@@ -233,8 +233,8 @@ void main() {
       child: TransferDetailScreen(transferId: inbound.transferId),
     );
 
-    expect(find.text('Fileverse'), findsOneWidget);
-    expect(find.text('Copy Fileverse link'), findsOneWidget);
+    expect(find.text('Receipt link'), findsOneWidget);
+    expect(find.text('Copy receipt link'), findsOneWidget);
   });
 
   testWidgets('receive screen hides hotspot QR until listener is live', (

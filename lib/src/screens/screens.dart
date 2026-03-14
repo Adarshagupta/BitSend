@@ -152,14 +152,15 @@ class WelcomeScreen extends StatelessWidget {
       showBack: false,
       showHeader: false,
       scrollable: false,
-      child: const FadeSlideIn(delay: 0, child: _WelcomeHero()),
-      bottom: ElevatedButton(
-        onPressed: () {
-          Navigator.of(
-            context,
-          ).pushReplacementNamed(AppRoutes.onboardingWallet);
-        },
-        child: const Text('Set up wallet'),
+      child: FadeSlideIn(
+        delay: 0,
+        child: _WelcomeHero(
+          onContinue: () {
+            Navigator.of(
+              context,
+            ).pushReplacementNamed(AppRoutes.onboardingWallet);
+          },
+        ),
       ),
     );
   }
@@ -172,9 +173,12 @@ class WalletSetupScreen extends StatefulWidget {
   State<WalletSetupScreen> createState() => _WalletSetupScreenState();
 }
 
+enum _WalletSetupAction { create, restore }
+
 class _WalletSetupScreenState extends State<WalletSetupScreen> {
   final TextEditingController _phraseController = TextEditingController();
   String? _backupPath;
+  _WalletSetupAction? _activeSetupAction;
 
   @override
   void dispose() {
@@ -183,30 +187,46 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
   }
 
   Future<void> _createWallet(BitsendAppState state) async {
+    if (_activeSetupAction != null) {
+      return;
+    }
+    setState(() {
+      _activeSetupAction = _WalletSetupAction.create;
+      _backupPath = null;
+    });
     try {
       await state.createWallet();
+    } catch (error) {
+      _showSnack(context, _messageFor(error));
+    } finally {
       if (!mounted) {
         return;
       }
       setState(() {
-        _backupPath = null;
+        _activeSetupAction = null;
       });
-    } catch (error) {
-      _showSnack(context, _messageFor(error));
     }
   }
 
   Future<void> _restoreWallet(BitsendAppState state) async {
+    if (_activeSetupAction != null) {
+      return;
+    }
+    setState(() {
+      _activeSetupAction = _WalletSetupAction.restore;
+      _backupPath = null;
+    });
     try {
       await state.restoreWallet(_phraseController.text);
+    } catch (error) {
+      _showSnack(context, _messageFor(error));
+    } finally {
       if (!mounted) {
         return;
       }
       setState(() {
-        _backupPath = null;
+        _activeSetupAction = null;
       });
-    } catch (error) {
-      _showSnack(context, _messageFor(error));
     }
   }
 
@@ -256,6 +276,10 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
     final WalletProfile? offlineWallet = state.offlineWallet;
     final bool walletReady = wallet != null;
     final bool isCreated = wallet?.mode == WalletSetupMode.created;
+    final bool creatingWallet = _activeSetupAction == _WalletSetupAction.create;
+    final bool restoringWallet =
+        _activeSetupAction == _WalletSetupAction.restore;
+    final bool setupActionRunning = _activeSetupAction != null;
     return BitsendPageScaffold(
       title: walletReady ? 'Secure your wallet' : 'Set up this device',
       subtitle: walletReady
@@ -411,10 +435,26 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
                       ),
                       const SizedBox(height: 18),
                       ElevatedButton(
-                        onPressed: state.working
+                        onPressed: state.working || setupActionRunning
                             ? null
                             : () => _createWallet(state),
-                        child: const Text('Create new wallet'),
+                        child: creatingWallet
+                            ? const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  SizedBox(width: 10),
+                                  Text('Creating wallet...'),
+                                ],
+                              )
+                            : const Text('Create new wallet'),
                       ),
                     ],
                   ),
@@ -443,10 +483,25 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
                       ),
                       const SizedBox(height: 16),
                       OutlinedButton(
-                        onPressed: state.working
+                        onPressed: state.working || setupActionRunning
                             ? null
                             : () => _restoreWallet(state),
-                        child: const Text('Restore wallet'),
+                        child: restoringWallet
+                            ? const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                  SizedBox(width: 10),
+                                  Text('Restoring wallet...'),
+                                ],
+                              )
+                            : const Text('Restore wallet'),
                       ),
                     ],
                   ),
@@ -2457,7 +2512,10 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
       _savingToFileverse = true;
     });
     try {
-      final Uint8List bytes = await _captureReceiptPngBytes(context, _receiptKey);
+      final Uint8List bytes = await _captureReceiptPngBytesForFileverse(
+        context,
+        _receiptKey,
+      );
       final PendingTransfer updated = await state.saveReceiptToFileverse(
         transferId: transfer.transferId,
         receiptPngBytes: bytes,
@@ -2474,8 +2532,8 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
       _showSnack(
         context,
         transfer.fileverseReceiptUrl == updated.fileverseReceiptUrl
-            ? 'Fileverse link copied.'
-            : 'Receipt saved to Fileverse. Link copied.',
+            ? 'Receipt link copied.'
+            : 'Receipt saved online. Link copied.',
       );
     } catch (error) {
       if (!mounted) {
@@ -2556,7 +2614,9 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
                             ? const SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : Icon(
                                 transfer.fileverseReceiptUrl == null
@@ -2567,8 +2627,8 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
                           _savingToFileverse
                               ? 'Saving...'
                               : transfer.fileverseReceiptUrl == null
-                              ? 'Save to Fileverse'
-                              : 'Copy Fileverse link',
+                              ? 'Save receipt online'
+                              : 'Copy receipt link',
                         ),
                       ),
                     ),
@@ -2829,7 +2889,10 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
       _savingToFileverse = true;
     });
     try {
-      final Uint8List bytes = await _captureReceiptPngBytes(context, _receiptKey);
+      final Uint8List bytes = await _captureReceiptPngBytesForFileverse(
+        context,
+        _receiptKey,
+      );
       final PendingTransfer updated = await state.saveReceiptToFileverse(
         transferId: transfer.transferId,
         receiptPngBytes: bytes,
@@ -2846,8 +2909,8 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
       _showSnack(
         context,
         transfer.fileverseReceiptUrl == updated.fileverseReceiptUrl
-            ? 'Fileverse link copied.'
-            : 'Receipt saved to Fileverse. Link copied.',
+            ? 'Receipt link copied.'
+            : 'Receipt saved online. Link copied.',
       );
     } catch (error) {
       if (!mounted) {
@@ -2921,7 +2984,9 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
                             ? const SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : Icon(
                                 transfer.fileverseReceiptUrl == null
@@ -2932,8 +2997,8 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
                           _savingToFileverse
                               ? 'Saving...'
                               : transfer.fileverseReceiptUrl == null
-                              ? 'Save to Fileverse'
-                              : 'Copy Fileverse link',
+                              ? 'Save receipt online'
+                              : 'Copy receipt link',
                         ),
                       ),
                     ),
@@ -2957,27 +3022,64 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
   }
 }
 
+const int _fileverseReceiptMaxBytes = 420 * 1024;
+
 Future<Uint8List> _captureReceiptPngBytes(
   BuildContext context,
-  GlobalKey boundaryKey,
-) async {
+  GlobalKey boundaryKey, {
+  List<double>? preferredPixelRatios,
+}) async {
   final BuildContext? boundaryContext = boundaryKey.currentContext;
   if (boundaryContext == null) {
     throw StateError('Receipt is still preparing. Try again in a moment.');
   }
   final RenderRepaintBoundary boundary =
       boundaryContext.findRenderObject()! as RenderRepaintBoundary;
-  final double pixelRatio = MediaQuery.devicePixelRatioOf(
-    context,
-  ).clamp(1.8, 3.0).toDouble();
-  final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
-  final ByteData? byteData = await image.toByteData(
-    format: ui.ImageByteFormat.png,
-  );
-  if (byteData == null) {
-    throw StateError('Could not generate the receipt image.');
+  final double devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+  final List<double> pixelRatios = preferredPixelRatios?.isNotEmpty == true
+      ? preferredPixelRatios!
+      : <double>[devicePixelRatio.clamp(1.8, 3.0).toDouble()];
+  for (final double pixelRatio in pixelRatios) {
+    final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
+    try {
+      final ByteData? byteData = await image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      if (byteData != null) {
+        return byteData.buffer.asUint8List();
+      }
+    } finally {
+      image.dispose();
+    }
   }
-  return byteData.buffer.asUint8List();
+  throw StateError('Could not generate the receipt image.');
+}
+
+Future<Uint8List> _captureReceiptPngBytesForFileverse(
+  BuildContext context,
+  GlobalKey boundaryKey,
+) async {
+  final double devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+  final List<double> uploadPixelRatios = <double>[
+    devicePixelRatio.clamp(1.2, 1.6).toDouble(),
+    devicePixelRatio.clamp(1.0, 1.25).toDouble(),
+    0.9,
+    0.75,
+    0.6,
+  ].toSet().toList();
+  Uint8List? smallestBytes;
+  for (final double pixelRatio in uploadPixelRatios) {
+    final Uint8List bytes = await _captureReceiptPngBytes(
+      context,
+      boundaryKey,
+      preferredPixelRatios: <double>[pixelRatio],
+    );
+    smallestBytes = bytes;
+    if (bytes.lengthInBytes <= _fileverseReceiptMaxBytes) {
+      return bytes;
+    }
+  }
+  return smallestBytes!;
 }
 
 Future<String> _captureReceiptImage(
@@ -3177,7 +3279,7 @@ class _TransferReceiptSurface extends StatelessWidget {
                 ),
               if (transfer.fileverseSavedAt != null)
                 DetailRow(
-                  label: 'Fileverse saved',
+                  label: 'Receipt saved',
                   value: Formatters.dateTime(transfer.fileverseSavedAt!),
                 ),
               if (transfer.lastError != null) ...<Widget>[
@@ -3208,7 +3310,7 @@ class _TransferReceiptSurface extends StatelessWidget {
               if (transfer.fileverseReceiptUrl != null) ...<Widget>[
                 const SizedBox(height: 18),
                 Text(
-                  'Fileverse',
+                  'Receipt link',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 8),
@@ -3847,7 +3949,7 @@ class TransferDetailScreen extends StatelessWidget {
                   ),
                 if (transfer.fileverseSavedAt != null)
                   DetailRow(
-                    label: 'Fileverse saved',
+                    label: 'Receipt saved',
                     value: Formatters.dateTime(transfer.fileverseSavedAt!),
                   ),
                 if (transfer.bitgoWalletId != null)
@@ -3931,7 +4033,7 @@ class TransferDetailScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    'Fileverse',
+                    'Receipt link',
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 10),
@@ -3948,9 +4050,9 @@ class TransferDetailScreen extends StatelessWidget {
                       if (!context.mounted) {
                         return;
                       }
-                      _showSnack(context, 'Fileverse link copied.');
+                      _showSnack(context, 'Receipt link copied.');
                     },
-                    child: const Text('Copy Fileverse link'),
+                    child: const Text('Copy receipt link'),
                   ),
                 ],
               ),
@@ -6352,7 +6454,9 @@ class _HeroStatusChip extends StatelessWidget {
 }
 
 class _WelcomeHero extends StatelessWidget {
-  const _WelcomeHero();
+  const _WelcomeHero({required this.onContinue});
+
+  final VoidCallback onContinue;
 
   @override
   Widget build(BuildContext context) {
@@ -6365,110 +6469,214 @@ class _WelcomeHero extends StatelessWidget {
           container: true,
           label: 'Send locally first, then settle later on-chain.',
           child: SizedBox.expand(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(38),
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: <Color>[
-                    AppColors.heroStart,
-                    Color(0xFF0F3128),
-                    AppColors.heroEnd,
-                  ],
-                  stops: <double>[0, 0.54, 1],
+            child: Stack(
+              children: <Widget>[
+                Positioned(
+                  top: compact ? 18 : 24,
+                  right: 0,
+                  child: IgnorePointer(
+                    child: Text(
+                      'NOW',
+                      style: theme.textTheme.displaySmall?.copyWith(
+                        color: AppColors.emerald.withValues(alpha: 0.12),
+                        fontSize: compact ? 68 : 88,
+                        height: 0.92,
+                        letterSpacing: -3,
+                      ),
+                    ),
+                  ),
                 ),
-                boxShadow: <BoxShadow>[
-                  BoxShadow(
-                    color: AppColors.heroStart.withValues(alpha: 0.18),
-                    blurRadius: 34,
-                    offset: const Offset(0, 18),
-                  ),
-                ],
-              ),
-              child: Stack(
-                children: <Widget>[
-                  Positioned(
-                    top: -28,
-                    right: -18,
-                    child: IgnorePointer(
-                      child: Container(
-                        width: 150,
-                        height: 150,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white.withValues(alpha: 0.07),
-                        ),
+                Positioned(
+                  left: 0,
+                  bottom: compact ? 98 : 112,
+                  child: IgnorePointer(
+                    child: Text(
+                      'LATER',
+                      style: theme.textTheme.displaySmall?.copyWith(
+                        color: AppColors.amber.withValues(alpha: 0.14),
+                        fontSize: compact ? 60 : 76,
+                        height: 0.92,
+                        letterSpacing: -3,
                       ),
                     ),
                   ),
-                  Positioned(
-                    left: -42,
-                    bottom: 82,
-                    child: IgnorePointer(
-                      child: Container(
-                        width: 160,
-                        height: 160,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: AppColors.amber.withValues(alpha: 0.1),
+                ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    compact ? 18 : 22,
+                    compact ? 10 : 16,
+                    compact ? 18 : 22,
+                    compact ? 14 : 18,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        'bitsend',
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          letterSpacing: -0.5,
                         ),
                       ),
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      compact ? 22 : 26,
-                      compact ? 20 : 24,
-                      compact ? 22 : 26,
-                      compact ? 20 : 24,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        const _WelcomeTonePill(
-                          icon: Icons.wifi_protected_setup_rounded,
-                          label: 'Offline-first payments',
+                      SizedBox(height: compact ? 28 : 40),
+                      Text(
+                        'LOCAL HANDOFF',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: AppColors.slate,
+                          letterSpacing: 1.4,
                         ),
-                        SizedBox(height: compact ? 18 : 20),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 430),
-                          child: Text(
-                            'Send now. Settle later.',
-                            style: theme.textTheme.displaySmall?.copyWith(
-                              color: Colors.white,
-                              fontSize: compact ? 33 : 38,
-                              height: 0.98,
-                              letterSpacing: -1.2,
+                      ),
+                      SizedBox(height: compact ? 10 : 12),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 480),
+                        child: Text(
+                          'Send now. Settle later.',
+                          style: theme.textTheme.displaySmall?.copyWith(
+                            fontSize: compact ? 38 : 48,
+                            height: 0.94,
+                            letterSpacing: -1.8,
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: compact ? 12 : 14),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 420),
+                        child: Text(
+                          'Sign nearby first. Broadcast on-chain when either side reconnects.',
+                          style: theme.textTheme.bodyLarge?.copyWith(
+                            color: AppColors.mutedInk,
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: compact ? 24 : 34),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 520),
+                        child: Wrap(
+                          spacing: 18,
+                          runSpacing: 14,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: const <Widget>[
+                            _WelcomeLinearStep(
+                              index: '01',
+                              title: 'Sign',
+                              caption: 'offline',
+                            ),
+                            _WelcomeLinearDivider(),
+                            _WelcomeLinearStep(
+                              index: '02',
+                              title: 'Share',
+                              caption: 'nearby',
+                            ),
+                            _WelcomeLinearDivider(),
+                            _WelcomeLinearStep(
+                              index: '03',
+                              title: 'Settle',
+                              caption: 'later',
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Spacer(),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 320),
+                        child: Text(
+                          'Create or restore your wallet on the next screen.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: AppColors.slate,
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: compact ? 12 : 16),
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: onContinue,
+                          borderRadius: BorderRadius.circular(999),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 2,
+                              vertical: 8,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                Text(
+                                  'Set up wallet',
+                                  style: theme.textTheme.titleLarge?.copyWith(
+                                    decoration: TextDecoration.underline,
+                                    decorationColor: AppColors.ink,
+                                    decorationThickness: 1.4,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                const Icon(Icons.arrow_forward_rounded),
+                              ],
                             ),
                           ),
                         ),
-                        SizedBox(height: compact ? 10 : 12),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 470),
-                          child: Text(
-                            'Hand off a signed payment nearby. Either device can broadcast when it gets back online.',
-                            style: theme.textTheme.bodyLarge?.copyWith(
-                              color: Colors.white.withValues(alpha: 0.78),
-                            ),
-                          ),
-                        ),
-                        SizedBox(height: compact ? 20 : 24),
-                        Expanded(
-                          child: _WelcomeTransferScene(compact: compact),
-                        ),
-                        SizedBox(height: compact ? 14 : 18),
-                        _WelcomeFlowRibbon(compact: compact),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         );
       },
     );
+  }
+}
+
+class _WelcomeLinearStep extends StatelessWidget {
+  const _WelcomeLinearStep({
+    required this.index,
+    required this.title,
+    required this.caption,
+  });
+
+  final String index;
+  final String title;
+  final String caption;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Text(
+          index,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: AppColors.slate,
+            letterSpacing: 1.0,
+          ),
+        ),
+        const SizedBox(width: 8),
+        RichText(
+          text: TextSpan(
+            style: theme.textTheme.titleMedium?.copyWith(color: AppColors.ink),
+            children: <InlineSpan>[
+              TextSpan(text: title),
+              TextSpan(
+                text: ' $caption',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: AppColors.slate,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _WelcomeLinearDivider extends StatelessWidget {
+  const _WelcomeLinearDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(width: 26, height: 1, color: AppColors.line);
   }
 }
 

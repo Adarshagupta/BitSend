@@ -74,16 +74,18 @@ class FileverseClientService {
           'Authorization': 'Bearer $_sessionToken',
       };
       final http.Response response = switch (method) {
-        'POST' => await http
-            .post(
-              uri,
-              headers: headers,
-              body: body == null ? null : jsonEncode(body),
-            )
-            .timeout(_requestTimeout),
+        'POST' =>
+          await http
+              .post(
+                uri,
+                headers: headers,
+                body: body == null ? null : jsonEncode(body),
+              )
+              .timeout(_requestTimeout),
         'GET' => await http.get(uri, headers: headers).timeout(_requestTimeout),
         _ => throw UnsupportedError(
-            'Unsupported Fileverse client method: $method'),
+          'Unsupported Fileverse client method: $method',
+        ),
       };
       final String rawBody = response.body.trim();
       final Map<String, dynamic> json = rawBody.isEmpty
@@ -92,11 +94,11 @@ class FileverseClientService {
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return json;
       }
-      throw FormatException(
-        (json['message'] as String?) ??
-            (json['error'] as String?) ??
-            'Fileverse backend request failed (${response.statusCode}).',
-      );
+      final String message =
+          (json['message'] as String?) ??
+          (json['error'] as String?) ??
+          'Fileverse backend request failed (${response.statusCode}).';
+      throw FormatException(_normalizeBackendMessage(message));
     } on TimeoutException {
       throw const FormatException(
         'Fileverse backend request timed out. Check the backend endpoint and try again.',
@@ -116,5 +118,15 @@ class FileverseClientService {
         ? path.substring(1)
         : path;
     return base.resolve(normalizedPath);
+  }
+
+  String _normalizeBackendMessage(String message) {
+    final String normalized = message.trim();
+    final String lower = normalized.toLowerCase();
+    if (lower.contains('sqlite_toobig') ||
+        lower.contains('string or blob too big')) {
+      return 'Receipt image is too large for Fileverse storage. Try again and BitSend will upload a smaller copy.';
+    }
+    return normalized;
   }
 }
