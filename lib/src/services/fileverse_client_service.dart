@@ -5,84 +5,58 @@ import 'package:http/http.dart' as http;
 
 import '../models/app_models.dart';
 
-class BitGoClientService {
-  BitGoClientService({required this.endpoint});
+class FileverseClientService {
+  FileverseClientService({required this.endpoint});
 
   static const Duration _requestTimeout = Duration(seconds: 8);
 
   String endpoint;
   String? _sessionToken;
 
-  String? get sessionToken => _sessionToken;
   bool get hasSession => _sessionToken != null && _sessionToken!.isNotEmpty;
 
   void clearSession() {
     _sessionToken = null;
   }
 
-  Future<BitGoBackendHealth> fetchHealth() async {
-    final Map<String, dynamic> json = await _request(
-      method: 'GET',
-      path: '/health',
-    );
-    return BitGoBackendHealth.fromJson(json);
-  }
-
-  Future<BitGoDemoSession> createDemoSession() async {
+  Future<FileverseDemoSession> createDemoSession() async {
     final Map<String, dynamic> json = await _request(
       method: 'POST',
-      path: '/v1/bitgo/session/demo',
+      path: '/v1/fileverse/session/demo',
     );
-    final BitGoDemoSession session = BitGoDemoSession.fromJson(json);
+    final FileverseDemoSession session = FileverseDemoSession.fromJson(json);
     _sessionToken = session.sessionToken;
     return session;
   }
 
-  Future<List<BitGoWalletSummary>> fetchWallets() async {
-    final Map<String, dynamic> json = await _request(
-      method: 'GET',
-      path: '/v1/bitgo/wallets',
-      requiresSession: true,
-    );
-    return ((json['wallets'] as List<dynamic>?) ?? const <dynamic>[])
-        .map(
-          (dynamic item) =>
-              BitGoWalletSummary.fromJson(item as Map<String, dynamic>),
-        )
-        .toList(growable: false);
-  }
-
-  Future<BitGoTransferSnapshot> submitTransfer({
-    required ChainKind chain,
-    required ChainNetwork network,
-    required String walletId,
-    required String receiverAddress,
-    required int amountBaseUnits,
-    required String clientTransferId,
+  Future<FileverseReceiptSnapshot> publishReceipt({
+    required PendingTransfer transfer,
+    required String receiptPngBase64,
   }) async {
     final Map<String, dynamic> json = await _request(
       method: 'POST',
-      path: '/v1/bitgo/transfers',
+      path: '/v1/fileverse/receipts',
       requiresSession: true,
       body: <String, dynamic>{
-        'chain': chain.name,
-        'network': network.name,
-        'walletId': walletId,
-        'receiverAddress': receiverAddress,
-        'amountBaseUnits': amountBaseUnits.toString(),
-        'clientTransferId': clientTransferId,
+        'transferId': transfer.transferId,
+        'chain': transfer.chain.name,
+        'network': transfer.network.name,
+        'walletEngine': transfer.walletEngine.name,
+        'direction': transfer.direction.name,
+        'status': transfer.status.name,
+        'amountBaseUnits': transfer.amountLamports.toString(),
+        'amountLabel': Formatters.asset(transfer.amountSol, transfer.chain),
+        'senderAddress': transfer.senderAddress,
+        'receiverAddress': transfer.receiverAddress,
+        'transport': transfer.transport.name,
+        'updatedAt': transfer.updatedAt.toIso8601String(),
+        'createdAt': transfer.createdAt.toIso8601String(),
+        'transactionSignature': transfer.transactionSignature,
+        'explorerUrl': transfer.explorerUrl,
+        'receiptPngBase64': receiptPngBase64,
       },
     );
-    return BitGoTransferSnapshot.fromJson(json);
-  }
-
-  Future<BitGoTransferSnapshot> fetchTransfer(String clientTransferId) async {
-    final Map<String, dynamic> json = await _request(
-      method: 'GET',
-      path: '/v1/bitgo/transfers/${Uri.encodeComponent(clientTransferId)}',
-      requiresSession: true,
-    );
-    return BitGoTransferSnapshot.fromJson(json);
+    return FileverseReceiptSnapshot.fromJson(json);
   }
 
   Future<Map<String, dynamic>> _request({
@@ -108,7 +82,8 @@ class BitGoClientService {
             )
             .timeout(_requestTimeout),
         'GET' => await http.get(uri, headers: headers).timeout(_requestTimeout),
-        _ => throw UnsupportedError('Unsupported BitGo client method: $method'),
+        _ => throw UnsupportedError(
+            'Unsupported Fileverse client method: $method'),
       };
       final String rawBody = response.body.trim();
       final Map<String, dynamic> json = rawBody.isEmpty
@@ -120,11 +95,11 @@ class BitGoClientService {
       throw FormatException(
         (json['message'] as String?) ??
             (json['error'] as String?) ??
-            'BitGo backend request failed (${response.statusCode}).',
+            'Fileverse backend request failed (${response.statusCode}).',
       );
     } on TimeoutException {
       throw const FormatException(
-        'BitGo backend request timed out. Check the backend endpoint and try again.',
+        'Fileverse backend request timed out. Check the backend endpoint and try again.',
       );
     }
   }
@@ -133,7 +108,7 @@ class BitGoClientService {
     final String trimmed = endpoint.trim();
     if (trimmed.isEmpty) {
       throw const FormatException(
-        'Set the BitGo backend endpoint in Settings before using BitGo mode.',
+        'Set the backend endpoint in Settings before using Fileverse.',
       );
     }
     final Uri base = Uri.parse(trimmed.endsWith('/') ? trimmed : '$trimmed/');

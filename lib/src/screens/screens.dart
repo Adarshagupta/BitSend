@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -37,7 +38,12 @@ class _BootScreenState extends State<BootScreen> {
   Future<void> _initialize() async {
     final BitsendAppState state = BitsendStateScope.of(context);
     try {
-      await state.initialize();
+      await state.initialize().timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => throw TimeoutException(
+          'Startup is taking too long. Check the backend endpoint or network, then reopen the app.',
+        ),
+      );
       if (!mounted) {
         return;
       }
@@ -1341,13 +1347,20 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
   @override
   void initState() {
     super.initState();
-    _topUpController = TextEditingController(text: '0.100');
+    _topUpController = TextEditingController();
   }
 
   @override
   void dispose() {
     _topUpController.dispose();
     super.dispose();
+  }
+
+  void _applyTopUpPreset(String value) {
+    _topUpController.value = TextEditingValue(
+      text: value,
+      selection: TextSelection.collapsed(offset: value.length),
+    );
   }
 
   Future<void> _topUp(BitsendAppState state) async {
@@ -1381,11 +1394,25 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
     final WalletSummary summary = state.walletSummary;
     final ChainKind chain = state.activeChain;
     final bool usingBitGo = state.activeWalletEngine == WalletEngine.bitgo;
+    final String mainBalance = Formatters.asset(summary.balanceSol, chain);
+    final String offlineBalance = Formatters.asset(
+      summary.offlineBalanceSol,
+      chain,
+    );
+    final String spendableBalance = Formatters.asset(
+      summary.offlineAvailableSol,
+      chain,
+    );
+    final String mainAddress =
+        state.wallet?.displayAddress ?? 'Main unavailable';
+    final String offlineAddress = summary.offlineWalletAddress == null
+        ? 'Offline unavailable'
+        : Formatters.shortAddress(summary.offlineWalletAddress!);
     return BitsendPageScaffold(
       title: usingBitGo ? 'BitGo Wallet' : 'Offline Wallet',
       subtitle: usingBitGo
           ? 'BitGo mode is online-only. Manage the backend wallet here.'
-          : 'Fund once. Refresh before handoff.',
+          : 'Fund and refresh before handoff.',
       actions: <Widget>[
         IconButton(
           onPressed: state.refreshStatus,
@@ -1393,6 +1420,15 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
           icon: const Icon(Icons.refresh_rounded),
         ),
       ],
+      bottom: usingBitGo
+          ? null
+          : _OfflineBottomActions(
+              working: state.working,
+              statusMessage: state.statusMessage,
+              readyForOffline: summary.readyForOffline,
+              onTopUp: () => _topUp(state),
+              onRefreshReadiness: () => _refreshReadiness(state),
+            ),
       showBack: false,
       primaryTab: BitsendPrimaryTab.offline,
       onPrimaryTabSelected: (BitsendPrimaryTab tab) {
@@ -1429,10 +1465,7 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
                     label: 'Address',
                     value: state.bitgoWallet?.address ?? 'Connect demo wallet',
                   ),
-                  DetailRow(
-                    label: 'Balance',
-                    value: Formatters.asset(summary.balanceSol, chain),
-                  ),
+                  DetailRow(label: 'Balance', value: mainBalance),
                   DetailRow(
                     label: 'Backend',
                     value: state.bitgoBackendMode.label,
@@ -1446,112 +1479,40 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
               ),
             ),
           ] else ...<Widget>[
-            _OfflineWalletScene(
-              mainBalance: Formatters.asset(summary.balanceSol, chain),
-              offlineBalance: Formatters.asset(
-                summary.offlineBalanceSol,
-                chain,
-              ),
-              spendableBalance: Formatters.asset(
-                summary.offlineAvailableSol,
-                chain,
-              ),
-              mainAddress: state.wallet?.displayAddress ?? 'Main unavailable',
-              offlineAddress: summary.offlineWalletAddress == null
-                  ? 'Offline unavailable'
-                  : Formatters.shortAddress(summary.offlineWalletAddress!),
-              readyForOffline: summary.readyForOffline,
-              readinessAge: summary.blockhashAge == null
-                  ? 'Refresh'
-                  : Formatters.durationLabel(summary.blockhashAge),
-            ),
-            const SizedBox(height: 16),
-            SectionCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    'Move ${chain.shortLabel}',
-                    style: Theme.of(context).textTheme.titleLarge,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                FadeSlideIn(
+                  delay: 0,
+                  child: _OfflineWalletScene(
+                    mainBalance: mainBalance,
+                    offlineBalance: offlineBalance,
+                    spendableBalance: spendableBalance,
+                    mainAddress: mainAddress,
+                    offlineAddress: offlineAddress,
+                    readyForOffline: summary.readyForOffline,
                   ),
-                  const SizedBox(height: 14),
-                  TextField(
+                ),
+                const SizedBox(height: 14),
+                FadeSlideIn(
+                  delay: 40,
+                  child: _OfflineMetricStrip(
+                    mainBalance: mainBalance,
+                    offlineBalance: offlineBalance,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                FadeSlideIn(
+                  delay: 80,
+                  child: _OfflineActionComposer(
+                    chain: chain,
+                    mainBalance: mainBalance,
                     controller: _topUpController,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    inputFormatters: <TextInputFormatter>[
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                    ],
-                    decoration: InputDecoration(
-                      labelText: 'Top up amount in ${chain.shortLabel}',
-                      hintText: chain == ChainKind.solana ? '0.100' : '0.010',
-                    ),
+                    onPresetSelected: _applyTopUpPreset,
                   ),
-                  if (state.working && state.statusMessage != null) ...<Widget>[
-                    const SizedBox(height: 14),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.amberTint,
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      child: Row(
-                        children: <Widget>[
-                          const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2.2),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              state.statusMessage!,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 14),
-                  ElevatedButton(
-                    onPressed: state.working ? null : () => _topUp(state),
-                    child: state.working
-                        ? const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              SizedBox(width: 10),
-                              Text('Moving funds...'),
-                            ],
-                          )
-                        : const Text('Top up offline wallet'),
-                  ),
-                  const SizedBox(height: 10),
-                  OutlinedButton(
-                    onPressed: state.working
-                        ? null
-                        : () => _refreshReadiness(state),
-                    child: Text(
-                      summary.readyForOffline
-                          ? 'Refresh again'
-                          : 'Refresh readiness',
-                    ),
-                  ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 28),
+              ],
             ),
           ],
         ],
@@ -2455,6 +2416,7 @@ class SendSuccessScreen extends StatefulWidget {
 class _SendSuccessScreenState extends State<SendSuccessScreen> {
   final GlobalKey _receiptKey = GlobalKey();
   bool _didCelebrate = false;
+  bool _savingToFileverse = false;
 
   void _celebrate(PendingTransfer? transfer) {
     if (_didCelebrate || transfer == null) {
@@ -2484,6 +2446,48 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
         return;
       }
       _showSnack(context, _messageFor(error));
+    }
+  }
+
+  Future<void> _saveReceiptToFileverse(
+    BitsendAppState state,
+    PendingTransfer transfer,
+  ) async {
+    setState(() {
+      _savingToFileverse = true;
+    });
+    try {
+      final Uint8List bytes = await _captureReceiptPngBytes(context, _receiptKey);
+      final PendingTransfer updated = await state.saveReceiptToFileverse(
+        transferId: transfer.transferId,
+        receiptPngBytes: bytes,
+      );
+      if (updated.fileverseReceiptUrl != null &&
+          updated.fileverseReceiptUrl!.isNotEmpty) {
+        await Clipboard.setData(
+          ClipboardData(text: updated.fileverseReceiptUrl!),
+        );
+      }
+      if (!mounted) {
+        return;
+      }
+      _showSnack(
+        context,
+        transfer.fileverseReceiptUrl == updated.fileverseReceiptUrl
+            ? 'Fileverse link copied.'
+            : 'Receipt saved to Fileverse. Link copied.',
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showSnack(context, _messageFor(error));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _savingToFileverse = false;
+        });
+      }
     }
   }
 
@@ -2530,17 +2534,49 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
               },
               child: const Text('Open pending'),
             )
-          : Row(
+          : Column(
+              mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _saveReceipt(transfer),
-                    icon: const Icon(Icons.image_outlined),
-                    label: const Text('Save image'),
-                  ),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _saveReceipt(transfer),
+                        icon: const Icon(Icons.image_outlined),
+                        label: const Text('Save image'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _savingToFileverse
+                            ? null
+                            : () => _saveReceiptToFileverse(state, transfer),
+                        icon: _savingToFileverse
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : Icon(
+                                transfer.fileverseReceiptUrl == null
+                                    ? Icons.cloud_upload_outlined
+                                    : Icons.link_rounded,
+                              ),
+                        label: Text(
+                          _savingToFileverse
+                              ? 'Saving...'
+                              : transfer.fileverseReceiptUrl == null
+                              ? 'Save to Fileverse'
+                              : 'Copy Fileverse link',
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
                   child: ElevatedButton(
                     onPressed: () {
                       Navigator.of(context).pushNamedAndRemoveUntil(
@@ -2567,7 +2603,7 @@ class ReceiveListenScreen extends StatefulWidget {
 class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
   final ScrollController _scrollController = ScrollController();
   String? _seenTransferId;
-  String? _seenAnnouncement;
+  int _seenAnnouncementSerial = 0;
   bool _started = false;
 
   @override
@@ -2587,13 +2623,18 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
       });
     }
     if (state.announcementMessage != null &&
-        state.announcementMessage != _seenAnnouncement) {
-      _seenAnnouncement = state.announcementMessage;
+        state.announcementSerial != _seenAnnouncementSerial) {
+      final String message = state.announcementMessage!;
+      _seenAnnouncementSerial = state.announcementSerial;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) {
           return;
         }
-        _showSnack(context, state.announcementMessage!);
+        _showEventToast(
+          context,
+          message: message,
+          icon: _iconForReceiveMessage(message),
+        );
         state.clearAnnouncement();
       });
     }
@@ -2605,10 +2646,17 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
         if (!mounted) {
           return;
         }
-        state.acknowledgeLastReceivedTransfer();
-        Navigator.of(
-          context,
-        ).pushNamed(AppRoutes.receiveResult, arguments: transferId);
+        final PendingTransfer? transfer = state.transferById(transferId);
+        _showReceivedTransferToast(context, transfer);
+        Future<void>.delayed(const Duration(milliseconds: 450), () {
+          if (!mounted) {
+            return;
+          }
+          state.acknowledgeLastReceivedTransfer();
+          Navigator.of(
+            context,
+          ).pushNamed(AppRoutes.receiveResult, arguments: transferId);
+        });
       });
     }
   }
@@ -2740,6 +2788,7 @@ class ReceiveResultScreen extends StatefulWidget {
 class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
   final GlobalKey _receiptKey = GlobalKey();
   bool _didCelebrate = false;
+  bool _savingToFileverse = false;
 
   void _celebrate(PendingTransfer? transfer) {
     if (_didCelebrate || transfer == null) {
@@ -2769,6 +2818,48 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
         return;
       }
       _showSnack(context, _messageFor(error));
+    }
+  }
+
+  Future<void> _saveReceiptToFileverse(
+    BitsendAppState state,
+    PendingTransfer transfer,
+  ) async {
+    setState(() {
+      _savingToFileverse = true;
+    });
+    try {
+      final Uint8List bytes = await _captureReceiptPngBytes(context, _receiptKey);
+      final PendingTransfer updated = await state.saveReceiptToFileverse(
+        transferId: transfer.transferId,
+        receiptPngBytes: bytes,
+      );
+      if (updated.fileverseReceiptUrl != null &&
+          updated.fileverseReceiptUrl!.isNotEmpty) {
+        await Clipboard.setData(
+          ClipboardData(text: updated.fileverseReceiptUrl!),
+        );
+      }
+      if (!mounted) {
+        return;
+      }
+      _showSnack(
+        context,
+        transfer.fileverseReceiptUrl == updated.fileverseReceiptUrl
+            ? 'Fileverse link copied.'
+            : 'Receipt saved to Fileverse. Link copied.',
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showSnack(context, _messageFor(error));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _savingToFileverse = false;
+        });
+      }
     }
   }
 
@@ -2808,17 +2899,49 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
               },
               child: const Text('Back to receive'),
             )
-          : Row(
+          : Column(
+              mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _saveReceipt(transfer),
-                    icon: const Icon(Icons.image_outlined),
-                    label: const Text('Save image'),
-                  ),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _saveReceipt(transfer),
+                        icon: const Icon(Icons.image_outlined),
+                        label: const Text('Save image'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _savingToFileverse
+                            ? null
+                            : () => _saveReceiptToFileverse(state, transfer),
+                        icon: _savingToFileverse
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : Icon(
+                                transfer.fileverseReceiptUrl == null
+                                    ? Icons.cloud_upload_outlined
+                                    : Icons.link_rounded,
+                              ),
+                        label: Text(
+                          _savingToFileverse
+                              ? 'Saving...'
+                              : transfer.fileverseReceiptUrl == null
+                              ? 'Save to Fileverse'
+                              : 'Copy Fileverse link',
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
                   child: ElevatedButton(
                     onPressed: () {
                       Navigator.of(context).pushNamed(
@@ -2834,10 +2957,9 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
   }
 }
 
-Future<String> _captureReceiptImage(
+Future<Uint8List> _captureReceiptPngBytes(
   BuildContext context,
   GlobalKey boundaryKey,
-  String transferId,
 ) async {
   final BuildContext? boundaryContext = boundaryKey.currentContext;
   if (boundaryContext == null) {
@@ -2855,6 +2977,15 @@ Future<String> _captureReceiptImage(
   if (byteData == null) {
     throw StateError('Could not generate the receipt image.');
   }
+  return byteData.buffer.asUint8List();
+}
+
+Future<String> _captureReceiptImage(
+  BuildContext context,
+  GlobalKey boundaryKey,
+  String transferId,
+) async {
+  final Uint8List bytes = await _captureReceiptPngBytes(context, boundaryKey);
   final Directory directory = await path_provider
       .getApplicationDocumentsDirectory();
   final String safeTransferId = transferId.replaceAll(
@@ -2864,7 +2995,6 @@ Future<String> _captureReceiptImage(
   final File file = File(
     '${directory.path}/bitsend-receipt-$safeTransferId.png',
   );
-  final Uint8List bytes = byteData.buffer.asUint8List();
   await file.writeAsBytes(bytes, flush: true);
   return file.path;
 }
@@ -3045,6 +3175,11 @@ class _TransferReceiptSurface extends StatelessWidget {
                   label: 'Backend status',
                   value: transfer.backendStatus!,
                 ),
+              if (transfer.fileverseSavedAt != null)
+                DetailRow(
+                  label: 'Fileverse saved',
+                  value: Formatters.dateTime(transfer.fileverseSavedAt!),
+                ),
               if (transfer.lastError != null) ...<Widget>[
                 const SizedBox(height: 10),
                 Text(
@@ -3065,6 +3200,20 @@ class _TransferReceiptSurface extends StatelessWidget {
                 const SizedBox(height: 8),
                 SelectableText(
                   transfer.explorerUrl!,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
+                ),
+              ],
+              if (transfer.fileverseReceiptUrl != null) ...<Widget>[
+                const SizedBox(height: 18),
+                Text(
+                  'Fileverse',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  transfer.fileverseReceiptUrl!,
                   style: Theme.of(
                     context,
                   ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
@@ -3696,6 +3845,11 @@ class TransferDetailScreen extends StatelessWidget {
                     label: 'Backend status',
                     value: transfer.backendStatus!,
                   ),
+                if (transfer.fileverseSavedAt != null)
+                  DetailRow(
+                    label: 'Fileverse saved',
+                    value: Formatters.dateTime(transfer.fileverseSavedAt!),
+                  ),
                 if (transfer.bitgoWalletId != null)
                   DetailRow(
                     label: 'BitGo wallet',
@@ -3765,6 +3919,38 @@ class TransferDetailScreen extends StatelessWidget {
                       _showSnack(context, 'Explorer link copied.');
                     },
                     child: const Text('Copy explorer link'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (transfer.fileverseReceiptUrl != null) ...<Widget>[
+            const SizedBox(height: 16),
+            SectionCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    'Fileverse',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 10),
+                  SelectableText(
+                    transfer.fileverseReceiptUrl!,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 16),
+                  OutlinedButton(
+                    onPressed: () async {
+                      await Clipboard.setData(
+                        ClipboardData(text: transfer.fileverseReceiptUrl!),
+                      );
+                      if (!context.mounted) {
+                        return;
+                      }
+                      _showSnack(context, 'Fileverse link copied.');
+                    },
+                    child: const Text('Copy Fileverse link'),
                   ),
                 ],
               ),
@@ -4894,7 +5080,6 @@ class _OfflineWalletScene extends StatelessWidget {
     required this.mainAddress,
     required this.offlineAddress,
     required this.readyForOffline,
-    required this.readinessAge,
   });
 
   final String mainBalance;
@@ -4903,21 +5088,876 @@ class _OfflineWalletScene extends StatelessWidget {
   final String mainAddress;
   final String offlineAddress;
   final bool readyForOffline;
-  final String readinessAge;
 
   @override
   Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(32),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: AppColors.heroStart.withValues(alpha: 0.14),
+            blurRadius: 28,
+            spreadRadius: -4,
+            offset: const Offset(0, 20),
+          ),
+        ],
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: <Color>[
+              AppColors.heroStart,
+              Color(0xFF1A5646),
+              AppColors.heroEnd,
+            ],
+            stops: <double>[0, 0.58, 1],
+          ),
+          borderRadius: BorderRadius.circular(32),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        ),
+        child: Stack(
+          children: <Widget>[
+            Positioned(
+              top: -36,
+              right: -12,
+              child: IgnorePointer(
+                child: Container(
+                  width: 140,
+                  height: 140,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: -28,
+              left: -18,
+              child: IgnorePointer(
+                child: Container(
+                  width: 120,
+                  height: 120,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+              child: LayoutBuilder(
+                builder: (BuildContext context, BoxConstraints constraints) {
+                  final bool stacked = constraints.maxWidth < 560;
+                  final Widget mainNode = _OfflineFlowNode(
+                    eyebrow: '',
+                    title: 'Main wallet',
+                    value: mainBalance,
+                    caption: mainAddress,
+                    icon: Icons.account_balance_wallet_rounded,
+                  );
+                  final Widget offlineNode = _OfflineFlowNode(
+                    eyebrow: '',
+                    title: 'Offline wallet',
+                    value: offlineBalance,
+                    caption: offlineAddress,
+                    icon: Icons.lock_clock_rounded,
+                  );
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text(
+                                  'OFFLINE',
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.72,
+                                        ),
+                                        letterSpacing: 1.2,
+                                      ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  spendableBalance,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .headlineSmall
+                                      ?.copyWith(color: Colors.white),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  readyForOffline
+                                      ? 'Signer ready'
+                                      : 'Refresh before handoff',
+                                  style: Theme.of(context).textTheme.bodyMedium
+                                      ?.copyWith(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.82,
+                                        ),
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          _OfflineHeroChip(
+                            icon: readyForOffline
+                                ? Icons.check_circle_outline_rounded
+                                : Icons.update_rounded,
+                            label: readyForOffline ? 'Ready' : 'Refresh',
+                            active: readyForOffline,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 22),
+                      if (stacked) ...<Widget>[
+                        mainNode,
+                        const SizedBox(height: 10),
+                        const Center(
+                          child: _OfflineFlowConnector(vertical: true),
+                        ),
+                        const SizedBox(height: 10),
+                        offlineNode,
+                      ] else
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: <Widget>[
+                            Expanded(child: mainNode),
+                            const SizedBox(width: 16),
+                            const Expanded(child: _OfflineFlowConnector()),
+                            const SizedBox(width: 16),
+                            Expanded(child: offlineNode),
+                          ],
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OfflineFlowNode extends StatelessWidget {
+  const _OfflineFlowNode({
+    required this.eyebrow,
+    required this.title,
+    required this.value,
+    required this.caption,
+    required this.icon,
+  });
+
+  final String eyebrow;
+  final String title;
+  final String value;
+  final String caption;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        if (eyebrow.isNotEmpty) ...<Widget>[
+          Text(
+            eyebrow,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Colors.white.withValues(alpha: 0.64),
+              letterSpacing: 1.0,
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+        Row(
+          children: <Widget>[
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          value,
+          style: Theme.of(
+            context,
+          ).textTheme.titleLarge?.copyWith(color: Colors.white),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          caption,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Colors.white.withValues(alpha: 0.74),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfflineFlowConnector extends StatelessWidget {
+  const _OfflineFlowConnector({this.vertical = false});
+
+  final bool vertical;
+
+  @override
+  Widget build(BuildContext context) {
+    if (vertical) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Container(
+            width: 1.5,
+            height: 16,
+            color: Colors.white.withValues(alpha: 0.24),
+          ),
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.14),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.south_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+          Container(
+            width: 1.5,
+            height: 16,
+            color: Colors.white.withValues(alpha: 0.24),
+          ),
+        ],
+      );
+    }
+
+    return Row(
+      children: <Widget>[
+        Expanded(
+          child: Container(
+            height: 1.5,
+            color: Colors.white.withValues(alpha: 0.24),
+          ),
+        ),
+        Container(
+          width: 34,
+          height: 34,
+          margin: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.14),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.east_rounded, color: Colors.white, size: 20),
+        ),
+        Expanded(
+          child: Container(
+            height: 1.5,
+            color: Colors.white.withValues(alpha: 0.24),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfflineHeroChip extends StatelessWidget {
+  const _OfflineHeroChip({
+    required this.icon,
+    required this.label,
+    required this.active,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color background = active
+        ? Colors.white.withValues(alpha: 0.16)
+        : AppColors.amberTint.withValues(alpha: 0.94);
+    final Color foreground = active ? Colors.white : AppColors.ink;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(icon, size: 16, color: foreground),
+          const SizedBox(width: 7),
+          Text(
+            label,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: foreground),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OfflineMetricStrip extends StatelessWidget {
+  const _OfflineMetricStrip({
+    required this.mainBalance,
+    required this.offlineBalance,
+  });
+
+  final String mainBalance;
+  final String offlineBalance;
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget mainMetric = _OfflineMetric(label: 'Main', value: mainBalance);
+    final Widget offlineMetric = _OfflineMetric(
+      label: 'Offline',
+      value: offlineBalance,
+    );
+
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        if (constraints.maxWidth < 560) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              mainMetric,
+              const SizedBox(height: 12),
+              const Divider(height: 1),
+              const SizedBox(height: 12),
+              offlineMetric,
+            ],
+          );
+        }
+
+        return Row(
+          children: <Widget>[
+            Expanded(child: mainMetric),
+            const _OfflineMetricDivider(),
+            Expanded(child: offlineMetric),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _OfflineMetric extends StatelessWidget {
+  const _OfflineMetric({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: AppColors.slate,
+            letterSpacing: 0.3,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(value, style: Theme.of(context).textTheme.titleMedium),
+      ],
+    );
+  }
+}
+
+class _OfflineMetricDivider extends StatelessWidget {
+  const _OfflineMetricDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 40,
+      margin: const EdgeInsets.symmetric(horizontal: 18),
+      color: AppColors.line.withValues(alpha: 0.7),
+    );
+  }
+}
+
+class _OfflineActionComposer extends StatelessWidget {
+  const _OfflineActionComposer({
+    required this.chain,
+    required this.mainBalance,
+    required this.controller,
+    required this.onPresetSelected,
+  });
+
+  final ChainKind chain;
+  final String mainBalance;
+  final TextEditingController controller;
+  final ValueChanged<String> onPresetSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<String> presets = chain == ChainKind.solana
+        ? const <String>['0.050', '0.100', '0.250']
+        : const <String>['0.005', '0.010', '0.025'];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Text(
+              'Top up amount',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const Spacer(),
+            Text(
+              mainBalance,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _TopUpAmountField(controller: controller, chain: chain),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: presets
+              .map(
+                (String amount) => _OfflineAmountPreset(
+                  label: amount,
+                  onTap: () => onPresetSelected(amount),
+                ),
+              )
+              .toList(growable: false),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfflineBottomActions extends StatelessWidget {
+  const _OfflineBottomActions({
+    required this.working,
+    required this.statusMessage,
+    required this.readyForOffline,
+    required this.onTopUp,
+    required this.onRefreshReadiness,
+  });
+
+  final bool working;
+  final String? statusMessage;
+  final bool readyForOffline;
+  final VoidCallback onTopUp;
+  final VoidCallback onRefreshReadiness;
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget topUpButton = ElevatedButton(
+      onPressed: working ? null : onTopUp,
+      child: working
+          ? const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                ),
+                SizedBox(width: 10),
+                Text('Moving funds...'),
+              ],
+            )
+          : const Text('Top up offline wallet'),
+    );
+    final Widget refreshButton = OutlinedButton(
+      onPressed: working ? null : onRefreshReadiness,
+      child: Text(readyForOffline ? 'Refresh again' : 'Refresh readiness'),
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        if (working && statusMessage != null) ...<Widget>[
+          Row(
+            children: <Widget>[
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2.2),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  statusMessage!,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+        LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            if (constraints.maxWidth < 460) {
+              return Column(
+                children: <Widget>[
+                  topUpButton,
+                  const SizedBox(height: 10),
+                  refreshButton,
+                ],
+              );
+            }
+
+            return Row(
+              children: <Widget>[
+                Expanded(child: topUpButton),
+                const SizedBox(width: 10),
+                Expanded(child: refreshButton),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _OfflineFundingCard extends StatelessWidget {
+  const _OfflineFundingCard({
+    required this.chain,
+    required this.mainBalance,
+    required this.controller,
+    required this.working,
+    required this.statusMessage,
+    required this.readyForOffline,
+    required this.onPresetSelected,
+    required this.onTopUp,
+    required this.onRefreshReadiness,
+  });
+
+  final ChainKind chain;
+  final String mainBalance;
+  final TextEditingController controller;
+  final bool working;
+  final String? statusMessage;
+  final bool readyForOffline;
+  final ValueChanged<String> onPresetSelected;
+  final VoidCallback onTopUp;
+  final VoidCallback onRefreshReadiness;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<String> presets = chain == ChainKind.solana
+        ? const <String>['0.050', '0.100', '0.250']
+        : const <String>['0.005', '0.010', '0.025'];
+
+    return SectionCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'Move ${chain.shortLabel} in',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Fund the signer from the main wallet before it leaves the network.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: AppColors.canvasTint.withValues(alpha: 0.82),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(
+                  Icons.south_east_rounded,
+                  color: AppColors.ink,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.canvasTint.withValues(alpha: 0.8),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              children: <Widget>[
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.78),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(
+                    Icons.account_balance_wallet_outlined,
+                    color: AppColors.ink,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        'Main wallet balance',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.slate,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        mainBalance,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          _TopUpAmountField(controller: controller, chain: chain),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: presets
+                .map(
+                  (String amount) => _OfflineAmountPreset(
+                    label: amount,
+                    onTap: () => onPresetSelected(amount),
+                  ),
+                )
+                .toList(growable: false),
+          ),
+          if (working && statusMessage != null) ...<Widget>[
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.amberTint,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Row(
+                children: <Widget>[
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2.2),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      statusMessage!,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: working ? null : onTopUp,
+            child: working
+                ? const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      ),
+                      SizedBox(width: 10),
+                      Text('Moving funds...'),
+                    ],
+                  )
+                : const Text('Top up offline wallet'),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton(
+            onPressed: working ? null : onRefreshReadiness,
+            child: Text(
+              readyForOffline ? 'Refresh again' : 'Refresh readiness',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OfflineAmountPreset extends StatelessWidget {
+  const _OfflineAmountPreset({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.52),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: AppColors.line.withValues(alpha: 0.5)),
+          ),
+          child: Text(
+            label,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: AppColors.ink),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TopUpAmountField extends StatelessWidget {
+  const _TopUpAmountField({required this.controller, required this.chain});
+
+  final TextEditingController controller;
+  final ChainKind chain;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: <TextInputFormatter>[
+        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+      ],
+      decoration: InputDecoration(
+        labelText: 'Top up amount in ${chain.shortLabel}',
+        hintText: chain == ChainKind.solana ? '0.100' : '0.010',
+        suffixIcon: IconButton(
+          tooltip: 'Clear amount',
+          onPressed: controller.clear,
+          icon: const Icon(Icons.close_rounded),
+        ),
+      ),
+    );
+  }
+}
+
+class _OfflineRunbookCard extends StatelessWidget {
+  const _OfflineRunbookCard({
+    required this.readyForOffline,
+    required this.readinessAge,
+    required this.mainAddress,
+    required this.offlineAddress,
+    required this.hasOfflineFunds,
+  });
+
+  final bool readyForOffline;
+  final String readinessAge;
+  final String mainAddress;
+  final String offlineAddress;
+  final bool hasOfflineFunds;
+
+  @override
+  Widget build(BuildContext context) {
+    final String statusTitle = readyForOffline
+        ? 'Ready for the next handoff'
+        : 'Refresh before the next handoff';
+    final String statusCaption = readyForOffline
+        ? 'The signer has a fresh readiness snapshot. Keep it offline until you need to send.'
+        : 'Update readiness right before the offline signer is handed off so the next transfer starts clean.';
+
     return SectionCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Row(
             children: <Widget>[
-              Text(
-                'Main to offline',
-                style: Theme.of(context).textTheme.titleLarge,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'Handoff checklist',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Keep funding and readiness separate so the signer only goes online when needed.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
               ),
-              const Spacer(),
+              const SizedBox(width: 12),
               _MiniCue(
                 icon: readyForOffline
                     ? Icons.check_circle_outline_rounded
@@ -4927,129 +5967,130 @@ class _OfflineWalletScene extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 18),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: _WalletBalanceNode(
-                  title: 'Main',
-                  value: mainBalance,
-                  caption: mainAddress,
-                  icon: Icons.account_balance_wallet_rounded,
+          const SizedBox(height: 16),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: readyForOffline
+                  ? AppColors.emeraldTint.withValues(alpha: 0.88)
+                  : AppColors.amberTint.withValues(alpha: 0.88),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Icon(
+                  readyForOffline
+                      ? Icons.lock_clock_rounded
+                      : Icons.warning_amber_rounded,
+                  color: readyForOffline ? AppColors.emerald : AppColors.amber,
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Icon(
-                  Icons.arrow_forward_rounded,
-                  color: AppColors.emerald,
-                  size: 26,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        statusTitle,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        statusCaption,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              Expanded(
-                child: _WalletBalanceNode(
-                  title: 'Offline',
-                  value: offlineBalance,
-                  caption: offlineAddress,
-                  icon: Icons.lock_clock_rounded,
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const SizedBox(height: 18),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: <Widget>[
-              _ValueCue(
-                icon: Icons.arrow_outward_rounded,
-                label: 'Spendable',
-                value: spendableBalance,
-              ),
-              _ValueCue(
-                icon: Icons.bolt_rounded,
-                label: 'Age',
-                value: readinessAge,
-              ),
-            ],
+          const SizedBox(height: 16),
+          _OfflineChecklistTile(
+            icon: hasOfflineFunds
+                ? Icons.check_circle_rounded
+                : Icons.radio_button_unchecked_rounded,
+            title: 'Signer funded',
+            caption:
+                'Top up from the main wallet so the offline signer can cover the amount and network fees.',
+            accent: hasOfflineFunds ? AppColors.emerald : AppColors.slate,
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _WalletBalanceNode extends StatelessWidget {
-  const _WalletBalanceNode({
-    required this.title,
-    required this.value,
-    required this.caption,
-    required this.icon,
-  });
-
-  final String title;
-  final String value;
-  final String caption;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.canvasTint.withValues(alpha: 0.9),
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Icon(icon, color: AppColors.ink, size: 22),
           const SizedBox(height: 12),
-          Text(
-            title,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
+          _OfflineChecklistTile(
+            icon: readyForOffline
+                ? Icons.check_circle_rounded
+                : Icons.update_rounded,
+            title: 'Readiness snapshot',
+            caption: readyForOffline
+                ? 'Fresh blockhash captured. Current age: $readinessAge.'
+                : 'Current age: $readinessAge. Refresh right before you hand off the signer.',
+            accent: readyForOffline ? AppColors.emerald : AppColors.amber,
           ),
-          const SizedBox(height: 4),
-          Text(value, style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 4),
-          Text(caption, style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 12),
+          _OfflineChecklistTile(
+            icon: Icons.send_rounded,
+            title: 'Next step',
+            caption:
+                'After the refresh, keep the signer offline and use it for the next local send.',
+            accent: AppColors.ink,
+          ),
+          const SizedBox(height: 18),
+          Text('Wallets', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          DetailRow(label: 'Main wallet', value: mainAddress),
+          DetailRow(label: 'Offline signer', value: offlineAddress),
+          DetailRow(label: 'Readiness age', value: readinessAge),
         ],
       ),
     );
   }
 }
 
-class _ValueCue extends StatelessWidget {
-  const _ValueCue({
+class _OfflineChecklistTile extends StatelessWidget {
+  const _OfflineChecklistTile({
     required this.icon,
-    required this.label,
-    required this.value,
+    required this.title,
+    required this.caption,
+    required this.accent,
   });
 
   final IconData icon;
-  final String label;
-  final String value;
+  final String title;
+  final String caption;
+  final Color accent;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.62),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Icon(icon, size: 16, color: AppColors.slate),
-          const SizedBox(width: 8),
-          Text(
-            '$label $value',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: AppColors.ink),
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: accent, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(title, style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 4),
+                Text(caption, style: Theme.of(context).textTheme.bodyMedium),
+              ],
+            ),
           ),
         ],
       ),
@@ -6922,6 +7963,65 @@ void _navigatePrimaryTab(BuildContext context, BitsendPrimaryTab tab) {
 
 void _showSnack(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+}
+
+void _showEventToast(
+  BuildContext context, {
+  required String message,
+  required IconData icon,
+  bool prominent = false,
+}) {
+  if (prominent) {
+    HapticFeedback.heavyImpact();
+  } else {
+    HapticFeedback.mediumImpact();
+  }
+  unawaited(SystemSound.play(SystemSoundType.alert));
+  final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+  messenger.hideCurrentSnackBar();
+  messenger.showSnackBar(
+    SnackBar(
+      behavior: SnackBarBehavior.floating,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 108),
+      duration: const Duration(seconds: 2),
+      content: Row(
+        children: <Widget>[
+          Icon(icon, color: Colors.white),
+          const SizedBox(width: 12),
+          Expanded(child: Text(message)),
+        ],
+      ),
+    ),
+  );
+}
+
+void _showReceivedTransferToast(
+  BuildContext context,
+  PendingTransfer? transfer,
+) {
+  final String message = transfer == null
+      ? 'Transfer received.'
+      : '${Formatters.asset(transfer.amountSol, transfer.chain)} received over ${transfer.transport.shortLabel}.';
+  _showEventToast(
+    context,
+    message: message,
+    icon: Icons.call_received_rounded,
+    prominent: true,
+  );
+}
+
+IconData _iconForReceiveMessage(String message) {
+  final String normalized = message.toLowerCase();
+  if (normalized.contains('bluetooth')) {
+    return Icons.bluetooth_rounded;
+  }
+  if (normalized.contains('hotspot')) {
+    return Icons.wifi_tethering_rounded;
+  }
+  if (normalized.contains('received')) {
+    return Icons.call_received_rounded;
+  }
+  return Icons.notifications_active_rounded;
 }
 
 String _messageFor(Object error) {

@@ -178,7 +178,63 @@ void main() {
 
     expect(find.text('Signed handoff stored'), findsOneWidget);
     expect(find.text('Open timeline'), findsOneWidget);
+    expect(find.text('Save to Fileverse'), findsOneWidget);
     expect(find.text(inbound.transferId), findsOneWidget);
+  });
+
+  testWidgets('send success screen shows Fileverse receipt action', (
+    WidgetTester tester,
+  ) async {
+    final PendingTransfer outbound = _transfer(
+      transferId: 'outgoing-live',
+      direction: TransferDirection.outbound,
+      status: TransferStatus.sentOffline,
+      senderAddress: _wallet.address,
+      receiverAddress: 'Receiver11111111111111111111111111111111',
+      amountLamports: 500000000,
+    );
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      lastSentTransferValue: outbound,
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const SendSuccessScreen(),
+    );
+
+    expect(find.text('Save image'), findsOneWidget);
+    expect(find.text('Save to Fileverse'), findsOneWidget);
+    expect(find.text('Open pending'), findsOneWidget);
+  });
+
+  testWidgets('transfer detail shows Fileverse link when present', (
+    WidgetTester tester,
+  ) async {
+    final PendingTransfer inbound = _transfer(
+      transferId: 'with-fileverse',
+      direction: TransferDirection.inbound,
+      status: TransferStatus.broadcastSubmitted,
+      senderAddress: 'Sender1111111111111111111111111111111111',
+      receiverAddress: _wallet.address,
+      amountLamports: 250000000,
+    ).copyWith(
+      fileverseReceiptId: 'fv-123',
+      fileverseReceiptUrl: 'https://fileverse.example/receipt/123',
+      fileverseSavedAt: DateTime(2026, 3, 14, 13, 0),
+    );
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      transferMap: <String, PendingTransfer>{inbound.transferId: inbound},
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: TransferDetailScreen(transferId: inbound.transferId),
+    );
+
+    expect(find.text('Fileverse'), findsOneWidget);
+    expect(find.text('Copy Fileverse link'), findsOneWidget);
   });
 
   testWidgets('receive screen hides hotspot QR until listener is live', (
@@ -536,7 +592,10 @@ class _TestBitsendAppState extends BitsendAppState {
     this.bitgoBackendModeValue = BitGoBackendMode.live,
     this.hotspotListenerRunningValue = false,
     this.bleListenerRunningValue = false,
+    this.lastSentTransferValue,
     this.lastReceivedTransferIdValue,
+    this.announcementMessageValue,
+    this.announcementSerialValue = 0,
   }) : super(clock: () => DateTime(2026, 3, 13, 12));
 
   final String bootRouteValue;
@@ -564,7 +623,10 @@ class _TestBitsendAppState extends BitsendAppState {
   final BitGoBackendMode bitgoBackendModeValue;
   final bool hotspotListenerRunningValue;
   final bool bleListenerRunningValue;
+  final PendingTransfer? lastSentTransferValue;
   final String? lastReceivedTransferIdValue;
+  final String? announcementMessageValue;
+  final int announcementSerialValue;
 
   @override
   Future<void> initialize() async {}
@@ -652,6 +714,15 @@ class _TestBitsendAppState extends BitsendAppState {
 
   @override
   String? get lastReceivedTransferId => lastReceivedTransferIdValue;
+
+  @override
+  PendingTransfer? get lastSentTransfer => lastSentTransferValue;
+
+  @override
+  String? get announcementMessage => announcementMessageValue;
+
+  @override
+  int get announcementSerial => announcementSerialValue;
 
   @override
   Future<void> startReceiver() async {}

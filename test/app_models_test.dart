@@ -132,6 +132,29 @@ void main() {
       expect(transfer.reservesOfflineFunds, isFalse);
       expect(transfer.canBroadcast, isFalse);
     });
+
+    test('round-trips Fileverse metadata through the DB map', () {
+      final DateTime savedAt = DateTime(2026, 3, 14, 13, 45);
+      final PendingTransfer original = _transfer(
+        direction: TransferDirection.inbound,
+        status: TransferStatus.receivedPendingBroadcast,
+      ).copyWith(
+        fileverseReceiptId: 'fv-receipt-1',
+        fileverseReceiptUrl: 'https://fileverse.example/receipt/1',
+        fileverseSavedAt: savedAt,
+      );
+
+      final PendingTransfer parsed = PendingTransfer.fromDbMap(
+        original.toDbMap(),
+      );
+
+      expect(parsed.fileverseReceiptId, 'fv-receipt-1');
+      expect(
+        parsed.fileverseReceiptUrl,
+        'https://fileverse.example/receipt/1',
+      );
+      expect(parsed.fileverseSavedAt, savedAt);
+    });
   });
 }
 

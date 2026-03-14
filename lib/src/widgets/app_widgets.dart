@@ -43,6 +43,8 @@ class BitsendPageScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     final bool hasPrimaryNav =
         primaryTab != null && onPrimaryTabSelected != null;
+    final double keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    final bool keyboardVisible = keyboardInset > 0;
     final Widget? effectiveHeader = !showHeader
         ? null
         : header ?? _PageHeader(title: title, subtitle: subtitle);
@@ -51,7 +53,9 @@ class BitsendPageScaffold extends StatelessWidget {
     final bool hasChrome = showBack || showBrandInChrome || hasActions;
     final bool useFixedLayout = !scrollable && !hasPrimaryNav;
     final bool hasBottomContent = bottom != null;
-    final double scrollBottomPadding = hasPrimaryNav
+    final bool showFloatingBottom = hasBottomContent && !keyboardVisible;
+    final bool showPrimaryNavBar = hasPrimaryNav && !keyboardVisible;
+    final double baseScrollBottomPadding = hasPrimaryNav
         ? hasBottomContent
               ? 224
               : 138
@@ -60,6 +64,9 @@ class BitsendPageScaffold extends StatelessWidget {
         : hasBottomContent
         ? 148
         : 28;
+    final double scrollBottomPadding = keyboardVisible
+        ? 40 + keyboardInset
+        : baseScrollBottomPadding;
 
     return Scaffold(
       extendBody: true,
@@ -157,15 +164,17 @@ class BitsendPageScaffold extends StatelessWidget {
                                         child: Column(
                                           mainAxisSize: MainAxisSize.min,
                                           children: <Widget>[
-                                            if (hasBottomContent)
+                                            if (showFloatingBottom)
                                               _BottomSurface(child: bottom!),
-                                            if (hasBottomContent)
+                                            if (showFloatingBottom &&
+                                                showPrimaryNavBar)
                                               const SizedBox(height: 10),
-                                            _PrimaryBottomNav(
-                                              currentTab: primaryTab!,
-                                              onSelected:
-                                                  onPrimaryTabSelected!,
-                                            ),
+                                            if (showPrimaryNavBar)
+                                              _PrimaryBottomNav(
+                                                currentTab: primaryTab!,
+                                                onSelected:
+                                                    onPrimaryTabSelected!,
+                                              ),
                                           ],
                                         ),
                                       ),
@@ -206,7 +215,7 @@ class BitsendPageScaffold extends StatelessWidget {
                                       ),
                                     ),
                                   ),
-                                  if (hasBottomContent)
+                                  if (showFloatingBottom)
                                     Align(
                                       alignment: Alignment.bottomCenter,
                                       child: Padding(
@@ -256,7 +265,7 @@ class BitsendPageScaffold extends StatelessWidget {
                                       ],
                                     ),
                                   ),
-                                  if (hasBottomContent)
+                                  if (showFloatingBottom)
                                     Align(
                                       alignment: Alignment.bottomCenter,
                                       child: Padding(
@@ -380,12 +389,19 @@ class _PrimaryBottomNav extends StatelessWidget {
                   ),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 7,
+                  ),
                   child: Row(
                     children: items
                         .map(
                           (
-                            ({BitsendPrimaryTab tab, IconData icon, String label})
+                            ({
+                              BitsendPrimaryTab tab,
+                              IconData icon,
+                              String label,
+                            })
                             item,
                           ) => Expanded(
                             child: _PrimaryBottomNavItem(

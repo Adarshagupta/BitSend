@@ -294,7 +294,7 @@ class CachedBlockhash {
 
 class SendDraft {
   const SendDraft({
-    this.chain = ChainKind.solana,
+    this.chain = ChainKind.ethereum,
     this.network = ChainNetwork.testnet,
     this.walletEngine = WalletEngine.local,
     this.transport = TransportKind.hotspot,
@@ -628,6 +628,46 @@ class BitGoTransferSnapshot {
   }
 }
 
+class FileverseDemoSession {
+  const FileverseDemoSession({required this.sessionToken});
+
+  final String sessionToken;
+
+  factory FileverseDemoSession.fromJson(Map<String, dynamic> json) =>
+      FileverseDemoSession(
+        sessionToken: json['sessionToken'] as String,
+      );
+}
+
+class FileverseReceiptSnapshot {
+  const FileverseReceiptSnapshot({
+    required this.receiptId,
+    required this.receiptUrl,
+    required this.savedAt,
+  });
+
+  final String receiptId;
+  final String receiptUrl;
+  final DateTime savedAt;
+
+  factory FileverseReceiptSnapshot.fromJson(Map<String, dynamic> json) =>
+      FileverseReceiptSnapshot(
+        receiptId:
+            (json['receiptId'] as String?) ??
+            (json['id'] as String?) ??
+            (json['documentId'] as String?) ??
+            '',
+        receiptUrl:
+            (json['receiptUrl'] as String?) ??
+            (json['url'] as String?) ??
+            (json['shareUrl'] as String?) ??
+            '',
+        savedAt: (json['savedAt'] as String?) == null
+            ? DateTime.now()
+            : DateTime.parse(json['savedAt'] as String),
+      );
+}
+
 class ReceiverInvitePayload {
   const ReceiverInvitePayload({
     required this.chain,
@@ -874,6 +914,9 @@ class PendingTransfer {
     this.bitgoWalletId,
     this.bitgoTransferId,
     this.backendStatus,
+    this.fileverseReceiptId,
+    this.fileverseReceiptUrl,
+    this.fileverseSavedAt,
   });
 
   final String transferId;
@@ -897,6 +940,9 @@ class PendingTransfer {
   final String? bitgoWalletId;
   final String? bitgoTransferId;
   final String? backendStatus;
+  final String? fileverseReceiptId;
+  final String? fileverseReceiptUrl;
+  final DateTime? fileverseSavedAt;
 
   bool get isInbound => direction == TransferDirection.inbound;
   bool get isBitGo => walletEngine == WalletEngine.bitgo;
@@ -939,6 +985,9 @@ class PendingTransfer {
     String? bitgoWalletId,
     String? bitgoTransferId,
     String? backendStatus,
+    String? fileverseReceiptId,
+    String? fileverseReceiptUrl,
+    DateTime? fileverseSavedAt,
   }) {
     return PendingTransfer(
       transferId: transferId,
@@ -962,6 +1011,9 @@ class PendingTransfer {
       bitgoWalletId: bitgoWalletId ?? this.bitgoWalletId,
       bitgoTransferId: bitgoTransferId ?? this.bitgoTransferId,
       backendStatus: backendStatus ?? this.backendStatus,
+      fileverseReceiptId: fileverseReceiptId ?? this.fileverseReceiptId,
+      fileverseReceiptUrl: fileverseReceiptUrl ?? this.fileverseReceiptUrl,
+      fileverseSavedAt: fileverseSavedAt ?? this.fileverseSavedAt,
     );
   }
 
@@ -987,6 +1039,9 @@ class PendingTransfer {
     'bitgo_wallet_id': bitgoWalletId,
     'bitgo_transfer_id': bitgoTransferId,
     'backend_status': backendStatus,
+    'fileverse_receipt_id': fileverseReceiptId,
+    'fileverse_receipt_url': fileverseReceiptUrl,
+    'fileverse_saved_at_ms': fileverseSavedAt?.millisecondsSinceEpoch,
   };
 
   factory PendingTransfer.fromDbMap(Map<String, Object?> map) {
@@ -1033,6 +1088,13 @@ class PendingTransfer {
       bitgoWalletId: map['bitgo_wallet_id'] as String?,
       bitgoTransferId: map['bitgo_transfer_id'] as String?,
       backendStatus: map['backend_status'] as String?,
+      fileverseReceiptId: map['fileverse_receipt_id'] as String?,
+      fileverseReceiptUrl: map['fileverse_receipt_url'] as String?,
+      fileverseSavedAt: map['fileverse_saved_at_ms'] == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(
+              map['fileverse_saved_at_ms']! as int,
+            ),
     );
   }
 }

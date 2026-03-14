@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -14,6 +16,7 @@ import '../models/app_models.dart';
 import '../services/bitgo_client_service.dart';
 import '../services/ble_transport_service.dart';
 import '../services/ethereum_service.dart';
+import '../services/fileverse_client_service.dart';
 import '../services/hotspot_transport_service.dart';
 import '../services/local_store.dart';
 import '../services/solana_service.dart';
@@ -48,6 +51,7 @@ class BitsendAppState extends ChangeNotifier {
     SolanaService? solanaService,
     EthereumService? ethereumService,
     BitGoClientService? bitGoClientService,
+    FileverseClientService? fileverseClientService,
     Uuid? uuid,
     DateTime Function()? clock,
   }) : _store = store ?? LocalStore(),
@@ -65,6 +69,9 @@ class BitsendAppState extends ChangeNotifier {
        _bitGoClientService =
            bitGoClientService ??
            BitGoClientService(endpoint: defaultBitGoBackendEndpoint),
+       _fileverseClientService =
+           fileverseClientService ??
+           FileverseClientService(endpoint: defaultBitGoBackendEndpoint),
        _uuid = uuid ?? const Uuid(),
        _clock = clock ?? DateTime.now;
 
@@ -77,6 +84,7 @@ class BitsendAppState extends ChangeNotifier {
   final SolanaService _solanaService;
   final EthereumService _ethereumService;
   final BitGoClientService _bitGoClientService;
+  final FileverseClientService _fileverseClientService;
   final Uuid _uuid;
   final DateTime Function() _clock;
 
@@ -91,8 +99,9 @@ class BitsendAppState extends ChangeNotifier {
   bool _working = false;
   String? _statusMessage;
   String? _announcementMessage;
+  int _announcementSerial = 0;
   String? _localIp;
-  ChainKind _activeChain = ChainKind.solana;
+  ChainKind _activeChain = ChainKind.ethereum;
   ChainNetwork _activeNetwork = ChainNetwork.testnet;
   WalletEngine _activeWalletEngine = WalletEngine.local;
   WalletProfile? _wallet;
@@ -117,7 +126,7 @@ class BitsendAppState extends ChangeNotifier {
     'ethereum:testnet': defaultEthereumTestnetRpcEndpoint,
     'ethereum:mainnet': defaultEthereumMainnetRpcEndpoint,
   };
-  String _rpcEndpoint = defaultSolanaTestnetRpcEndpoint;
+  String _rpcEndpoint = defaultEthereumTestnetRpcEndpoint;
   String _bitgoEndpoint = defaultBitGoBackendEndpoint;
   SendDraft _sendDraft = const SendDraft();
   TransportKind _receiveTransport = TransportKind.hotspot;
@@ -172,6 +181,7 @@ class BitsendAppState extends ChangeNotifier {
       ? null
       : 'http://$_localIp:${HotspotTransportService.port}';
   String? get announcementMessage => _announcementMessage;
+  int get announcementSerial => _announcementSerial;
   SendDraft get sendDraft => _sendDraft;
   TransportKind get receiveTransport => _receiveTransport;
   List<ReceiverDiscoveryItem> get bleReceivers =>
@@ -303,6 +313,7 @@ class BitsendAppState extends ChangeNotifier {
         await _store.saveSetting('bitgo_endpoint', defaultBitGoBackendEndpoint);
       }
       _bitGoClientService.endpoint = _bitgoEndpoint;
+      _fileverseClientService.endpoint = _bitgoEndpoint;
       await _refreshBitGoBackendHealth(allowFailure: true);
       for (final ChainKind chain in ChainKind.values) {
         for (final ChainNetwork network in ChainNetwork.values) {
@@ -321,7 +332,7 @@ class BitsendAppState extends ChangeNotifier {
         'active_network',
       );
       _activeChain = savedChainName == null
-          ? ChainKind.solana
+          ? ChainKind.ethereum
           : ChainKind.values.byName(savedChainName);
       _activeNetwork = savedNetworkName == null
           ? ChainNetwork.testnet
@@ -335,30 +346,17 @@ class BitsendAppState extends ChangeNotifier {
         walletEngine: _activeWalletEngine,
       );
       await _loadCachedReadinessForActiveScope();
-
       _pendingTransfers = await _store.loadTransfers();
       await _refreshLocalPermissions();
-      await _refreshConnectivityState();
-      if (_wallet != null) {
-        await refreshWalletData();
-        if (_hasInternet) {
-          await broadcastPendingTransfers();
-          await refreshSubmittedTransfers();
-        }
-      }
 
       _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
         _,
       ) async {
-        await _refreshConnectivityState();
-        if (_hasInternet) {
-          await refreshWalletData();
-          await broadcastPendingTransfers();
-          await refreshSubmittedTransfers();
-        }
+        await _runStartupNetworkSync();
       });
 
       _initialized = true;
+      unawaited(_runStartupNetworkSync());
     } finally {
       _initializing = false;
       notifyListeners();
@@ -490,6 +488,7 @@ class BitsendAppState extends ChangeNotifier {
       _ethereumService.network = _activeNetwork;
     }
     _bitGoClientService.endpoint = _bitgoEndpoint;
+    _fileverseClientService.endpoint = _bitgoEndpoint;
   }
 
   Future<void> _loadWalletEngineForActiveScope() async {
@@ -741,6 +740,8 @@ class BitsendAppState extends ChangeNotifier {
     _bitgoEndpoint = endpoint;
     _bitGoClientService.endpoint = endpoint;
     _bitGoClientService.clearSession();
+    _fileverseClientService.endpoint = endpoint;
+    _fileverseClientService.clearSession();
     _bitgoBackendMode = BitGoBackendMode.unknown;
     await _store.saveSetting('bitgo_endpoint', endpoint);
     if (_activeWalletEngine == WalletEngine.bitgo) {
@@ -832,6 +833,55 @@ class BitsendAppState extends ChangeNotifier {
     } else if (_wallet != null) {
       notifyListeners();
     }
+  }
+
+  Future<PendingTransfer> saveReceiptToFileverse({
+    required String transferId,
+    required Uint8List receiptPngBytes,
+  }) async {
+    final PendingTransfer? transfer = transferById(transferId);
+    if (transfer == null) {
+      throw const FormatException('Transfer not found.');
+    }
+    if (transfer.fileverseReceiptUrl != null &&
+        transfer.fileverseReceiptUrl!.isNotEmpty &&
+        _isCurrentFileverseReceiptUrl(transfer.fileverseReceiptUrl!)) {
+      return transfer;
+    }
+    await _refreshConnectivityState();
+    if (!_hasInternet) {
+      throw const SocketException(
+        'Internet is required to publish a receipt to Fileverse.',
+      );
+    }
+    if (!_fileverseClientService.hasSession) {
+      await _fileverseClientService.createDemoSession();
+    }
+    final FileverseReceiptSnapshot snapshot = await _fileverseClientService
+        .publishReceipt(
+          transfer: transfer,
+          receiptPngBase64: base64Encode(receiptPngBytes),
+        );
+    final PendingTransfer updated = transfer.copyWith(
+      updatedAt: _clock(),
+      fileverseReceiptId: snapshot.receiptId,
+      fileverseReceiptUrl: snapshot.receiptUrl,
+      fileverseSavedAt: snapshot.savedAt,
+    );
+    await _persistTransfer(updated);
+    return updated;
+  }
+
+  bool _isCurrentFileverseReceiptUrl(String value) {
+    final Uri? current = Uri.tryParse(value.trim());
+    final Uri? endpoint = Uri.tryParse(_bitgoEndpoint.trim());
+    if (current == null || endpoint == null) {
+      return false;
+    }
+    return current.scheme == endpoint.scheme &&
+        current.host == endpoint.host &&
+        current.port == endpoint.port &&
+        current.path.startsWith('/fileverse/receipts/');
   }
 
   Future<void> scanBleReceivers() async {
@@ -1099,7 +1149,7 @@ class BitsendAppState extends ChangeNotifier {
         _sendDraft.receiverPeripheralId.isNotEmpty) {
       _sendDraft = _sendDraft.copyWith(transport: TransportKind.ble);
     }
-    _announcementMessage = reason;
+    _announce(reason);
     _statusMessage = reason;
     await _store.saveSetting(
       _walletEngineKey(_activeScopeKey),
@@ -1153,7 +1203,10 @@ class BitsendAppState extends ChangeNotifier {
     await _refreshConnectivityState();
     if (_receiveTransport == TransportKind.hotspot) {
       await _bleTransportService.stop();
-      await _hotspotTransportService.start(onEnvelope: _handleIncomingEnvelope);
+      await _hotspotTransportService.start(
+        onEnvelope: _handleIncomingEnvelope,
+        onActivity: _handleReceiverTransportActivity,
+      );
     } else {
       await _hotspotTransportService.stop();
       await _bleTransportService.start(
@@ -1162,6 +1215,7 @@ class BitsendAppState extends ChangeNotifier {
         receiverNetwork: _activeNetwork,
         receiverDisplayAddress: _wallet!.displayAddress,
         receiverAddress: _wallet!.address,
+        onActivity: _handleReceiverTransportActivity,
       );
     }
     notifyListeners();
@@ -1519,12 +1573,12 @@ class BitsendAppState extends ChangeNotifier {
         defaultEthereumTestnetRpcEndpoint;
     _rpcEndpoints[_scopeKey(ChainKind.ethereum, ChainNetwork.mainnet)] =
         defaultEthereumMainnetRpcEndpoint;
-    _rpcEndpoint = defaultSolanaTestnetRpcEndpoint;
+    _rpcEndpoint = defaultEthereumTestnetRpcEndpoint;
     _solanaService.rpcEndpoint = defaultSolanaTestnetRpcEndpoint;
     _solanaService.network = ChainNetwork.testnet;
     _ethereumService.rpcEndpoint = defaultEthereumTestnetRpcEndpoint;
     _ethereumService.network = ChainNetwork.testnet;
-    _activeChain = ChainKind.solana;
+    _activeChain = ChainKind.ethereum;
     _activeNetwork = ChainNetwork.testnet;
     _activeWalletEngine = WalletEngine.local;
     _wallet = null;
@@ -1544,6 +1598,8 @@ class BitsendAppState extends ChangeNotifier {
     _bitgoEndpoint = defaultBitGoBackendEndpoint;
     _bitGoClientService.endpoint = defaultBitGoBackendEndpoint;
     _bitGoClientService.clearSession();
+    _fileverseClientService.endpoint = defaultBitGoBackendEndpoint;
+    _fileverseClientService.clearSession();
     _sendDraft = const SendDraft();
     _receiveTransport = TransportKind.hotspot;
     _pendingTransfers = <PendingTransfer>[];
@@ -1599,7 +1655,7 @@ class BitsendAppState extends ChangeNotifier {
     }
     if (await _store.findByTransferId(envelope.transferId) != null ||
         await _store.findBySignature(details.transactionSignature) != null) {
-      _announcementMessage = 'Already received';
+      _announce('Already received');
       notifyListeners();
       return const TransportReceiveResult(
         accepted: true,
@@ -1626,6 +1682,7 @@ class BitsendAppState extends ChangeNotifier {
     );
     await _persistTransfer(transfer);
     _lastReceivedTransferId = transfer.transferId;
+    notifyListeners();
     if (_hasInternet) {
       unawaited(_broadcastTransferInBackground(transfer));
       unawaited(_startRealtimeSettlementSync());
@@ -1634,6 +1691,16 @@ class BitsendAppState extends ChangeNotifier {
       accepted: true,
       message: 'Stored successfully.',
     );
+  }
+
+  void _handleReceiverTransportActivity(TransportActivityNotice notice) {
+    _announce(notice.message);
+    notifyListeners();
+  }
+
+  void _announce(String message) {
+    _announcementMessage = message;
+    _announcementSerial += 1;
   }
 
   Future<void> _broadcastTransfer(PendingTransfer transfer) async {
@@ -1714,6 +1781,25 @@ class BitsendAppState extends ChangeNotifier {
         return;
       }
       final String message = _cleanErrorMessage(error);
+      if (_isAlreadySubmittedBroadcastMessage(message)) {
+        final String? signature = transfer.transactionSignature;
+        await _persistTransfer(
+          transfer.copyWith(
+            status: TransferStatus.broadcastSubmitted,
+            updatedAt: _clock(),
+            transactionSignature: signature,
+            explorerUrl: signature == null
+                ? transfer.explorerUrl
+                : (transfer.chain == ChainKind.solana
+                          ? _solanaService.explorerUrlFor(signature)
+                          : _ethereumService.explorerUrlFor(signature))
+                      .toString(),
+            clearLastError: true,
+          ),
+        );
+        unawaited(_startRealtimeSettlementSync());
+        return;
+      }
       final TransferStatus status = _isExpiredBroadcastMessage(message)
           ? TransferStatus.expired
           : TransferStatus.broadcastFailed;
@@ -2030,6 +2116,19 @@ class BitsendAppState extends ChangeNotifier {
         normalized.contains('signature has expired');
   }
 
+  bool _isAlreadySubmittedBroadcastMessage(String message) {
+    final String normalized = message.toLowerCase();
+    return normalized.contains('already known') ||
+        normalized.contains('already imported') ||
+        normalized.contains('known transaction') ||
+        normalized.contains('already been processed') ||
+        normalized.contains('already processed') ||
+        normalized.contains('transaction already exists') ||
+        (normalized.contains('duplicate') &&
+            (normalized.contains('transaction') ||
+                normalized.contains('signature')));
+  }
+
   Future<void> _refreshBitGoWalletData() async {
     try {
       await _refreshConnectivityState();
@@ -2084,6 +2183,24 @@ class BitsendAppState extends ChangeNotifier {
       if (!allowFailure) {
         rethrow;
       }
+    }
+  }
+
+  Future<void> _runStartupNetworkSync() async {
+    try {
+      await _refreshConnectivityState();
+      if (_wallet == null || !_hasInternet) {
+        notifyListeners();
+        return;
+      }
+      if (_activeWalletEngine == WalletEngine.bitgo) {
+        await _refreshBitGoBackendHealth(allowFailure: true);
+      }
+      await refreshWalletData();
+      await broadcastPendingTransfers();
+      await refreshSubmittedTransfers();
+    } catch (_) {
+      notifyListeners();
     }
   }
 

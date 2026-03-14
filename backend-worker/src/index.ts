@@ -47,6 +47,51 @@ type SubmitTransferInput = {
   clientTransferId: string;
 };
 
+type FileverseReceiptInput = {
+  transferId: string;
+  chain: AppChain;
+  network: AppNetwork;
+  walletEngine: 'local' | 'bitgo';
+  direction: 'inbound' | 'outbound';
+  status: string;
+  amountBaseUnits: string;
+  amountLabel: string;
+  senderAddress: string;
+  receiverAddress: string;
+  transport: 'hotspot' | 'ble';
+  updatedAt: string;
+  createdAt: string;
+  transactionSignature?: string;
+  explorerUrl?: string;
+  receiptPngBase64: string;
+};
+
+type FileverseReceiptRecord = {
+  receiptId: string;
+  receiptUrl: string;
+  savedAt: string;
+  upstreamUrl?: string;
+};
+
+type StoredFileverseReceiptRecord = FileverseReceiptRecord & {
+  transferId: string;
+  chain: AppChain;
+  network: AppNetwork;
+  walletEngine: 'local' | 'bitgo';
+  direction: 'inbound' | 'outbound';
+  status: string;
+  amountBaseUnits: string;
+  amountLabel: string;
+  senderAddress: string;
+  receiverAddress: string;
+  transport: 'hotspot' | 'ble';
+  updatedAt: string;
+  createdAt: string;
+  transactionSignature?: string;
+  explorerUrl?: string;
+  receiptPngBase64: string;
+};
+
 interface Env {
   BITGO_STATE: DurableObjectNamespace<BitGoState>;
   BITGO_ENV?: 'test' | 'prod';
@@ -60,6 +105,8 @@ interface Env {
   BITGO_SOL_TESTNET_ADDRESS?: string;
   BITGO_SOL_MAINNET_WALLET_ID?: string;
   BITGO_SOL_MAINNET_ADDRESS?: string;
+  FILEVERSE_API_KEY?: string;
+  FILEVERSE_RECEIPT_UPSTREAM?: string;
 }
 
 const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000;
@@ -102,16 +149,20 @@ export default {
         request.method === 'POST' &&
         url.pathname === '/v1/bitgo/session/demo'
       ) {
-        const sessionToken = crypto.randomUUID();
-        const now = new Date();
-        await state.createSession({
-          sessionToken,
-          createdAt: now.toISOString(),
-          expiresAt: new Date(now.getTime() + sessionLifetimeMs).toISOString(),
-        });
+        const sessionToken = await createSession(state);
         return jsonResponse({
           sessionToken,
           wallets: await listWallets(env, state),
+        });
+      }
+
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/v1/fileverse/session/demo'
+      ) {
+        const sessionToken = await createSession(state);
+        return jsonResponse({
+          sessionToken,
         });
       }
 
@@ -123,6 +174,30 @@ export default {
             401,
           );
         }
+      }
+
+      if (url.pathname.startsWith('/v1/fileverse/')) {
+        const authorized = await authorize(request, state);
+        if (!authorized) {
+          return jsonResponse(
+            { message: 'Missing or invalid Fileverse session token.' },
+            401,
+          );
+        }
+      }
+
+      if (
+        request.method === 'GET' &&
+        url.pathname.startsWith('/fileverse/receipts/')
+      ) {
+        const receiptId = decodeURIComponent(
+          url.pathname.substring('/fileverse/receipts/'.length),
+        );
+        const receipt = await state.loadFileverseReceipt(receiptId);
+        if (!receipt) {
+          return htmlResponse(renderNotFoundPage(), 404);
+        }
+        return htmlResponse(renderFileverseReceiptPage(receipt));
       }
 
       if (request.method === 'GET' && url.pathname === '/v1/bitgo/wallets') {
@@ -150,6 +225,21 @@ export default {
           return jsonResponse({ message: 'Transfer not found.' }, 404);
         }
         return jsonResponse(transfer);
+      }
+
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/v1/fileverse/receipts'
+      ) {
+        const body = await parseJsonBody(request);
+        const input = validateFileverseReceiptInput(body);
+        const receipt = await publishFileverseReceipt(
+          env,
+          state,
+          url.origin,
+          input,
+        );
+        return jsonResponse(receipt);
       }
 
       return jsonResponse({ message: 'Not found.' }, 404);
@@ -213,6 +303,35 @@ export class BitGoState extends DurableObject<Env> {
       (await this.ctx.storage.get<string>(walletBalanceKey(walletId))) ?? null
     );
   }
+
+  async saveFileverseReceipt(
+    receipt: StoredFileverseReceiptRecord,
+  ): Promise<void> {
+    await this.ctx.storage.put(fileverseReceiptKey(receipt.receiptId), receipt);
+  }
+
+  async loadFileverseReceipt(
+    receiptId: string,
+  ): Promise<StoredFileverseReceiptRecord | null> {
+    return (
+      (await this.ctx.storage.get<StoredFileverseReceiptRecord>(
+        fileverseReceiptKey(receiptId),
+      )) ?? null
+    );
+  }
+}
+
+async function createSession(
+  state: DurableObjectStub<BitGoState>,
+): Promise<string> {
+  const sessionToken = crypto.randomUUID();
+  const now = new Date();
+  await state.createSession({
+    sessionToken,
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + sessionLifetimeMs).toISOString(),
+  });
+  return sessionToken;
 }
 
 function getStateStub(env: Env): DurableObjectStub<BitGoState> {
@@ -266,6 +385,80 @@ async function submitTransfer(
   input: SubmitTransferInput,
 ): Promise<TransferRecord> {
   return submitMockTransfer(env, state, input);
+}
+
+async function publishFileverseReceipt(
+  env: Env,
+  state: DurableObjectStub<BitGoState>,
+  origin: string,
+  input: FileverseReceiptInput,
+): Promise<FileverseReceiptRecord> {
+  const apiKey = pickString(env.FILEVERSE_API_KEY);
+  const upstream = pickString(env.FILEVERSE_RECEIPT_UPSTREAM);
+  if (!apiKey || !upstream) {
+    throw new HttpError(
+      503,
+      'Fileverse receipt publishing is not configured on this Worker yet.',
+    );
+  }
+  const response = await fetch(upstream, {
+    method: 'POST',
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'x-api-key': apiKey,
+    },
+    body: JSON.stringify(input),
+  });
+  const rawBody = await response.text();
+  const payload = rawBody.trim().length === 0
+    ? {}
+    : tryParseJsonObject(rawBody);
+  if (!response.ok) {
+    throw new HttpError(
+      response.status,
+      pickString(
+        payload.message,
+        payload.error,
+        payload.reason,
+      ) ?? `Fileverse upstream failed (${response.status}).`,
+    );
+  }
+  const upstreamReceipt = normalizeFileverseReceiptRecord(
+    payload,
+    input.transferId,
+  );
+  const receipt: StoredFileverseReceiptRecord = {
+    ...upstreamReceipt,
+    receiptUrl: new URL(
+      `/fileverse/receipts/${encodeURIComponent(upstreamReceipt.receiptId)}`,
+      origin,
+    ).toString(),
+    transferId: input.transferId,
+    chain: input.chain,
+    network: input.network,
+    walletEngine: input.walletEngine,
+    direction: input.direction,
+    status: input.status,
+    amountBaseUnits: input.amountBaseUnits,
+    amountLabel: input.amountLabel,
+    senderAddress: input.senderAddress,
+    receiverAddress: input.receiverAddress,
+    transport: input.transport,
+    updatedAt: input.updatedAt,
+    createdAt: input.createdAt,
+    transactionSignature: input.transactionSignature,
+    explorerUrl: input.explorerUrl,
+    receiptPngBase64: input.receiptPngBase64,
+  };
+  await state.saveFileverseReceipt(receipt);
+  return {
+    receiptId: receipt.receiptId,
+    receiptUrl: receipt.receiptUrl,
+    savedAt: receipt.savedAt,
+    upstreamUrl: receipt.upstreamUrl,
+  };
 }
 
 async function submitMockTransfer(
@@ -491,6 +684,85 @@ function validateSubmitTransferInput(body: unknown): SubmitTransferInput {
   };
 }
 
+function validateFileverseReceiptInput(body: unknown): FileverseReceiptInput {
+  if (typeof body !== 'object' || body == null) {
+    throw new HttpError(400, 'Invalid Fileverse receipt payload.');
+  }
+  const input = body as Record<string, unknown>;
+  const chain = input.chain;
+  const network = input.network;
+  const walletEngine = input.walletEngine;
+  const direction = input.direction;
+  const transport = input.transport;
+  const transferId = sanitizeString(input.transferId);
+  const status = sanitizeString(input.status);
+  const amountBaseUnits = normalizeBaseUnits(input.amountBaseUnits);
+  const amountLabel = sanitizeString(input.amountLabel);
+  const senderAddress = sanitizeString(input.senderAddress);
+  const receiverAddress = sanitizeString(input.receiverAddress);
+  const updatedAt = sanitizeString(input.updatedAt);
+  const createdAt = sanitizeString(input.createdAt);
+  const transactionSignature = pickString(input.transactionSignature);
+  const explorerUrl = pickString(input.explorerUrl);
+  const receiptPngBase64 = sanitizeString(input.receiptPngBase64);
+
+  if (chain !== 'ethereum' && chain !== 'solana') {
+    throw new HttpError(400, 'Missing chain.');
+  }
+  if (network !== 'testnet' && network !== 'mainnet') {
+    throw new HttpError(400, 'Missing network.');
+  }
+  if (walletEngine !== 'local' && walletEngine !== 'bitgo') {
+    throw new HttpError(400, 'Missing walletEngine.');
+  }
+  if (direction !== 'inbound' && direction !== 'outbound') {
+    throw new HttpError(400, 'Missing direction.');
+  }
+  if (transport !== 'hotspot' && transport !== 'ble') {
+    throw new HttpError(400, 'Missing transport.');
+  }
+  if (!transferId) {
+    throw new HttpError(400, 'Missing transferId.');
+  }
+  if (!status) {
+    throw new HttpError(400, 'Missing status.');
+  }
+  if (parseBaseUnits(amountBaseUnits) <= 0n) {
+    throw new HttpError(400, 'amountBaseUnits must be greater than zero.');
+  }
+  if (!amountLabel) {
+    throw new HttpError(400, 'Missing amountLabel.');
+  }
+  if (!senderAddress || !receiverAddress) {
+    throw new HttpError(400, 'Missing sender or receiver address.');
+  }
+  if (!updatedAt || !createdAt) {
+    throw new HttpError(400, 'Missing receipt timestamps.');
+  }
+  if (!receiptPngBase64) {
+    throw new HttpError(400, 'Missing receipt image.');
+  }
+
+  return {
+    transferId,
+    chain,
+    network,
+    walletEngine,
+    direction,
+    status,
+    amountBaseUnits,
+    amountLabel,
+    senderAddress,
+    receiverAddress,
+    transport,
+    updatedAt,
+    createdAt,
+    transactionSignature: transactionSignature ?? undefined,
+    explorerUrl: explorerUrl ?? undefined,
+    receiptPngBase64,
+  };
+}
+
 async function parseJsonBody(request: Request): Promise<unknown> {
   try {
     return await request.json();
@@ -570,6 +842,50 @@ function sanitizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function tryParseJsonObject(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return typeof parsed === 'object' && parsed != null
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizeFileverseReceiptRecord(
+  payload: Record<string, unknown>,
+  fallbackTransferId: string,
+): FileverseReceiptRecord {
+  const data = typeof payload.data === 'object' && payload.data != null
+    ? payload.data as Record<string, unknown>
+    : payload;
+  const receiptId =
+    pickString(data.receiptId, data.id, data.documentId, fallbackTransferId) ??
+    fallbackTransferId;
+  const receiptUrl = pickString(
+    data.receiptUrl,
+    data.url,
+    data.shareUrl,
+    data.publicUrl,
+    data.documentUrl,
+  );
+  if (!receiptUrl) {
+    throw new HttpError(
+      502,
+      'Fileverse response did not include a receipt URL.',
+    );
+  }
+  return {
+    receiptId,
+    receiptUrl,
+    savedAt:
+      pickString(data.savedAt, data.createdAt, data.updatedAt) ??
+      new Date().toISOString(),
+    upstreamUrl: receiptUrl,
+  };
+}
+
 function sessionStorageKey(sessionToken: string): string {
   return `session:${sessionToken}`;
 }
@@ -582,6 +898,121 @@ function walletBalanceKey(walletId: string): string {
   return `wallet:${walletId}:balance`;
 }
 
+function fileverseReceiptKey(receiptId: string): string {
+  return `fileverse:${receiptId}`;
+}
+
 function scopeKey(chain: AppChain, network: AppNetwork): string {
   return `${chain}:${network}`;
+}
+
+function htmlResponse(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+function renderNotFoundPage(): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Receipt not found</title>
+    <style>
+      body { font-family: Arial, sans-serif; background: #f6f3ea; color: #1f1b16; margin: 0; padding: 32px; }
+      .card { max-width: 720px; margin: 0 auto; background: white; border-radius: 24px; padding: 28px; box-shadow: 0 12px 40px rgba(0,0,0,0.08); }
+      h1 { margin-top: 0; font-size: 28px; }
+      p { line-height: 1.5; color: #5b5347; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Receipt not found</h1>
+      <p>This Fileverse receipt link is missing or expired. Return to Bitsend and save the receipt again to generate a fresh public link.</p>
+    </div>
+  </body>
+</html>`;
+}
+
+function renderFileverseReceiptPage(
+  receipt: StoredFileverseReceiptRecord,
+): string {
+  const title = `${escapeHtml(receipt.amountLabel)} receipt`;
+  const explorerLink = receipt.explorerUrl
+    ? `<a class="action" href="${escapeHtml(receipt.explorerUrl)}" target="_blank" rel="noreferrer">Open explorer</a>`
+    : '';
+  const upstreamLink = receipt.upstreamUrl
+    ? `<a class="action secondary" href="${escapeHtml(receipt.upstreamUrl)}" target="_blank" rel="noreferrer">Open Fileverse source</a>`
+    : '';
+  const txLine = receipt.transactionSignature
+    ? `<div class="row"><span>Transaction</span><code>${escapeHtml(receipt.transactionSignature)}</code></div>`
+    : '';
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${title}</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; font-family: Arial, sans-serif; background: linear-gradient(180deg, #f4ead8 0%, #f8f5ee 100%); color: #1f1b16; }
+      .wrap { max-width: 920px; margin: 0 auto; padding: 32px 20px 48px; }
+      .card { background: rgba(255,255,255,0.94); border-radius: 28px; padding: 24px; box-shadow: 0 18px 50px rgba(0,0,0,0.10); }
+      .eyebrow { text-transform: uppercase; letter-spacing: 0.16em; font-size: 12px; color: #8e7d64; margin-bottom: 10px; }
+      h1 { margin: 0 0 8px; font-size: 32px; }
+      p { margin: 0; color: #5b5347; line-height: 1.5; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 24px; }
+      .tile { background: #faf7f1; border-radius: 18px; padding: 14px 16px; }
+      .tile span { display: block; font-size: 12px; color: #8e7d64; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+      .tile strong, .tile code { font-size: 14px; color: #1f1b16; word-break: break-word; }
+      .image { margin-top: 24px; background: #f7f2e8; border-radius: 24px; padding: 18px; text-align: center; }
+      img { max-width: 100%; height: auto; border-radius: 18px; box-shadow: 0 10px 26px rgba(0,0,0,0.08); }
+      .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+      .action { display: inline-block; padding: 11px 15px; border-radius: 999px; background: #1f1b16; color: white; text-decoration: none; }
+      .action.secondary { background: #e9e0cf; color: #1f1b16; }
+      .row { margin-top: 16px; padding-top: 16px; border-top: 1px solid #ece3d6; }
+      @media (max-width: 640px) { .wrap { padding: 20px 14px 32px; } h1 { font-size: 28px; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="eyebrow">Bitsend x Fileverse receipt</div>
+        <h1>${title}</h1>
+        <p>Saved ${escapeHtml(receipt.savedAt)} for ${escapeHtml(receipt.chain)} ${escapeHtml(receipt.network)}. This public link is hosted by the Bitsend Worker so it stays stable even if the upstream Fileverse response URL changes.</p>
+        <div class="grid">
+          <div class="tile"><span>Transfer ID</span><code>${escapeHtml(receipt.transferId)}</code></div>
+          <div class="tile"><span>Status</span><strong>${escapeHtml(receipt.status)}</strong></div>
+          <div class="tile"><span>Sender</span><code>${escapeHtml(receipt.senderAddress)}</code></div>
+          <div class="tile"><span>Receiver</span><code>${escapeHtml(receipt.receiverAddress)}</code></div>
+          <div class="tile"><span>Direction</span><strong>${escapeHtml(receipt.direction)}</strong></div>
+          <div class="tile"><span>Transport</span><strong>${escapeHtml(receipt.transport)}</strong></div>
+        </div>
+        ${txLine}
+        <div class="actions">
+          ${explorerLink}
+          ${upstreamLink}
+        </div>
+        <div class="image">
+          <img alt="Receipt image" src="data:image/png;base64,${receipt.receiptPngBase64}" />
+        </div>
+      </div>
+    </div>
+  </body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }

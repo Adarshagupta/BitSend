@@ -51,6 +51,7 @@ class BleTransportService {
   final Map<String, Uint8List> _acks = <String, Uint8List>{};
 
   EnvelopeHandler? _onEnvelope;
+  TransportActivityHandler? _onActivity;
   bool _advertising = false;
   bool _discovering = false;
 
@@ -99,6 +100,7 @@ class BleTransportService {
     required String receiverAddress,
     required ChainKind receiverChain,
     required ChainNetwork receiverNetwork,
+    TransportActivityHandler? onActivity,
   }) async {
     if (_advertising) {
       return;
@@ -108,6 +110,7 @@ class BleTransportService {
     _ensurePeripheralInitialized();
     await _ensureManagerReady(manager);
     _onEnvelope = onEnvelope;
+    _onActivity = onActivity;
     _sessions.clear();
     _acks.clear();
 
@@ -175,6 +178,7 @@ class BleTransportService {
       _advertising = false;
       _sessions.clear();
       _acks.clear();
+      _onActivity = null;
       return;
     }
     if (_advertising) {
@@ -184,6 +188,7 @@ class BleTransportService {
     _advertising = false;
     _sessions.clear();
     _acks.clear();
+    _onActivity = null;
   }
 
   Future<void> send({
@@ -597,6 +602,12 @@ class BleTransportService {
         if (value.length != 5) {
           throw const FormatException('Invalid BLE start frame.');
         }
+        _onActivity?.call(
+          const TransportActivityNotice(
+            transport: TransportKind.ble,
+            message: 'Bluetooth sender connected. Receiving handoff...',
+          ),
+        );
         _sessions[centralId] = _BleInboundSession(expectedLength: _decodeLength(value));
         _acks.remove(centralId);
       } else if (frameType == _frameChunk) {

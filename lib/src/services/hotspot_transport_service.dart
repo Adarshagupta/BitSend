@@ -16,7 +16,10 @@ class HotspotTransportService {
 
   bool get isListening => _server != null;
 
-  Future<void> start({required EnvelopeHandler onEnvelope}) async {
+  Future<void> start({
+    required EnvelopeHandler onEnvelope,
+    TransportActivityHandler? onActivity,
+  }) async {
     if (_server != null) {
       return;
     }
@@ -32,6 +35,12 @@ class HotspotTransportService {
         }
 
         try {
+          onActivity?.call(
+            const TransportActivityNotice(
+              transport: TransportKind.hotspot,
+              message: 'Hotspot sender connected. Receiving handoff...',
+            ),
+          );
           final String body = await utf8.decoder.bind(request).join();
           final Map<String, dynamic> json = jsonDecode(body) as Map<String, dynamic>;
           final OfflineEnvelope envelope = OfflineEnvelope.fromJson(json);
