@@ -17,6 +17,7 @@ class SolanaService {
   SolanaService({required String rpcEndpoint}) : _rpcEndpoint = rpcEndpoint;
 
   String _rpcEndpoint;
+  ChainNetwork network = ChainNetwork.testnet;
 
   String get rpcEndpoint => _rpcEndpoint;
 
@@ -58,6 +59,11 @@ class SolanaService {
     Duration balanceTimeout = _defaultAirdropBalanceTimeout,
     Duration pollInterval = const Duration(seconds: 2),
   }) async {
+    if (network == ChainNetwork.mainnet) {
+      throw const FormatException(
+        'Airdrops are only available on Solana devnet.',
+      );
+    }
     final int lamports = (sol * lamportsPerSol).round();
     final int startingBalance = await getBalanceLamports(address);
     final String signature;
@@ -150,6 +156,7 @@ class SolanaService {
       transferId: transferId,
       createdAt: createdAt,
       chain: ChainKind.solana,
+      network: network,
       senderAddress: sender.address,
       receiverAddress: receiverAddress,
       amountLamports: lamports,
@@ -187,6 +194,9 @@ class SolanaService {
   ValidatedTransactionDetails validateEnvelope(OfflineEnvelope envelope) {
     if (envelope.version != 1) {
       throw const FormatException('Unsupported payload version.');
+    }
+    if (envelope.network != network) {
+      throw const FormatException('Envelope network does not match the active Solana network.');
     }
     if (!envelope.isChecksumValid) {
       throw const FormatException('Envelope checksum mismatch.');
@@ -237,6 +247,7 @@ class SolanaService {
 
     return ValidatedTransactionDetails(
       chain: ChainKind.solana,
+      network: network,
       senderAddress: senderAddress,
       receiverAddress: receiverAddress,
       amountLamports: amountLamports,
@@ -313,7 +324,11 @@ class SolanaService {
   }
 
   Uri explorerUrlFor(String signature) =>
-      Uri.parse('https://explorer.solana.com/tx/$signature?cluster=devnet');
+      Uri.parse(
+        network == ChainNetwork.mainnet
+            ? 'https://explorer.solana.com/tx/$signature'
+            : 'https://explorer.solana.com/tx/$signature?cluster=devnet',
+      );
 
   bool _hasReachedConfirmation({
     required ConfirmationStatus current,

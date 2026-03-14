@@ -12,9 +12,11 @@ class BitsendPageScaffold extends StatelessWidget {
     super.key,
     required this.title,
     this.subtitle,
+    this.header,
     required this.child,
     this.actions,
     this.bottom,
+    this.overlay,
     this.showBack = true,
     this.showHeader = true,
     this.scrollable = true,
@@ -25,9 +27,11 @@ class BitsendPageScaffold extends StatelessWidget {
 
   final String title;
   final String? subtitle;
+  final Widget? header;
   final Widget child;
   final List<Widget>? actions;
   final Widget? bottom;
+  final Widget? overlay;
   final bool showBack;
   final bool showHeader;
   final bool scrollable;
@@ -39,6 +43,12 @@ class BitsendPageScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     final bool hasPrimaryNav =
         primaryTab != null && onPrimaryTabSelected != null;
+    final Widget? effectiveHeader = !showHeader
+        ? null
+        : header ?? _PageHeader(title: title, subtitle: subtitle);
+    final bool showBrandInChrome = !showBack && effectiveHeader == null;
+    final bool hasActions = actions != null && actions!.isNotEmpty;
+    final bool hasChrome = showBack || showBrandInChrome || hasActions;
     final bool useFixedLayout = !scrollable && !hasPrimaryNav;
     final bool hasBottomContent = bottom != null;
     final double scrollBottomPadding = hasPrimaryNav
@@ -98,153 +108,175 @@ class BitsendPageScaffold extends StatelessWidget {
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 760),
                   child: SizedBox.expand(
-                    child: hasPrimaryNav
-                        ? Stack(
-                          children: <Widget>[
-                            Positioned.fill(
-                              child: ListView(
-                                controller: scrollController,
-                                keyboardDismissBehavior:
-                                    ScrollViewKeyboardDismissBehavior.onDrag,
-                                padding: EdgeInsets.fromLTRB(
-                                  20,
-                                  10,
-                                  20,
-                                  scrollBottomPadding,
-                                ),
+                    child: Stack(
+                      children: <Widget>[
+                        hasPrimaryNav
+                            ? Stack(
                                 children: <Widget>[
-                                  _PageChrome(
-                                    showBack: showBack,
-                                    actions: actions,
-                                  ),
-                                  SizedBox(height: showHeader ? 18 : 8),
-                                  if (showHeader)
-                                    _PageHeader(
-                                      title: title,
-                                      subtitle: subtitle,
+                                  Positioned.fill(
+                                    child: ListView(
+                                      controller: scrollController,
+                                      keyboardDismissBehavior:
+                                          ScrollViewKeyboardDismissBehavior
+                                              .onDrag,
+                                      padding: EdgeInsets.fromLTRB(
+                                        20,
+                                        10,
+                                        20,
+                                        scrollBottomPadding,
+                                      ),
+                                      children: <Widget>[
+                                        if (hasChrome)
+                                          _PageChrome(
+                                            showBack: showBack,
+                                            showBrand: showBrandInChrome,
+                                            actions: actions,
+                                          ),
+                                        SizedBox(
+                                          height: effectiveHeader != null
+                                              ? (hasChrome ? 18 : 8)
+                                              : 8,
+                                        ),
+                                        if (effectiveHeader != null)
+                                          effectiveHeader,
+                                        child,
+                                      ],
                                     ),
-                                  child,
+                                  ),
+                                  Align(
+                                    alignment: Alignment.bottomCenter,
+                                    child: Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        16,
+                                        0,
+                                        16,
+                                        12,
+                                      ),
+                                      child: SafeArea(
+                                        top: false,
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: <Widget>[
+                                            if (hasBottomContent)
+                                              _BottomSurface(child: bottom!),
+                                            if (hasBottomContent)
+                                              const SizedBox(height: 10),
+                                            _PrimaryBottomNav(
+                                              currentTab: primaryTab!,
+                                              onSelected:
+                                                  onPrimaryTabSelected!,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : useFixedLayout
+                            ? Stack(
+                                children: <Widget>[
+                                  Positioned.fill(
+                                    child: Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        20,
+                                        10,
+                                        20,
+                                        0,
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: <Widget>[
+                                          if (hasChrome)
+                                            _PageChrome(
+                                              showBack: showBack,
+                                              showBrand: showBrandInChrome,
+                                              actions: actions,
+                                            ),
+                                          SizedBox(
+                                            height: effectiveHeader != null
+                                                ? (hasChrome ? 18 : 8)
+                                                : 8,
+                                          ),
+                                          if (effectiveHeader != null)
+                                            effectiveHeader,
+                                          Expanded(child: child),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  if (hasBottomContent)
+                                    Align(
+                                      alignment: Alignment.bottomCenter,
+                                      child: Padding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                          16,
+                                          0,
+                                          16,
+                                          12,
+                                        ),
+                                        child: SafeArea(
+                                          top: false,
+                                          child: _BottomSurface(child: bottom!),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              )
+                            : Stack(
+                                children: <Widget>[
+                                  Positioned.fill(
+                                    child: ListView(
+                                      controller: scrollController,
+                                      keyboardDismissBehavior:
+                                          ScrollViewKeyboardDismissBehavior
+                                              .onDrag,
+                                      padding: EdgeInsets.fromLTRB(
+                                        20,
+                                        10,
+                                        20,
+                                        scrollBottomPadding,
+                                      ),
+                                      children: <Widget>[
+                                        if (hasChrome)
+                                          _PageChrome(
+                                            showBack: showBack,
+                                            showBrand: showBrandInChrome,
+                                            actions: actions,
+                                          ),
+                                        SizedBox(
+                                          height: effectiveHeader != null
+                                              ? (hasChrome ? 18 : 8)
+                                              : 8,
+                                        ),
+                                        if (effectiveHeader != null)
+                                          effectiveHeader,
+                                        child,
+                                      ],
+                                    ),
+                                  ),
+                                  if (hasBottomContent)
+                                    Align(
+                                      alignment: Alignment.bottomCenter,
+                                      child: Padding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                          16,
+                                          0,
+                                          16,
+                                          12,
+                                        ),
+                                        child: SafeArea(
+                                          top: false,
+                                          child: _BottomSurface(child: bottom!),
+                                        ),
+                                      ),
+                                    ),
                                 ],
                               ),
-                            ),
-                            Align(
-                              alignment: Alignment.bottomCenter,
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                                child: SafeArea(
-                                  top: false,
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: <Widget>[
-                                      if (hasBottomContent)
-                                        _BottomSurface(child: bottom!),
-                                      if (hasBottomContent)
-                                        const SizedBox(height: 10),
-                                      _PrimaryBottomNav(
-                                        currentTab: primaryTab!,
-                                        onSelected: onPrimaryTabSelected!,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        )
-                        : useFixedLayout
-                        ? Stack(
-                            children: <Widget>[
-                              Positioned.fill(
-                                child: Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    20,
-                                    10,
-                                    20,
-                                    0,
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: <Widget>[
-                                      _PageChrome(
-                                        showBack: showBack,
-                                        actions: actions,
-                                      ),
-                                      SizedBox(height: showHeader ? 18 : 8),
-                                      if (showHeader)
-                                        _PageHeader(
-                                          title: title,
-                                          subtitle: subtitle,
-                                        ),
-                                      Expanded(child: child),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              if (hasBottomContent)
-                                Align(
-                                  alignment: Alignment.bottomCenter,
-                                  child: Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      16,
-                                      0,
-                                      16,
-                                      12,
-                                    ),
-                                    child: SafeArea(
-                                      top: false,
-                                      child: _BottomSurface(child: bottom!),
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          )
-                        : Stack(
-                            children: <Widget>[
-                              Positioned.fill(
-                                child: ListView(
-                                  controller: scrollController,
-                                  keyboardDismissBehavior:
-                                      ScrollViewKeyboardDismissBehavior.onDrag,
-                                  padding: EdgeInsets.fromLTRB(
-                                    20,
-                                    10,
-                                    20,
-                                    scrollBottomPadding,
-                                  ),
-                                  children: <Widget>[
-                                    _PageChrome(
-                                      showBack: showBack,
-                                      actions: actions,
-                                    ),
-                                    SizedBox(height: showHeader ? 18 : 8),
-                                    if (showHeader)
-                                      _PageHeader(
-                                        title: title,
-                                        subtitle: subtitle,
-                                      ),
-                                    child,
-                                  ],
-                                ),
-                              ),
-                              if (hasBottomContent)
-                                Align(
-                                  alignment: Alignment.bottomCenter,
-                                  child: Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      16,
-                                      0,
-                                      16,
-                                      12,
-                                    ),
-                                    child: SafeArea(
-                                      top: false,
-                                      child: _BottomSurface(child: bottom!),
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
+                        if (overlay != null) Positioned.fill(child: overlay!),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -442,9 +474,14 @@ class _PrimaryBottomNavItem extends StatelessWidget {
 }
 
 class _PageChrome extends StatelessWidget {
-  const _PageChrome({required this.showBack, this.actions});
+  const _PageChrome({
+    required this.showBack,
+    required this.showBrand,
+    this.actions,
+  });
 
   final bool showBack;
+  final bool showBrand;
   final List<Widget>? actions;
 
   @override
@@ -458,7 +495,7 @@ class _PageChrome extends StatelessWidget {
             icon: const Icon(Icons.arrow_back_rounded),
             tooltip: 'Back',
           )
-        else
+        else if (showBrand)
           Text(
             'bitsend',
             style: theme.textTheme.bodySmall?.copyWith(

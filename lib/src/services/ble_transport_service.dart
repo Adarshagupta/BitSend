@@ -98,6 +98,7 @@ class BleTransportService {
     required String receiverDisplayAddress,
     required String receiverAddress,
     required ChainKind receiverChain,
+    required ChainNetwork receiverNetwork,
   }) async {
     if (_advertising) {
       return;
@@ -121,6 +122,7 @@ class BleTransportService {
             uuid: receiverInfoCharacteristicUuid,
             value: _receiverInfoBytes(
               receiverChain: receiverChain,
+              receiverNetwork: receiverNetwork,
               receiverAddress: receiverAddress,
               receiverDisplayAddress: receiverDisplayAddress,
             ),
@@ -372,7 +374,12 @@ class BleTransportService {
   PeripheralManager get _peripheral => _peripheralManager ??= PeripheralManager();
 
   void _ensureCentralInitialized() {
-    _discoveredSubscription ??= _central.discovered.listen(_handleDiscovered);
+    _discoveredSubscription ??= _central.discovered.listen(
+      _handleDiscovered,
+      onError: (_) {
+        // Ignore malformed discovery events from the plugin; the UI can retry.
+      },
+    );
   }
 
   void _ensurePeripheralInitialized() {
@@ -383,46 +390,53 @@ class BleTransportService {
   }
 
   void _handleDiscovered(DiscoveredEventArgs event) {
-    final Advertisement advertisement = event.advertisement;
-    if (!advertisement.serviceUUIDs.contains(serviceUuid)) {
-      return;
+    try {
+      final Advertisement advertisement = event.advertisement;
+      if (!_safeServiceUuids(advertisement).contains(serviceUuid)) {
+        return;
+      }
+      final String id = event.peripheral.uuid.toString();
+      _discoveredPeripherals[id] = event.peripheral;
+      final ReceiverDiscoveryItem? existing = _receivers[id];
+      final _AdvertisementReceiverHint? hint = _parseAdvertisementHint(
+        advertisement,
+      );
+      final String? advertisedName = _safeAdvertisementName(advertisement);
+      _receivers[id] = ReceiverDiscoveryItem(
+        id: id,
+        label:
+            existing?.metadataVerified == true
+                ? existing!.label
+                : hint?.label ??
+                    advertisedName ??
+                    existing?.label ??
+                    'bitsend BLE receiver',
+        subtitle:
+            existing?.metadataVerified == true
+                ? existing!.subtitle
+                : hint?.preview ??
+                    existing?.subtitle ??
+                    advertisedName ??
+                    'Receiver nearby',
+        transport: TransportKind.ble,
+        address: existing?.address ?? '',
+        rssi: _bestRssi(existing?.rssi, event.rssi),
+        lastSeenAt: DateTime.now(),
+        metadataVerified: existing?.metadataVerified ?? false,
+      );
+    } catch (_) {
+      // Ignore malformed advertisements instead of surfacing a Flutter error box.
     }
-    final String id = event.peripheral.uuid.toString();
-    _discoveredPeripherals[id] = event.peripheral;
-    final ReceiverDiscoveryItem? existing = _receivers[id];
-    final _AdvertisementReceiverHint? hint = _parseAdvertisementHint(
-      advertisement,
-    );
-    final String? advertisedName = _safeAdvertisementName(advertisement);
-    _receivers[id] = ReceiverDiscoveryItem(
-      id: id,
-      label:
-          existing?.metadataVerified == true
-              ? existing!.label
-              : hint?.label ??
-                  advertisedName ??
-                  existing?.label ??
-                  'bitsend BLE receiver',
-      subtitle:
-          existing?.metadataVerified == true
-              ? existing!.subtitle
-              : hint?.preview ??
-                  existing?.subtitle ??
-                  advertisedName ??
-                  'Receiver nearby',
-      transport: TransportKind.ble,
-      address: existing?.address ?? '',
-      rssi: _bestRssi(existing?.rssi, event.rssi),
-      lastSeenAt: DateTime.now(),
-      metadataVerified: existing?.metadataVerified ?? false,
-    );
   }
 
   Future<void> _hydrateReceiverMetadata(CentralManager manager) async {
     final List<MapEntry<String, Peripheral>> entries = _discoveredPeripherals.entries
         .toList(growable: false);
     for (final MapEntry<String, Peripheral> entry in entries) {
-      final ReceiverDiscoveryItem fallback = _receivers[entry.key]!;
+      final ReceiverDiscoveryItem? fallback = _receivers[entry.key];
+      if (fallback == null) {
+        continue;
+      }
       _receivers[entry.key] = await _readReceiverMetadata(
         manager,
         peripheral: entry.value,
@@ -467,6 +481,7 @@ class BleTransportService {
       final String displayAddress = (info['displayAddress'] as String? ?? '')
           .trim();
       final ChainKind? chain = _parseChain(info['chain'] as String?);
+      final ChainNetwork? network = _parseNetwork(info['network'] as String?);
       if (!_isRecognizedAddress(address)) {
         return fallback;
       }
@@ -485,6 +500,7 @@ class BleTransportService {
         label: _formatReceiverLabel(
           displayAddress.isEmpty ? fallback.label : displayAddress,
           chain,
+          network,
         ),
         subtitle: address,
         transport: fallback.transport,
@@ -649,6 +665,7 @@ class BleTransportService {
 
   Uint8List _receiverInfoBytes({
     required ChainKind receiverChain,
+    required ChainNetwork receiverNetwork,
     required String receiverAddress,
     required String receiverDisplayAddress,
   }) {
@@ -656,6 +673,7 @@ class BleTransportService {
       utf8.encode(
         jsonEncode(<String, String>{
           'chain': receiverChain.name,
+          'network': receiverNetwork.name,
           'address': receiverAddress,
           'displayAddress': receiverDisplayAddress,
         }),
@@ -725,6 +743,14 @@ class BleTransportService {
     }
   }
 
+  List<UUID> _safeServiceUuids(Advertisement advertisement) {
+    try {
+      return advertisement.serviceUUIDs;
+    } on UnsupportedError {
+      return const <UUID>[];
+    }
+  }
+
   int? _bestRssi(int? current, int? candidate) {
     if (candidate == null) {
       return current;
@@ -753,11 +779,27 @@ class BleTransportService {
     return null;
   }
 
-  String _formatReceiverLabel(String label, ChainKind? chain) {
-    if (chain == null) {
+  ChainNetwork? _parseNetwork(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return null;
+    }
+    for (final ChainNetwork network in ChainNetwork.values) {
+      if (network.name == raw) {
+        return network;
+      }
+    }
+    return null;
+  }
+
+  String _formatReceiverLabel(
+    String label,
+    ChainKind? chain,
+    ChainNetwork? network,
+  ) {
+    if (chain == null || network == null) {
       return label;
     }
-    return '$label · ${chain.shortLabel}';
+    return '$label · ${network.shortLabelFor(chain)} ${chain.shortLabel}';
   }
 
   int _compareReceivers(ReceiverDiscoveryItem a, ReceiverDiscoveryItem b) {

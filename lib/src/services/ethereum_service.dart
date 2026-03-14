@@ -12,10 +12,43 @@ class EthereumService {
   EthereumService({required String rpcEndpoint}) : _rpcEndpoint = rpcEndpoint;
 
   static const int sepoliaChainId = 11155111;
+  static const int mainnetChainId = 1;
   static const int transferGasLimit = 21000;
   static const Duration _defaultConfirmationTimeout = Duration(seconds: 75);
+  static final EthereumAddress _ensRegistryAddress = EthereumAddress.fromHex(
+    '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e',
+  );
+  static final ContractFunction _ensResolverFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "inputs":[{"internalType":"bytes32","name":"node","type":"bytes32"}],
+    "name":"resolver",
+    "outputs":[{"internalType":"address","name":"","type":"address"}],
+    "stateMutability":"view",
+    "type":"function"
+  }
+]
+''',
+    'ENSRegistry',
+  ).functions.single;
+  static final ContractFunction _ensAddrFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "inputs":[{"internalType":"bytes32","name":"node","type":"bytes32"}],
+    "name":"addr",
+    "outputs":[{"internalType":"address","name":"","type":"address"}],
+    "stateMutability":"view",
+    "type":"function"
+  }
+]
+''',
+    'ENSResolver',
+  ).functions.single;
 
   String _rpcEndpoint;
+  ChainNetwork network = ChainNetwork.testnet;
 
   String get rpcEndpoint => _rpcEndpoint;
 
@@ -45,6 +78,53 @@ class EthereumService {
     } catch (_) {
       return false;
     }
+  }
+
+  bool isEnsName(String value) {
+    final String normalized = value.trim().toLowerCase();
+    if (!normalized.endsWith('.eth') || normalized.contains(RegExp(r'\s'))) {
+      return false;
+    }
+    final List<String> labels = normalized.split('.');
+    return labels.length >= 2 &&
+        labels.every(
+          (String label) =>
+              label.isNotEmpty &&
+              RegExp(r'^[a-z0-9-]+$').hasMatch(label),
+        );
+  }
+
+  Future<String> resolveEnsAddress(String name) async {
+    final String normalized = name.trim().toLowerCase();
+    if (!isEnsName(normalized)) {
+      throw const FormatException('Enter a valid .eth name.');
+    }
+
+    final Uint8List node = _ensNamehash(normalized);
+    final List<dynamic> registryResult = await _callViewFunction(
+      contract: _ensRegistryAddress,
+      function: _ensResolverFunction,
+      params: <dynamic>[node],
+    );
+    final EthereumAddress resolver = registryResult.single as EthereumAddress;
+    if (_isZeroAddress(resolver)) {
+      throw const FormatException(
+        'ENS name does not have a resolver on this network.',
+      );
+    }
+
+    final List<dynamic> addressResult = await _callViewFunction(
+      contract: resolver,
+      function: _ensAddrFunction,
+      params: <dynamic>[node],
+    );
+    final EthereumAddress resolved = addressResult.single as EthereumAddress;
+    if (_isZeroAddress(resolved)) {
+      throw const FormatException(
+        'ENS name does not resolve to an Ethereum address.',
+      );
+    }
+    return resolved.hexEip55;
   }
 
   Future<bool> isReachable() async {
@@ -77,7 +157,9 @@ class EthereumService {
       return EthereumPreparedContext(
         nonce: nonce,
         gasPriceWei: gasPrice.getInWei.toInt(),
-        chainId: sepoliaChainId,
+        chainId: network == ChainNetwork.mainnet
+            ? mainnetChainId
+            : sepoliaChainId,
         fetchedAt: DateTime.now(),
       );
     });
@@ -111,6 +193,7 @@ class EthereumService {
       transferId: transferId,
       createdAt: createdAt,
       chain: ChainKind.ethereum,
+      network: network,
       senderAddress: senderAddress,
       receiverAddress: receiverAddress,
       amountLamports: amountBaseUnits,
@@ -126,6 +209,11 @@ class EthereumService {
     if (envelope.chain != ChainKind.ethereum) {
       throw const FormatException('Envelope is not an Ethereum transfer.');
     }
+    if (envelope.network != network) {
+      throw const FormatException(
+        'Envelope network does not match the active Ethereum network.',
+      );
+    }
     if (!envelope.isChecksumValid) {
       throw const FormatException('Envelope checksum mismatch.');
     }
@@ -134,14 +222,47 @@ class EthereumService {
       throw const FormatException('Envelope addresses are invalid.');
     }
     final Uint8List signedBytes = base64Decode(envelope.signedTransactionBase64);
+    final _DecodedLegacyEthereumTransaction transaction =
+        _decodeLegacySignedTransaction(signedBytes);
+    if (transaction.chainId != _expectedChainId) {
+      throw const FormatException(
+        'Signed transaction network does not match the active Ethereum network.',
+      );
+    }
+    if (transaction.to == null) {
+      throw const FormatException(
+        'Contract creation transactions are not supported in offline handoff.',
+      );
+    }
+    if (transaction.data.isNotEmpty) {
+      throw const FormatException(
+        'Only simple Ethereum value transfers are supported.',
+      );
+    }
+    if (transaction.from.hexEip55 != envelope.senderAddress) {
+      throw const FormatException(
+        'Envelope sender does not match the signed Ethereum transaction.',
+      );
+    }
+    if (transaction.to!.hexEip55 != envelope.receiverAddress) {
+      throw const FormatException(
+        'Envelope receiver does not match the signed Ethereum transaction.',
+      );
+    }
+    if (transaction.value != BigInt.from(envelope.amountLamports)) {
+      throw const FormatException(
+        'Envelope amount does not match the signed Ethereum transaction.',
+      );
+    }
     final String transactionHash = _hexFromBytes(
       web3_crypto.keccak256(signedBytes),
     );
     return ValidatedTransactionDetails(
       chain: ChainKind.ethereum,
-      senderAddress: envelope.senderAddress,
-      receiverAddress: envelope.receiverAddress,
-      amountLamports: envelope.amountLamports,
+      network: network,
+      senderAddress: transaction.from.hexEip55,
+      receiverAddress: transaction.to!.hexEip55,
+      amountLamports: transaction.value.toInt(),
       transactionSignature: transactionHash,
     );
   }
@@ -179,10 +300,20 @@ class EthereumService {
     }
   }
 
-  Future<TransactionReceipt?> getTransactionReceipt(String hash) {
-    return _withClient(
-      (Web3Client client) => client.getTransactionReceipt(hash),
+  Future<TransactionReceipt?> getTransactionReceipt(String hash) async {
+    final Object? response = await _rpcRequest(
+      'eth_getTransactionReceipt',
+      <Object>[hash],
     );
+    if (response == null) {
+      return null;
+    }
+    if (response is! Map<String, dynamic>) {
+      throw const FormatException(
+        'Ethereum RPC returned malformed receipt data.',
+      );
+    }
+    return _parseTransactionReceipt(response);
   }
 
   Future<void> waitForConfirmation(
@@ -210,7 +341,384 @@ class EthereumService {
   }
 
   Uri explorerUrlFor(String hash) {
-    return Uri.parse('https://sepolia.etherscan.io/tx/$hash');
+    final String host = network == ChainNetwork.mainnet
+        ? 'etherscan.io'
+        : 'sepolia.etherscan.io';
+    return Uri.parse('https://$host/tx/$hash');
+  }
+
+  Future<Object?> _rpcRequest(
+    String method,
+    List<Object> params,
+  ) async {
+    final http.Client client = http.Client();
+    try {
+      final http.Response response = await client
+          .post(
+            Uri.parse(_rpcEndpoint),
+            headers: const <String, String>{
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode(<String, Object>{
+              'jsonrpc': '2.0',
+              'id': 1,
+              'method': method,
+              'params': params,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw FormatException(
+          'Ethereum RPC request failed (${response.statusCode}).',
+        );
+      }
+      final Object? decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException(
+          'Ethereum RPC returned a malformed response.',
+        );
+      }
+      final Map<String, dynamic> payload = decoded;
+      final Object? error = payload['error'];
+      if (error is Map<String, dynamic>) {
+        final Object? message = error['message'];
+        throw FormatException(
+          message is String && message.isNotEmpty
+              ? message
+              : 'Ethereum RPC request failed.',
+        );
+      }
+      final Object? result = payload['result'];
+      return result;
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<List<dynamic>> _callViewFunction({
+    required EthereumAddress contract,
+    required ContractFunction function,
+    required List<dynamic> params,
+  }) async {
+    final Object? result = await _rpcRequest(
+      'eth_call',
+      <Object>[
+        <String, Object>{
+          'to': contract.hexEip55,
+          'data': web3_crypto.bytesToHex(
+            function.encodeCall(params),
+            include0x: true,
+          ),
+        },
+        'latest',
+      ],
+    );
+    if (result is! String || result.isEmpty) {
+      throw const FormatException('Ethereum RPC returned malformed call data.');
+    }
+    return function.decodeReturnValues(result);
+  }
+
+  TransactionReceipt _parseTransactionReceipt(Map<String, dynamic> json) {
+    String requiredHex(String key) {
+      final Object? value = json[key];
+      if (value is String && value.isNotEmpty) {
+        return value;
+      }
+      throw FormatException('Ethereum receipt is missing "$key".');
+    }
+
+    String? optionalHex(String key) {
+      final Object? value = json[key];
+      if (value is String && value.isNotEmpty) {
+        return value;
+      }
+      return null;
+    }
+
+    final String? from = optionalHex('from');
+    final String? to = optionalHex('to');
+    final String? gasUsed = optionalHex('gasUsed');
+    final String? effectiveGasPrice = optionalHex('effectiveGasPrice');
+    final String? contractAddress = optionalHex('contractAddress');
+    final String? status = optionalHex('status');
+
+    return TransactionReceipt(
+      transactionHash: web3_crypto.hexToBytes(requiredHex('transactionHash')),
+      transactionIndex: web3_crypto.hexToDartInt(
+        requiredHex('transactionIndex'),
+      ),
+      blockHash: web3_crypto.hexToBytes(requiredHex('blockHash')),
+      blockNumber: BlockNum.exact(
+        web3_crypto.hexToDartInt(requiredHex('blockNumber')),
+      ),
+      from: _parseOptionalAddress(from),
+      to: _parseOptionalAddress(to),
+      cumulativeGasUsed: web3_crypto.hexToInt(requiredHex('cumulativeGasUsed')),
+      gasUsed: gasUsed == null ? null : web3_crypto.hexToInt(gasUsed),
+      effectiveGasPrice: effectiveGasPrice == null
+          ? null
+          : EtherAmount.inWei(web3_crypto.hexToInt(effectiveGasPrice)),
+      contractAddress: _parseOptionalAddress(contractAddress),
+      status: status == null ? null : web3_crypto.hexToDartInt(status) == 1,
+      logs: (json['logs'] as List<dynamic>? ?? <dynamic>[])
+          .map(
+            (dynamic item) => FilterEvent.fromMap(item as Map<String, dynamic>),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  EthereumAddress? _parseOptionalAddress(String? value) {
+    if (value == null || value.isEmpty) {
+      return null;
+    }
+    return EthereumAddress.fromHex(value);
+  }
+
+  int get _expectedChainId =>
+      network == ChainNetwork.mainnet ? mainnetChainId : sepoliaChainId;
+
+  Uint8List _ensNamehash(String name) {
+    Uint8List node = Uint8List(32);
+    for (final String label in name.split('.').reversed) {
+      final Uint8List labelHash = web3_crypto.keccak256(
+        Uint8List.fromList(utf8.encode(label)),
+      );
+      node = Uint8List.fromList(
+        web3_crypto.keccak256(Uint8List.fromList(<int>[
+          ...node,
+          ...labelHash,
+        ])),
+      );
+    }
+    return node;
+  }
+
+  bool _isZeroAddress(EthereumAddress address) {
+    return address.hexNo0x == '0000000000000000000000000000000000000000';
+  }
+
+  _DecodedLegacyEthereumTransaction _decodeLegacySignedTransaction(
+    Uint8List signedBytes,
+  ) {
+    if (signedBytes.isEmpty) {
+      throw const FormatException('Signed Ethereum transaction is empty.');
+    }
+    if (signedBytes.first < 0xc0) {
+      throw const FormatException(
+        'Typed Ethereum transactions are not supported in offline handoff yet.',
+      );
+    }
+    final Object decoded = _decodeRlp(signedBytes);
+    if (decoded is! List<Object?> || decoded.length != 9) {
+      throw const FormatException('Signed Ethereum transaction is malformed.');
+    }
+
+    final int nonce = _rlpInteger(decoded[0]).toInt();
+    final BigInt gasPrice = _rlpInteger(decoded[1]);
+    final BigInt gasLimit = _rlpInteger(decoded[2]);
+    final Uint8List toBytes = _rlpBytes(decoded[3]);
+    final BigInt value = _rlpInteger(decoded[4]);
+    final Uint8List data = _rlpBytes(decoded[5]);
+    final int rawV = _rlpInteger(decoded[6]).toInt();
+    final BigInt r = _rlpInteger(decoded[7]);
+    final BigInt s = _rlpInteger(decoded[8]);
+
+    final ({int recoveryV, int chainId}) signatureMeta =
+        _signatureMetaFromV(rawV);
+    final EthereumAddress? to = toBytes.isEmpty
+        ? null
+        : EthereumAddress.fromHex(
+            web3_crypto.bytesToHex(toBytes, include0x: true),
+          );
+    final Uint8List unsignedPayload = Uint8List.fromList(
+      _encodeLegacyTransactionForSigning(
+        nonce: nonce,
+        gasPrice: gasPrice,
+        gasLimit: gasLimit,
+        toBytes: toBytes,
+        value: value,
+        data: data,
+        chainId: signatureMeta.chainId,
+      ),
+    );
+    final Uint8List messageHash = web3_crypto.keccak256(unsignedPayload);
+    final Uint8List publicKey = web3_crypto.ecRecover(
+      messageHash,
+      web3_crypto.MsgSignature(r, s, signatureMeta.recoveryV),
+    );
+    final Uint8List senderAddressBytes = web3_crypto.publicKeyToAddress(
+      publicKey,
+    );
+    final EthereumAddress from = EthereumAddress.fromHex(
+      web3_crypto.bytesToHex(senderAddressBytes, include0x: true),
+    );
+
+    return _DecodedLegacyEthereumTransaction(
+      nonce: nonce,
+      gasPrice: gasPrice,
+      gasLimit: gasLimit,
+      to: to,
+      value: value,
+      data: data,
+      from: from,
+      chainId: signatureMeta.chainId,
+    );
+  }
+
+  List<int> _encodeLegacyTransactionForSigning({
+    required int nonce,
+    required BigInt gasPrice,
+    required BigInt gasLimit,
+    required Uint8List toBytes,
+    required BigInt value,
+    required Uint8List data,
+    required int chainId,
+  }) {
+    return encode(<Object>[
+      nonce,
+      gasPrice,
+      gasLimit,
+      toBytes.isEmpty ? '' : toBytes,
+      value,
+      data,
+      chainId,
+      0,
+      0,
+    ]);
+  }
+
+  ({int recoveryV, int chainId}) _signatureMetaFromV(int rawV) {
+    if (rawV == 27 || rawV == 28) {
+      throw const FormatException(
+        'Signed Ethereum transaction is missing replay protection.',
+      );
+    }
+    if (rawV < 35) {
+      throw const FormatException('Signed Ethereum signature is malformed.');
+    }
+    final int parity = (rawV - 35) % 2;
+    final int chainId = (rawV - 35 - parity) ~/ 2;
+    return (recoveryV: 27 + parity, chainId: chainId);
+  }
+
+  Uint8List _rlpBytes(Object? value) {
+    if (value is Uint8List) {
+      return value;
+    }
+    if (value is List<int>) {
+      return Uint8List.fromList(value);
+    }
+    throw const FormatException('Signed Ethereum transaction is malformed.');
+  }
+
+  BigInt _rlpInteger(Object? value) {
+    final Uint8List bytes = _rlpBytes(value);
+    if (bytes.isEmpty) {
+      return BigInt.zero;
+    }
+    return web3_crypto.bytesToUnsignedInt(bytes);
+  }
+
+  Object _decodeRlp(Uint8List bytes) {
+    final _RlpItem item = _decodeRlpItem(bytes, 0);
+    if (item.nextOffset != bytes.length) {
+      throw const FormatException('Signed Ethereum transaction is malformed.');
+    }
+    return item.value;
+  }
+
+  _RlpItem _decodeRlpItem(Uint8List bytes, int offset) {
+    if (offset >= bytes.length) {
+      throw const FormatException('Signed Ethereum transaction is malformed.');
+    }
+    final int prefix = bytes[offset];
+    if (prefix <= 0x7f) {
+      return _RlpItem(
+        value: Uint8List.fromList(<int>[prefix]),
+        nextOffset: offset + 1,
+      );
+    }
+    if (prefix <= 0xb7) {
+      final int length = prefix - 0x80;
+      final int start = offset + 1;
+      final int end = start + length;
+      if (end > bytes.length) {
+        throw const FormatException('Signed Ethereum transaction is malformed.');
+      }
+      return _RlpItem(
+        value: Uint8List.sublistView(bytes, start, end),
+        nextOffset: end,
+      );
+    }
+    if (prefix <= 0xbf) {
+      final int lengthOfLength = prefix - 0xb7;
+      final int start = offset + 1;
+      final int end = start + lengthOfLength;
+      if (end > bytes.length) {
+        throw const FormatException('Signed Ethereum transaction is malformed.');
+      }
+      final int length = _bigIntToInt(
+        web3_crypto.bytesToUnsignedInt(Uint8List.sublistView(bytes, start, end)),
+      );
+      final int dataStart = end;
+      final int dataEnd = dataStart + length;
+      if (dataEnd > bytes.length) {
+        throw const FormatException('Signed Ethereum transaction is malformed.');
+      }
+      return _RlpItem(
+        value: Uint8List.sublistView(bytes, dataStart, dataEnd),
+        nextOffset: dataEnd,
+      );
+    }
+    if (prefix <= 0xf7) {
+      final int length = prefix - 0xc0;
+      final int start = offset + 1;
+      final int end = start + length;
+      if (end > bytes.length) {
+        throw const FormatException('Signed Ethereum transaction is malformed.');
+      }
+      final List<Object?> list = <Object?>[];
+      int cursor = start;
+      while (cursor < end) {
+        final _RlpItem item = _decodeRlpItem(bytes, cursor);
+        list.add(item.value);
+        cursor = item.nextOffset;
+      }
+      return _RlpItem(value: list, nextOffset: end);
+    }
+
+    final int lengthOfLength = prefix - 0xf7;
+    final int start = offset + 1;
+    final int end = start + lengthOfLength;
+    if (end > bytes.length) {
+      throw const FormatException('Signed Ethereum transaction is malformed.');
+    }
+    final int length = _bigIntToInt(
+      web3_crypto.bytesToUnsignedInt(Uint8List.sublistView(bytes, start, end)),
+    );
+    final int dataStart = end;
+    final int dataEnd = dataStart + length;
+    if (dataEnd > bytes.length) {
+      throw const FormatException('Signed Ethereum transaction is malformed.');
+    }
+    final List<Object?> list = <Object?>[];
+    int cursor = dataStart;
+    while (cursor < dataEnd) {
+      final _RlpItem item = _decodeRlpItem(bytes, cursor);
+      list.add(item.value);
+      cursor = item.nextOffset;
+    }
+    return _RlpItem(value: list, nextOffset: dataEnd);
+  }
+
+  int _bigIntToInt(BigInt value) {
+    if (value > BigInt.from(0x7fffffff)) {
+      throw const FormatException('Signed Ethereum value is too large.');
+    }
+    return value.toInt();
   }
 
   String _messageForBroadcastError(Object error) {
@@ -237,4 +745,33 @@ class EthereumService {
     }
     return buffer.toString();
   }
+}
+
+class _DecodedLegacyEthereumTransaction {
+  const _DecodedLegacyEthereumTransaction({
+    required this.nonce,
+    required this.gasPrice,
+    required this.gasLimit,
+    required this.to,
+    required this.value,
+    required this.data,
+    required this.from,
+    required this.chainId,
+  });
+
+  final int nonce;
+  final BigInt gasPrice;
+  final BigInt gasLimit;
+  final EthereumAddress? to;
+  final BigInt value;
+  final Uint8List data;
+  final EthereumAddress from;
+  final int chainId;
+}
+
+class _RlpItem {
+  const _RlpItem({required this.value, required this.nextOffset});
+
+  final Object value;
+  final int nextOffset;
 }

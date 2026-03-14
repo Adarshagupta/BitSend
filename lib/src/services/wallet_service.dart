@@ -18,8 +18,8 @@ class WalletService {
 
   static const String _walletMnemonicKey = 'wallet_mnemonic';
   static const String _walletModeKey = 'wallet_mode';
-  static const String _solanaRpcEndpointKey = 'rpc_endpoint_solana';
-  static const String _ethereumRpcEndpointKey = 'rpc_endpoint_ethereum';
+  static const String _legacySolanaRpcEndpointKey = 'rpc_endpoint_solana';
+  static const String _legacyEthereumRpcEndpointKey = 'rpc_endpoint_ethereum';
 
   final FlutterSecureStorage _storage;
 
@@ -145,22 +145,31 @@ class WalletService {
   Future<void> saveRpcEndpoint(
     String endpoint, {
     ChainKind chain = ChainKind.solana,
+    ChainNetwork network = ChainNetwork.testnet,
   }) async {
     await _storage.write(
-      key: chain == ChainKind.solana
-          ? _solanaRpcEndpointKey
-          : _ethereumRpcEndpointKey,
+      key: _rpcEndpointKey(chain, network),
       value: endpoint,
     );
   }
 
   Future<String?> loadRpcEndpoint({
     ChainKind chain = ChainKind.solana,
-  }) {
+    ChainNetwork network = ChainNetwork.testnet,
+  }) async {
+    final String? scoped = await _storage.read(
+      key: _rpcEndpointKey(chain, network),
+    );
+    if (scoped != null && scoped.isNotEmpty) {
+      return scoped;
+    }
+    if (network != ChainNetwork.testnet) {
+      return null;
+    }
     return _storage.read(
       key: chain == ChainKind.solana
-          ? _solanaRpcEndpointKey
-          : _ethereumRpcEndpointKey,
+          ? _legacySolanaRpcEndpointKey
+          : _legacyEthereumRpcEndpointKey,
     );
   }
 
@@ -221,10 +230,7 @@ class WalletService {
     final JsonEncoder encoder = const JsonEncoder.withIndent('  ');
     final String payload = encoder.convert(<String, dynamic>{
       'version': 1,
-      'networks': <String>[
-        ChainKind.solana.networkKey,
-        ChainKind.ethereum.networkKey,
-      ],
+      'chains': <String>[ChainKind.solana.name, ChainKind.ethereum.name],
       'exportedAtUtc': now.toIso8601String(),
       'walletMode': solanaWallet.mode.name,
       'recoveryPhrase': solanaWallet.seedPhrase,
@@ -247,8 +253,13 @@ class WalletService {
   Future<void> clearAll() async {
     await _storage.delete(key: _walletMnemonicKey);
     await _storage.delete(key: _walletModeKey);
-    await _storage.delete(key: _solanaRpcEndpointKey);
-    await _storage.delete(key: _ethereumRpcEndpointKey);
+    await _storage.delete(key: _legacySolanaRpcEndpointKey);
+    await _storage.delete(key: _legacyEthereumRpcEndpointKey);
+    for (final ChainKind chain in ChainKind.values) {
+      for (final ChainNetwork network in ChainNetwork.values) {
+        await _storage.delete(key: _rpcEndpointKey(chain, network));
+      }
+    }
   }
 
   Future<WalletBackupAccount> _buildBackupAccount({
@@ -390,5 +401,9 @@ class WalletService {
     final String twoDigitSecond = value.second.toString().padLeft(2, '0');
     return '${value.year}$twoDigitMonth$twoDigitDay'
         '_$twoDigitHour$twoDigitMinute$twoDigitSecond';
+  }
+
+  String _rpcEndpointKey(ChainKind chain, ChainNetwork network) {
+    return 'rpc_endpoint_${chain.name}_${network.name}';
   }
 }

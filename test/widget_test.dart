@@ -14,15 +14,15 @@ void main() {
     await tester.pumpWidget(
       BitsendStateScope(
         notifier: state,
-        child: MaterialApp(
-          home: child,
-        ),
+        child: MaterialApp(home: child),
       ),
     );
     await tester.pumpAndSettle();
   }
 
-  testWidgets('boot routes a new user into onboarding', (WidgetTester tester) async {
+  testWidgets('boot routes a new user into onboarding', (
+    WidgetTester tester,
+  ) async {
     final _TestBitsendAppState state = _TestBitsendAppState(
       bootRouteValue: AppRoutes.onboardingWelcome,
     );
@@ -44,6 +44,7 @@ void main() {
       hasOfflineReadyBlockhashValue: false,
       walletSummaryValue: const WalletSummary(
         chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
         balanceSol: 1.2,
         offlineBalanceSol: 0,
         offlineAvailableSol: 0,
@@ -61,7 +62,7 @@ void main() {
     );
 
     expect(find.text('Fund'), findsOneWidget);
-    expect(find.text('Refresh'), findsOneWidget);
+    expect(find.text('Refresh'), findsAtLeastNWidgets(1));
     expect(find.text('Send'), findsOneWidget);
     expect(find.text('Offline Wallet'), findsAtLeastNWidgets(1));
   });
@@ -74,11 +75,7 @@ void main() {
       offlineWalletValue: _offlineWallet,
     );
 
-    await pumpWithState(
-      tester,
-      state: state,
-      child: const WalletSetupScreen(),
-    );
+    await pumpWithState(tester, state: state, child: const WalletSetupScreen());
 
     expect(find.text('Secure your wallet'), findsOneWidget);
     expect(find.text('Download backup'), findsOneWidget);
@@ -93,14 +90,46 @@ void main() {
       hasEnoughFundingValue: false,
     );
 
-    await pumpWithState(
-      tester,
-      state: state,
-      child: const FundWalletScreen(),
-    );
+    await pumpWithState(tester, state: state, child: const FundWalletScreen());
 
     expect(find.text('Airdrop 1 SOL'), findsOneWidget);
     expect(find.text('Skip for now'), findsOneWidget);
+  });
+
+  testWidgets('offline wallet screen shows loader while top up is running', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      offlineWalletValue: _offlineWallet,
+      hasEnoughFundingValue: true,
+      hasOfflineFundsValue: true,
+      hasOfflineReadyBlockhashValue: true,
+      workingValue: true,
+      statusMessageValue: 'Moving funds into the offline wallet...',
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        balanceSol: 1.2,
+        offlineBalanceSol: 0.5,
+        offlineAvailableSol: 0.5,
+        offlineWalletAddress: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+        readyForOffline: true,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+    );
+
+    await tester.pumpWidget(
+      BitsendStateScope(
+        notifier: state,
+        child: const MaterialApp(home: PrepareOfflineScreen()),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Moving funds into the offline wallet...'), findsOneWidget);
+    expect(find.text('Moving funds...'), findsOneWidget);
   });
 
   testWidgets('receive screen shows the integrated receive panel', (
@@ -168,50 +197,52 @@ void main() {
       child: const ReceiveListenScreen(),
     );
 
-    expect(find.text('Start hotspot receive to show the live QR.'), findsOneWidget);
+    expect(
+      find.text('Start hotspot receive to show the live QR.'),
+      findsOneWidget,
+    );
     expect(find.text('Copy QR'), findsNothing);
   });
 
-  testWidgets('pending screen switches between inbound and outbound transfers', (
+  testWidgets(
+    'pending screen switches between inbound and outbound transfers',
+    (WidgetTester tester) async {
+      final PendingTransfer inbound = _transfer(
+        transferId: 'inbound-1',
+        direction: TransferDirection.inbound,
+        status: TransferStatus.receivedPendingBroadcast,
+        senderAddress: 'Sender1111111111111111111111111111111111',
+        receiverAddress: 'Receiver11111111111111111111111111111111',
+        amountLamports: 250000000,
+      );
+      final PendingTransfer outbound = _transfer(
+        transferId: 'outbound-1',
+        direction: TransferDirection.outbound,
+        status: TransferStatus.sentOffline,
+        senderAddress: 'Sender1111111111111111111111111111111111',
+        receiverAddress: 'Receiver22222222222222222222222222222222',
+        amountLamports: 500000000,
+      );
+      final _TestBitsendAppState state = _TestBitsendAppState(
+        inboundTransfers: <PendingTransfer>[inbound],
+        outboundTransfers: <PendingTransfer>[outbound],
+      );
+
+      await pumpWithState(tester, state: state, child: const PendingScreen());
+
+      expect(find.text('Inbound transfer'), findsOneWidget);
+      expect(find.text('Outbound transfer'), findsNothing);
+
+      await tester.tap(find.text('Outbound'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Outbound transfer'), findsOneWidget);
+    },
+  );
+
+  testWidgets('transfer detail renders timeline and status', (
     WidgetTester tester,
   ) async {
-    final PendingTransfer inbound = _transfer(
-      transferId: 'inbound-1',
-      direction: TransferDirection.inbound,
-      status: TransferStatus.receivedPendingBroadcast,
-      senderAddress: 'Sender1111111111111111111111111111111111',
-      receiverAddress: 'Receiver11111111111111111111111111111111',
-      amountLamports: 250000000,
-    );
-    final PendingTransfer outbound = _transfer(
-      transferId: 'outbound-1',
-      direction: TransferDirection.outbound,
-      status: TransferStatus.sentOffline,
-      senderAddress: 'Sender1111111111111111111111111111111111',
-      receiverAddress: 'Receiver22222222222222222222222222222222',
-      amountLamports: 500000000,
-    );
-    final _TestBitsendAppState state = _TestBitsendAppState(
-      inboundTransfers: <PendingTransfer>[inbound],
-      outboundTransfers: <PendingTransfer>[outbound],
-    );
-
-    await pumpWithState(
-      tester,
-      state: state,
-      child: const PendingScreen(),
-    );
-
-    expect(find.text('Inbound transfer'), findsOneWidget);
-    expect(find.text('Outbound transfer'), findsNothing);
-
-    await tester.tap(find.text('Outbound'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Outbound transfer'), findsOneWidget);
-  });
-
-  testWidgets('transfer detail renders timeline and status', (WidgetTester tester) async {
     final PendingTransfer transfer = _transfer(
       transferId: 'tx-1',
       direction: TransferDirection.inbound,
@@ -303,6 +334,7 @@ void main() {
           rssi: -52,
         ),
       ],
+      bleDiscoveringValue: false,
     );
 
     await pumpWithState(
@@ -319,13 +351,104 @@ void main() {
     );
     expect(addressField.controller?.text, receiverAddress);
   });
+
+  testWidgets('BitGo send mode skips hotspot endpoint entry', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      activeWalletEngineValue: WalletEngine.bitgo,
+      hasInternetValue: true,
+      bitgoWalletValue: const BitGoWalletSummary(
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        walletId: 'demo-sol',
+        address: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+        displayLabel: 'Demo SOL',
+        balanceBaseUnits: 1500000000,
+        connectivityStatus: 'connected',
+      ),
+      bitgoEndpointValue: 'http://192.168.82.10:8788',
+      bitgoBackendModeValue: BitGoBackendMode.mock,
+      sendDraftValue: const SendDraft(
+        walletEngine: WalletEngine.bitgo,
+        transport: TransportKind.hotspot,
+      ),
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const SendTransportScreen(),
+    );
+
+    expect(find.text('Endpoint not needed'), findsOneWidget);
+    expect(find.text('Receiver endpoint'), findsNothing);
+    expect(find.textContaining('Send will switch to Local mode automatically'), findsOneWidget);
+  });
+
+  testWidgets('home explains BitGo demo mode falls back to Local send', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      activeWalletEngineValue: WalletEngine.bitgo,
+      hasInternetValue: true,
+      bitgoBackendModeValue: BitGoBackendMode.mock,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        balanceSol: 1.2,
+        offlineBalanceSol: 0,
+        offlineAvailableSol: 0,
+        offlineWalletAddress: null,
+        readyForOffline: true,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const HomeDashboardScreen(),
+    );
+
+    expect(find.text('Auto-fallback'), findsOneWidget);
+    expect(
+      find.text('BitGo backend is demo-only. Send will fall back to Local mode.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('receive screen explains BitGo mode is local-only', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      activeWalletEngineValue: WalletEngine.bitgo,
+      bleListenerRunningValue: false,
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const ReceiveListenScreen(),
+    );
+
+    expect(
+      find.textContaining('BitGo mode does not listen offline'),
+      findsOneWidget,
+    );
+  });
 }
 
 const WalletProfile _wallet = WalletProfile(
   chain: ChainKind.solana,
   address: '6g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1R',
   displayAddress: '6g7h...Qk1R',
-  seedPhrase: 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
+  seedPhrase:
+      'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
   mode: WalletSetupMode.created,
 );
 
@@ -333,7 +456,8 @@ const WalletProfile _offlineWallet = WalletProfile(
   chain: ChainKind.solana,
   address: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
   displayAddress: '5g7h...Qk1Z',
-  seedPhrase: 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
+  seedPhrase:
+      'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
   mode: WalletSetupMode.created,
 );
 
@@ -350,6 +474,7 @@ PendingTransfer _transfer({
     transferId: transferId,
     createdAt: now,
     chain: ChainKind.solana,
+    network: ChainNetwork.testnet,
     senderAddress: senderAddress,
     receiverAddress: receiverAddress,
     amountLamports: amountLamports,
@@ -359,6 +484,8 @@ PendingTransfer _transfer({
   return PendingTransfer(
     transferId: transferId,
     chain: ChainKind.solana,
+    network: ChainNetwork.testnet,
+    walletEngine: WalletEngine.local,
     direction: direction,
     status: status,
     amountLamports: amountLamports,
@@ -377,11 +504,16 @@ class _TestBitsendAppState extends BitsendAppState {
     this.bootRouteValue = AppRoutes.home,
     this.walletValue,
     this.offlineWalletValue,
+    this.activeWalletEngineValue = WalletEngine.local,
     this.hasEnoughFundingValue = false,
     this.hasOfflineFundsValue = false,
     this.hasOfflineReadyBlockhashValue = false,
+    this.hasInternetValue = false,
+    this.workingValue = false,
+    this.statusMessageValue,
     this.walletSummaryValue = const WalletSummary(
       chain: ChainKind.solana,
+      network: ChainNetwork.testnet,
       balanceSol: 0,
       offlineBalanceSol: 0,
       offlineAvailableSol: 0,
@@ -399,6 +531,9 @@ class _TestBitsendAppState extends BitsendAppState {
     this.bleDiscoveringValue = false,
     this.receiveTransportValue = TransportKind.hotspot,
     this.localEndpointValue,
+    this.bitgoWalletValue,
+    this.bitgoEndpointValue = defaultBitGoBackendEndpoint,
+    this.bitgoBackendModeValue = BitGoBackendMode.live,
     this.hotspotListenerRunningValue = false,
     this.bleListenerRunningValue = false,
     this.lastReceivedTransferIdValue,
@@ -407,9 +542,13 @@ class _TestBitsendAppState extends BitsendAppState {
   final String bootRouteValue;
   final WalletProfile? walletValue;
   final WalletProfile? offlineWalletValue;
+  final WalletEngine activeWalletEngineValue;
   final bool hasEnoughFundingValue;
   final bool hasOfflineFundsValue;
   final bool hasOfflineReadyBlockhashValue;
+  final bool hasInternetValue;
+  final bool workingValue;
+  final String? statusMessageValue;
   final WalletSummary walletSummaryValue;
   final List<PendingTransfer> inboundTransfers;
   final List<PendingTransfer> outboundTransfers;
@@ -420,6 +559,9 @@ class _TestBitsendAppState extends BitsendAppState {
   final bool bleDiscoveringValue;
   final TransportKind receiveTransportValue;
   final String? localEndpointValue;
+  final BitGoWalletSummary? bitgoWalletValue;
+  final String bitgoEndpointValue;
+  final BitGoBackendMode bitgoBackendModeValue;
   final bool hotspotListenerRunningValue;
   final bool bleListenerRunningValue;
   final String? lastReceivedTransferIdValue;
@@ -437,7 +579,19 @@ class _TestBitsendAppState extends BitsendAppState {
   WalletProfile? get offlineWallet => offlineWalletValue;
 
   @override
+  WalletEngine get activeWalletEngine => activeWalletEngineValue;
+
+  @override
   bool get hasWallet => walletValue != null;
+
+  @override
+  bool get hasInternet => hasInternetValue;
+
+  @override
+  bool get working => workingValue;
+
+  @override
+  String? get statusMessage => statusMessageValue;
 
   @override
   bool get hasEnoughFunding => hasEnoughFundingValue;
@@ -452,11 +606,12 @@ class _TestBitsendAppState extends BitsendAppState {
   WalletSummary get walletSummary => walletSummaryValue;
 
   @override
-  HomeStatus get homeStatus => const HomeStatus(
-        hasInternet: false,
-        hasLocalLink: false,
-        hasDevnet: false,
-      );
+  HomeStatus get homeStatus => HomeStatus(
+    hasInternet: hasInternetValue,
+    hasLocalLink: false,
+    hasDevnet: false,
+    walletEngine: activeWalletEngineValue,
+  );
 
   @override
   SendDraft get sendDraft => sendDraftValue;
@@ -472,6 +627,18 @@ class _TestBitsendAppState extends BitsendAppState {
 
   @override
   String? get localEndpoint => localEndpointValue;
+
+  @override
+  BitGoWalletSummary? get bitgoWallet => bitgoWalletValue;
+
+  @override
+  BitGoBackendMode get bitgoBackendMode => bitgoBackendModeValue;
+
+  @override
+  bool get bitgoBackendIsLive => bitgoBackendModeValue.isLive;
+
+  @override
+  String get bitgoEndpoint => bitgoEndpointValue;
 
   @override
   bool get listenerRunning =>
@@ -494,18 +661,21 @@ class _TestBitsendAppState extends BitsendAppState {
 
   @override
   List<PendingTransfer> recentActivity() => <PendingTransfer>[
-        ...inboundTransfers,
-        ...outboundTransfers,
-      ];
+    ...inboundTransfers,
+    ...outboundTransfers,
+  ];
 
   @override
   List<PendingTransfer> transfersFor(TransferDirection direction) {
-    return direction == TransferDirection.inbound ? inboundTransfers : outboundTransfers;
+    return direction == TransferDirection.inbound
+        ? inboundTransfers
+        : outboundTransfers;
   }
 
   @override
   PendingTransfer? transferById(String transferId) => transferMap[transferId];
 
   @override
-  List<TransferTimelineState> timelineFor(PendingTransfer transfer) => timelineValue;
+  List<TransferTimelineState> timelineFor(PendingTransfer transfer) =>
+      timelineValue;
 }

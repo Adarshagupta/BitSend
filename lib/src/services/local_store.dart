@@ -18,12 +18,14 @@ class LocalStore {
     final dbPath = path.join(directory.path, 'bitsend.db');
     _database = await openDatabase(
       dbPath,
-      version: 2,
+      version: 4,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE pending_transfers (
             transfer_id TEXT PRIMARY KEY,
             chain TEXT NOT NULL,
+            network TEXT NOT NULL,
+            wallet_engine TEXT NOT NULL DEFAULT 'local',
             direction TEXT NOT NULL,
             status TEXT NOT NULL,
             amount_lamports INTEGER NOT NULL,
@@ -37,7 +39,10 @@ class LocalStore {
             tx_signature TEXT,
             explorer_url TEXT,
             last_error TEXT,
-            confirmed_at_ms INTEGER
+            confirmed_at_ms INTEGER,
+            bitgo_wallet_id TEXT,
+            bitgo_transfer_id TEXT,
+            backend_status TEXT
           )
         ''');
         await db.execute('''
@@ -51,6 +56,25 @@ class LocalStore {
         if (oldVersion < 2) {
           await db.execute(
             "ALTER TABLE pending_transfers ADD COLUMN chain TEXT NOT NULL DEFAULT 'solana'",
+          );
+        }
+        if (oldVersion < 3) {
+          await db.execute(
+            "ALTER TABLE pending_transfers ADD COLUMN network TEXT NOT NULL DEFAULT 'testnet'",
+          );
+        }
+        if (oldVersion < 4) {
+          await db.execute(
+            "ALTER TABLE pending_transfers ADD COLUMN wallet_engine TEXT NOT NULL DEFAULT 'local'",
+          );
+          await db.execute(
+            'ALTER TABLE pending_transfers ADD COLUMN bitgo_wallet_id TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE pending_transfers ADD COLUMN bitgo_transfer_id TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE pending_transfers ADD COLUMN backend_status TEXT',
           );
         }
       },
@@ -107,14 +131,10 @@ class LocalStore {
 
   Future<void> saveSetting(String key, Object? value) async {
     final Database db = await database;
-    await db.insert(
-      'settings',
-      <String, Object?>{
-        'key': key,
-        'value': value == null ? null : jsonEncode(value),
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('settings', <String, Object?>{
+      'key': key,
+      'value': value == null ? null : jsonEncode(value),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<T?> loadSetting<T>(String key) async {
