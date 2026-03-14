@@ -8,9 +8,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:solana/dto.dart' show ConfirmationStatus, SignatureStatus;
 import 'package:solana/solana.dart';
 import 'package:uuid/uuid.dart';
+import 'package:web3dart/web3dart.dart' show EthPrivateKey, TransactionReceipt;
 
 import '../models/app_models.dart';
 import '../services/ble_transport_service.dart';
+import '../services/ethereum_service.dart';
 import '../services/hotspot_transport_service.dart';
 import '../services/local_store.dart';
 import '../services/solana_service.dart';
@@ -20,7 +22,9 @@ import '../services/wallet_service.dart';
 const double minimumFundingSol = 0.05;
 const int solFeeHeadroomLamports = 10000;
 const Duration blockhashFreshnessWindow = Duration(seconds: 75);
+const Duration ethereumContextFreshnessWindow = Duration(minutes: 5);
 const String defaultRpcEndpoint = 'https://api.devnet.solana.com';
+const String defaultEthereumRpcEndpoint = 'https://rpc.sepolia.dev';
 
 class BitsendAppState extends ChangeNotifier {
   BitsendAppState({
@@ -31,6 +35,7 @@ class BitsendAppState extends ChangeNotifier {
     Connectivity? connectivity,
     NetworkInfo? networkInfo,
     SolanaService? solanaService,
+    EthereumService? ethereumService,
     Uuid? uuid,
     DateTime Function()? clock,
   }) : _store = store ?? LocalStore(),
@@ -40,6 +45,8 @@ class BitsendAppState extends ChangeNotifier {
        _connectivity = connectivity ?? Connectivity(),
        _networkInfo = networkInfo ?? NetworkInfo(),
        _solanaService = solanaService ?? SolanaService(rpcEndpoint: defaultRpcEndpoint),
+       _ethereumService =
+           ethereumService ?? EthereumService(rpcEndpoint: defaultEthereumRpcEndpoint),
        _uuid = uuid ?? const Uuid(),
        _clock = clock ?? DateTime.now;
 
@@ -50,6 +57,7 @@ class BitsendAppState extends ChangeNotifier {
   final Connectivity _connectivity;
   final NetworkInfo _networkInfo;
   final SolanaService _solanaService;
+  final EthereumService _ethereumService;
   final Uuid _uuid;
   final DateTime Function() _clock;
 
@@ -65,11 +73,22 @@ class BitsendAppState extends ChangeNotifier {
   String? _statusMessage;
   String? _announcementMessage;
   String? _localIp;
+  ChainKind _activeChain = ChainKind.solana;
   WalletProfile? _wallet;
   WalletProfile? _offlineWallet;
+  final Map<ChainKind, WalletProfile?> _wallets = <ChainKind, WalletProfile?>{};
+  final Map<ChainKind, WalletProfile?> _offlineWallets =
+      <ChainKind, WalletProfile?>{};
   CachedBlockhash? _cachedBlockhash;
+  EthereumPreparedContext? _cachedEthereumContext;
   int _mainBalanceLamports = 0;
   int _offlineBalanceLamports = 0;
+  final Map<ChainKind, int> _mainBalances = <ChainKind, int>{};
+  final Map<ChainKind, int> _offlineBalances = <ChainKind, int>{};
+  final Map<ChainKind, String> _rpcEndpoints = <ChainKind, String>{
+    ChainKind.solana: defaultRpcEndpoint,
+    ChainKind.ethereum: defaultEthereumRpcEndpoint,
+  };
   String _rpcEndpoint = defaultRpcEndpoint;
   SendDraft _sendDraft = const SendDraft();
   TransportKind _receiveTransport = TransportKind.hotspot;
@@ -83,6 +102,7 @@ class BitsendAppState extends ChangeNotifier {
   bool get initializing => _initializing;
   bool get working => _working;
   String? get statusMessage => _statusMessage;
+  ChainKind get activeChain => _activeChain;
   WalletProfile? get wallet => _wallet;
   WalletProfile? get offlineWallet => _offlineWallet;
   bool get hasWallet => _wallet != null;
@@ -91,14 +111,16 @@ class BitsendAppState extends ChangeNotifier {
   bool get hasLocalLink => _hasLocalLink;
   bool get hasDevnet => _hasDevnet;
   bool get localPermissionsGranted => _localPermissionsGranted;
-  bool get hasOfflineReadyBlockhash =>
-      _cachedBlockhash != null && !_isCachedBlockhashExpired;
-  bool get hasEnoughFunding => mainBalanceSol >= minimumFundingSol;
+  bool get hasOfflineReadyBlockhash => _activeChain == ChainKind.solana
+      ? _cachedBlockhash != null && !_isCachedBlockhashExpired
+      : _cachedEthereumContext != null && !_isCachedEthereumContextExpired;
+  bool get hasEnoughFunding => mainBalanceSol >= _activeChain.minimumFundingAmount;
   bool get hasOfflineFunds => offlineSpendableLamports > 0;
-  double get mainBalanceSol => _mainBalanceLamports / lamportsPerSol;
-  double get offlineBalanceSol => _offlineBalanceLamports / lamportsPerSol;
+  double get mainBalanceSol => _activeChain.amountFromBaseUnits(_mainBalanceLamports);
+  double get offlineBalanceSol =>
+      _activeChain.amountFromBaseUnits(_offlineBalanceLamports);
   double get offlineSpendableBalanceSol =>
-      offlineSpendableLamports / lamportsPerSol;
+      _activeChain.amountFromBaseUnits(offlineSpendableLamports);
   String get rpcEndpoint => _rpcEndpoint;
   String? get localIp => _localIp;
   String? get localEndpoint => _localIp == null
@@ -126,6 +148,7 @@ class BitsendAppState extends ChangeNotifier {
   int get reservedOfflineLamports => _pendingTransfers
       .where((PendingTransfer transfer) {
         return transfer.senderAddress == _offlineWallet?.address &&
+            transfer.chain == _activeChain &&
             transfer.reservesOfflineFunds;
       })
       .fold<int>(
@@ -140,14 +163,19 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   WalletSummary get walletSummary => WalletSummary(
+    chain: _activeChain,
     balanceSol: mainBalanceSol,
     offlineBalanceSol: offlineBalanceSol,
     offlineAvailableSol: offlineSpendableBalanceSol,
     offlineWalletAddress: _offlineWallet?.address,
     readyForOffline: hasOfflineReadyBlockhash,
-    blockhashAge: _cachedBlockhash == null
-        ? null
-        : _clock().difference(_cachedBlockhash!.fetchedAt),
+    blockhashAge: _activeChain == ChainKind.solana
+        ? (_cachedBlockhash == null
+              ? null
+              : _clock().difference(_cachedBlockhash!.fetchedAt))
+        : (_cachedEthereumContext == null
+              ? null
+              : _clock().difference(_cachedEthereumContext!.fetchedAt)),
     localEndpoint: localEndpoint,
   );
 
@@ -182,16 +210,34 @@ class BitsendAppState extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _rpcEndpoint =
-          await _walletService.loadRpcEndpoint() ?? defaultRpcEndpoint;
-      _solanaService.rpcEndpoint = _rpcEndpoint;
-      _wallet = await _walletService.loadWallet();
-      _offlineWallet = await _walletService.loadOfflineWallet();
+      _rpcEndpoints[ChainKind.solana] =
+          await _walletService.loadRpcEndpoint(chain: ChainKind.solana) ??
+          defaultRpcEndpoint;
+      _rpcEndpoints[ChainKind.ethereum] =
+          await _walletService.loadRpcEndpoint(chain: ChainKind.ethereum) ??
+          defaultEthereumRpcEndpoint;
+      _solanaService.rpcEndpoint = _rpcEndpoints[ChainKind.solana]!;
+      _ethereumService.rpcEndpoint = _rpcEndpoints[ChainKind.ethereum]!;
+      final String? savedChainName = await _store.loadSetting<String>(
+        'active_chain',
+      );
+      _activeChain = savedChainName == null
+          ? ChainKind.solana
+          : ChainKind.values.byName(savedChainName);
+      await _reloadWalletProfiles();
+      _applyActiveChainSnapshot();
 
       final Map<String, dynamic>? cachedBlockhashJson = await _store
           .loadSetting<Map<String, dynamic>>('cached_blockhash');
       if (cachedBlockhashJson != null) {
         _cachedBlockhash = CachedBlockhash.fromJson(cachedBlockhashJson);
+      }
+      final Map<String, dynamic>? cachedEthereumContextJson = await _store
+          .loadSetting<Map<String, dynamic>>('cached_eth_context');
+      if (cachedEthereumContextJson != null) {
+        _cachedEthereumContext = EthereumPreparedContext.fromJson(
+          cachedEthereumContextJson,
+        );
       }
 
       _pendingTransfers = await _store.loadTransfers();
@@ -224,15 +270,64 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   Future<void> createWallet() async {
-    _wallet = await _walletService.createWallet();
-    _offlineWallet = await _walletService.loadOfflineWallet();
+    await _walletService.createWallet();
+    await _reloadWalletProfiles();
+    _applyActiveChainSnapshot();
     notifyListeners();
   }
 
   Future<void> restoreWallet(String seedPhrase) async {
-    _wallet = await _walletService.restoreWallet(seedPhrase);
-    _offlineWallet = await _walletService.loadOfflineWallet();
+    await _walletService.restoreWallet(seedPhrase);
+    await _reloadWalletProfiles();
+    _applyActiveChainSnapshot();
     notifyListeners();
+  }
+
+  Future<void> setActiveChain(ChainKind chain) async {
+    if (_activeChain == chain) {
+      return;
+    }
+    if (listenerRunning) {
+      await _hotspotTransportService.stop();
+      await _bleTransportService.stop();
+    }
+    _activeChain = chain;
+    _bleReceivers = <ReceiverDiscoveryItem>[];
+    _sendDraft = _sendDraft.copyWith(
+      chain: chain,
+      amountSol: 0,
+      clearReceiver: true,
+    );
+    _applyActiveChainSnapshot();
+    await _store.saveSetting('active_chain', chain.name);
+    await _refreshConnectivityState();
+    if (_wallet != null) {
+      await refreshWalletData();
+    } else {
+      notifyListeners();
+    }
+  }
+
+  Future<void> _reloadWalletProfiles() async {
+    for (final ChainKind chain in ChainKind.values) {
+      _wallets[chain] = await _walletService.loadWallet(chain: chain);
+      _offlineWallets[chain] = await _walletService.loadOfflineWallet(
+        chain: chain,
+      );
+    }
+  }
+
+  void _applyActiveChainSnapshot() {
+    _wallet = _wallets[_activeChain];
+    _offlineWallet = _offlineWallets[_activeChain];
+    _mainBalanceLamports = _mainBalances[_activeChain] ?? 0;
+    _offlineBalanceLamports = _offlineBalances[_activeChain] ?? 0;
+    _rpcEndpoint = _rpcEndpoints[_activeChain]!;
+    if (_activeChain == ChainKind.solana) {
+      _solanaService.rpcEndpoint = _rpcEndpoint;
+    } else {
+      _ethereumService.rpcEndpoint = _rpcEndpoint;
+    }
   }
 
   Future<WalletBackupExport> exportWalletBackup() {
@@ -248,19 +343,32 @@ class BitsendAppState extends ChangeNotifier {
     }
 
     try {
-      _mainBalanceLamports = await _solanaService.getBalanceLamports(
-        _wallet!.address,
-      );
-      _offlineBalanceLamports = _offlineWallet == null
-          ? 0
-          : await _solanaService.getBalanceLamports(_offlineWallet!.address);
+      if (_activeChain == ChainKind.solana) {
+        _mainBalanceLamports = await _solanaService.getBalanceLamports(
+          _wallet!.address,
+        );
+        _offlineBalanceLamports = _offlineWallet == null
+            ? 0
+            : await _solanaService.getBalanceLamports(_offlineWallet!.address);
+      } else {
+        _mainBalanceLamports = await _ethereumService.getBalanceBaseUnits(
+          _wallet!.address,
+        );
+        _offlineBalanceLamports = _offlineWallet == null
+            ? 0
+            : await _ethereumService.getBalanceBaseUnits(_offlineWallet!.address);
+      }
+      _mainBalances[_activeChain] = _mainBalanceLamports;
+      _offlineBalances[_activeChain] = _offlineBalanceLamports;
       _hasDevnet = true;
       _hasInternet = true;
       _statusMessage = null;
-      try {
-        await _syncCachedBlockhashValidity();
-      } catch (_) {
-        await _clearCachedBlockhash();
+      if (_activeChain == ChainKind.solana) {
+        try {
+          await _syncCachedBlockhashValidity();
+        } catch (_) {
+          await _clearCachedBlockhash();
+        }
       }
     } catch (error) {
       _hasDevnet = false;
@@ -271,6 +379,11 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   Future<void> requestAirdrop({bool toOfflineWallet = false}) async {
+    if (_activeChain != ChainKind.solana) {
+      throw const FormatException(
+        'Ethereum faucet support is not built into the app yet. Use a Sepolia faucet and then refresh the balance.',
+      );
+    }
     final WalletProfile? targetWallet = toOfflineWallet
         ? _offlineWallet
         : _wallet;
@@ -279,8 +392,8 @@ class BitsendAppState extends ChangeNotifier {
     }
     await _runTask(
       toOfflineWallet
-          ? 'Requesting offline wallet devnet airdrop...'
-          : 'Requesting devnet airdrop...',
+          ? 'Requesting Solana devnet airdrop for the offline wallet...'
+          : 'Requesting Solana devnet airdrop...',
       () async {
         await _refreshConnectivityState();
         try {
@@ -308,11 +421,19 @@ class BitsendAppState extends ChangeNotifier {
       }
       await _refreshConnectivityState();
       if (!_hasInternet) {
-        throw const SocketException(
-          'Internet is required to fetch a fresh blockhash.',
+        throw SocketException(
+          _activeChain == ChainKind.solana
+              ? 'Internet is required to fetch a fresh blockhash.'
+              : 'Internet is required to fetch a fresh Ethereum nonce and gas quote.',
         );
       }
-      await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+      if (_activeChain == ChainKind.solana) {
+        await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+      } else {
+        await _updateCachedEthereumContext(
+          await _ethereumService.prepareTransferContext(_offlineWallet!.address),
+        );
+      }
       await refreshWalletData();
     });
   }
@@ -329,24 +450,43 @@ class BitsendAppState extends ChangeNotifier {
         );
       }
 
-      final int lamports = (amountSol * lamportsPerSol).round();
+      final int lamports = _activeChain.amountToBaseUnits(amountSol);
       if (lamports <= 0) {
         throw const FormatException('Enter an amount greater than zero.');
       }
-      if (lamports + solFeeHeadroomLamports > _mainBalanceLamports) {
+      final int feeHeadroom = _activeChain == ChainKind.solana
+          ? solFeeHeadroomLamports
+          : _estimatedEthereumFeeHeadroom();
+      if (lamports + feeHeadroom > _mainBalanceLamports) {
         throw const FormatException(
           'Main wallet balance is too low for that top up amount plus network fees.',
         );
       }
 
-      final Ed25519HDKeyPair sender = await _walletService.loadSigningKeyPair();
-      final String signature = await _solanaService.sendTransferNow(
-        sender: sender,
-        receiverAddress: _offlineWallet!.address,
-        lamports: lamports,
-      );
-      await _solanaService.waitForConfirmation(signature);
-      await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+      if (_activeChain == ChainKind.solana) {
+        final Ed25519HDKeyPair sender = await _walletService
+            .loadSigningKeyPair();
+        final String signature = await _solanaService.sendTransferNow(
+          sender: sender,
+          receiverAddress: _offlineWallet!.address,
+          lamports: lamports,
+        );
+        await _solanaService.waitForConfirmation(signature);
+        await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+      } else {
+        final EthPrivateKey sender = await _walletService
+            .loadEthereumSigningCredentials();
+        final String signature = await _ethereumService.sendTransferNow(
+          sender: sender,
+          senderAddress: _wallet!.address,
+          receiverAddress: _offlineWallet!.address,
+          amountBaseUnits: lamports,
+        );
+        await _ethereumService.waitForConfirmation(signature);
+        await _updateCachedEthereumContext(
+          await _ethereumService.prepareTransferContext(_offlineWallet!.address),
+        );
+      }
       await refreshWalletData();
     });
   }
@@ -377,8 +517,13 @@ class BitsendAppState extends ChangeNotifier {
     }
 
     _rpcEndpoint = endpoint;
-    _solanaService.rpcEndpoint = endpoint;
-    await _walletService.saveRpcEndpoint(endpoint);
+    _rpcEndpoints[_activeChain] = endpoint;
+    if (_activeChain == ChainKind.solana) {
+      _solanaService.rpcEndpoint = endpoint;
+    } else {
+      _ethereumService.rpcEndpoint = endpoint;
+    }
+    await _walletService.saveRpcEndpoint(endpoint, chain: _activeChain);
     await refreshWalletData();
     notifyListeners();
   }
@@ -399,7 +544,11 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   void setSendTransport(TransportKind kind) {
-    _sendDraft = _sendDraft.copyWith(transport: kind, clearReceiver: true);
+    _sendDraft = _sendDraft.copyWith(
+      chain: _activeChain,
+      transport: kind,
+      clearReceiver: true,
+    );
     notifyListeners();
   }
 
@@ -414,7 +563,7 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   void clearDraft() {
-    _sendDraft = const SendDraft();
+    _sendDraft = SendDraft(chain: _activeChain);
     notifyListeners();
   }
 
@@ -468,44 +617,75 @@ class BitsendAppState extends ChangeNotifier {
         _sendDraft.receiverPeripheralId.isEmpty) {
       throw const FormatException('Select a BLE receiver before sending.');
     }
-    if (!isValidAddress(_sendDraft.receiverAddress)) {
-      throw const FormatException(
-        'Receiver address is not a valid Solana address.',
+    if (!_isValidAddressForChain(_sendDraft.receiverAddress, _activeChain)) {
+      throw FormatException(
+        _activeChain == ChainKind.solana
+            ? 'Receiver address is not a valid Solana address.'
+            : 'Receiver address is not a valid Ethereum address.',
       );
     }
-    final int lamports = (_sendDraft.amountSol * 1000000000).round();
+    final int lamports = _activeChain.amountToBaseUnits(_sendDraft.amountSol);
     if (lamports <= 0) {
       throw const FormatException('Enter an amount greater than zero.');
     }
-    if (lamports > offlineSpendableLamports) {
+    final int feeHeadroom = _activeChain == ChainKind.solana
+        ? solFeeHeadroomLamports
+        : _estimatedEthereumFeeHeadroom();
+    if (lamports + feeHeadroom > offlineSpendableLamports) {
       throw const FormatException(
-        'Amount exceeds the available offline wallet balance.',
+        'Amount exceeds the available offline wallet balance after network fees.',
       );
     }
 
-    final Ed25519HDKeyPair sender = await _walletService
-        .loadOfflineSigningKeyPair();
     await _refreshConnectivityState();
-    if (_hasInternet) {
-      await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+    if (_activeChain == ChainKind.solana) {
+      if (_hasInternet) {
+        await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+      } else {
+        await _ensureFreshCachedBlockhash();
+      }
     } else {
-      await _ensureFreshCachedBlockhash();
+      if (_hasInternet) {
+        await _updateCachedEthereumContext(
+          await _ethereumService.prepareTransferContext(_offlineWallet!.address),
+        );
+      } else {
+        await _ensureFreshEthereumContext();
+      }
     }
 
     final String transferId = _uuid.v4();
     final DateTime createdAt = _clock();
-    final OfflineEnvelope envelope = await _solanaService.createSignedEnvelope(
-      sender: sender,
-      receiverAddress: _sendDraft.receiverAddress,
-      lamports: lamports,
-      cachedBlockhash: _cachedBlockhash!,
-      transferId: transferId,
-      createdAt: createdAt,
-      transportKind: _sendDraft.transport,
-    );
-    final ValidatedTransactionDetails details = _solanaService.validateEnvelope(
-      envelope,
-    );
+    final OfflineEnvelope envelope;
+    final ValidatedTransactionDetails details;
+    if (_activeChain == ChainKind.solana) {
+      final Ed25519HDKeyPair sender = await _walletService
+          .loadOfflineSigningKeyPair();
+      envelope = await _solanaService.createSignedEnvelope(
+        sender: sender,
+        receiverAddress: _sendDraft.receiverAddress,
+        lamports: lamports,
+        cachedBlockhash: _cachedBlockhash!,
+        transferId: transferId,
+        createdAt: createdAt,
+        transportKind: _sendDraft.transport,
+      );
+      details = _solanaService.validateEnvelope(envelope);
+    } else {
+      final EthPrivateKey sender = await _walletService
+          .loadEthereumOfflineSigningCredentials();
+      envelope = await _ethereumService.createSignedEnvelope(
+        sender: sender,
+        senderAddress: _offlineWallet!.address,
+        receiverAddress: _sendDraft.receiverAddress,
+        amountBaseUnits: lamports,
+        preparedContext: _cachedEthereumContext!,
+        transferId: transferId,
+        createdAt: createdAt,
+        transportKind: _sendDraft.transport,
+      );
+      details = _ethereumService.validateEnvelope(envelope);
+    }
 
     if (_sendDraft.transport == TransportKind.hotspot) {
       final Uri endpoint = Uri.parse(_sendDraft.receiverEndpoint);
@@ -522,6 +702,7 @@ class BitsendAppState extends ChangeNotifier {
 
     final PendingTransfer transfer = PendingTransfer(
       transferId: transferId,
+      chain: _activeChain,
       direction: TransferDirection.outbound,
       status: TransferStatus.sentOffline,
       amountLamports: lamports,
@@ -562,6 +743,7 @@ class BitsendAppState extends ChangeNotifier {
       await _hotspotTransportService.stop();
       await _bleTransportService.start(
         onEnvelope: _handleIncomingEnvelope,
+        receiverChain: _activeChain,
         receiverDisplayAddress: _wallet!.displayAddress,
         receiverAddress: _wallet!.address,
       );
@@ -611,48 +793,81 @@ class BitsendAppState extends ChangeNotifier {
 
     bool shouldRefreshBalances = false;
     for (final PendingTransfer transfer in submitted) {
-      final SignatureStatus? status = await _solanaService.getSignatureStatus(
-        transfer.transactionSignature!,
-      );
-      if (status == null) {
+      if (transfer.chain == ChainKind.solana) {
+        final SignatureStatus? status = await _solanaService.getSignatureStatus(
+          transfer.transactionSignature!,
+        );
+        if (status == null) {
+          continue;
+        }
+        if (status.err != null) {
+          await _persistTransfer(
+            transfer.copyWith(
+              status: TransferStatus.broadcastFailed,
+              updatedAt: _clock(),
+              lastError: status.err.toString(),
+            ),
+          );
+          continue;
+        }
+        final TransferStatus? nextStatus = _nextStatusForSignature(status);
+        if (nextStatus == null) {
+          continue;
+        }
+        if (nextStatus == TransferStatus.broadcastSubmitted &&
+            transfer.status != TransferStatus.broadcastSubmitted) {
+          await _persistTransfer(
+            transfer.copyWith(
+              status: nextStatus,
+              updatedAt: _clock(),
+              explorerUrl: _solanaService
+                  .explorerUrlFor(transfer.transactionSignature!)
+                  .toString(),
+              clearLastError: true,
+            ),
+          );
+          continue;
+        }
+        if (nextStatus == TransferStatus.confirmed &&
+            transfer.status != TransferStatus.confirmed) {
+          shouldRefreshBalances = true;
+          await _persistTransfer(
+            transfer.copyWith(
+              status: nextStatus,
+              updatedAt: _clock(),
+              explorerUrl: _solanaService
+                  .explorerUrlFor(transfer.transactionSignature!)
+                  .toString(),
+              confirmedAt: _clock(),
+              clearLastError: true,
+            ),
+          );
+        }
         continue;
       }
-      if (status.err != null) {
+
+      final TransactionReceipt? receipt = await _ethereumService
+          .getTransactionReceipt(transfer.transactionSignature!);
+      if (receipt == null) {
+        continue;
+      }
+      if (receipt.status == false) {
         await _persistTransfer(
           transfer.copyWith(
             status: TransferStatus.broadcastFailed,
             updatedAt: _clock(),
-            lastError: status.err.toString(),
+            lastError: 'Ethereum rejected the signed transfer during settlement.',
           ),
         );
         continue;
       }
-      final TransferStatus? nextStatus = _nextStatusForSignature(status);
-      if (nextStatus == null) {
-        continue;
-      }
-      if (nextStatus == TransferStatus.broadcastSubmitted &&
-          transfer.status != TransferStatus.broadcastSubmitted) {
-        await _persistTransfer(
-          transfer.copyWith(
-            status: nextStatus,
-            updatedAt: _clock(),
-            explorerUrl: _solanaService
-                .explorerUrlFor(transfer.transactionSignature!)
-                .toString(),
-            clearLastError: true,
-          ),
-        );
-        continue;
-      }
-      if (nextStatus == TransferStatus.confirmed &&
-          transfer.status != TransferStatus.confirmed) {
+      if (transfer.status != TransferStatus.confirmed) {
         shouldRefreshBalances = true;
         await _persistTransfer(
           transfer.copyWith(
-            status: nextStatus,
+            status: TransferStatus.confirmed,
             updatedAt: _clock(),
-            explorerUrl: _solanaService
+            explorerUrl: _ethereumService
                 .explorerUrlFor(transfer.transactionSignature!)
                 .toString(),
             confirmedAt: _clock(),
@@ -669,7 +884,10 @@ class BitsendAppState extends ChangeNotifier {
 
   List<PendingTransfer> transfersFor(TransferDirection direction) {
     return pendingTransfers
-        .where((PendingTransfer transfer) => transfer.direction == direction)
+        .where(
+          (PendingTransfer transfer) =>
+              transfer.direction == direction && transfer.chain == _activeChain,
+        )
         .toList(growable: false);
   }
 
@@ -679,7 +897,7 @@ class BitsendAppState extends ChangeNotifier {
         .map(
           (PendingTransfer transfer) => PendingTransferListItem(
             transferId: transfer.transferId,
-            amountLabel: Formatters.sol(transfer.amountSol),
+            amountLabel: Formatters.asset(transfer.amountSol, transfer.chain),
             counterpartyLabel: Formatters.shortAddress(
               transfer.counterpartyAddress,
             ),
@@ -692,7 +910,10 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   List<PendingTransfer> recentActivity() =>
-      pendingTransfers.take(3).toList(growable: false);
+      pendingTransfers
+          .where((PendingTransfer transfer) => transfer.chain == _activeChain)
+          .take(3)
+          .toList(growable: false);
 
   PendingTransfer? transferById(String transferId) {
     for (final PendingTransfer transfer in _pendingTransfers) {
@@ -719,7 +940,7 @@ class BitsendAppState extends ChangeNotifier {
       const _TimelineNode(
         title: 'Broadcasting',
         caption:
-            'Either device can later submit the signed transaction to Solana devnet.',
+            'Either device can later submit the signed transaction to the chain RPC.',
       ),
       const _TimelineNode(
         title: 'Submitted',
@@ -765,13 +986,22 @@ class BitsendAppState extends ChangeNotifier {
     await _bleTransportService.stop();
     await _walletService.clearAll();
     await _store.clearAll();
+    _rpcEndpoints[ChainKind.solana] = defaultRpcEndpoint;
+    _rpcEndpoints[ChainKind.ethereum] = defaultEthereumRpcEndpoint;
     _rpcEndpoint = defaultRpcEndpoint;
     _solanaService.rpcEndpoint = defaultRpcEndpoint;
+    _ethereumService.rpcEndpoint = defaultEthereumRpcEndpoint;
+    _activeChain = ChainKind.solana;
     _wallet = null;
     _offlineWallet = null;
+    _wallets.clear();
+    _offlineWallets.clear();
     _cachedBlockhash = null;
+    _cachedEthereumContext = null;
     _mainBalanceLamports = 0;
     _offlineBalanceLamports = 0;
+    _mainBalances.clear();
+    _offlineBalances.clear();
     _sendDraft = const SendDraft();
     _receiveTransport = TransportKind.hotspot;
     _pendingTransfers = <PendingTransfer>[];
@@ -801,14 +1031,21 @@ class BitsendAppState extends ChangeNotifier {
   Future<TransportReceiveResult> _handleIncomingEnvelope(
     OfflineEnvelope envelope,
   ) async {
-    final ValidatedTransactionDetails details = _solanaService.validateEnvelope(
-      envelope,
-    );
+    final ValidatedTransactionDetails details = envelope.chain == ChainKind.solana
+        ? _solanaService.validateEnvelope(envelope)
+        : _ethereumService.validateEnvelope(envelope);
 
     if (_wallet == null) {
       return const TransportReceiveResult(
         accepted: false,
         message: 'Receiver wallet is not initialized.',
+      );
+    }
+    if (envelope.chain != _activeChain) {
+      return TransportReceiveResult(
+        accepted: false,
+        message:
+            'Receiver is listening on ${_activeChain.label}, but this transfer is for ${envelope.chain.label}.',
       );
     }
     if (details.receiverAddress != _wallet!.address) {
@@ -829,6 +1066,7 @@ class BitsendAppState extends ChangeNotifier {
 
     final PendingTransfer transfer = PendingTransfer(
       transferId: envelope.transferId,
+      chain: envelope.chain,
       direction: TransferDirection.inbound,
       status: TransferStatus.receivedPendingBroadcast,
       amountLamports: envelope.amountLamports,
@@ -866,15 +1104,22 @@ class BitsendAppState extends ChangeNotifier {
     );
 
     try {
-      final String signature = await _solanaService.broadcastSignedTransaction(
-        transfer.envelope.signedTransactionBase64,
-      );
+      final String signature = transfer.chain == ChainKind.solana
+          ? await _solanaService.broadcastSignedTransaction(
+              transfer.envelope.signedTransactionBase64,
+            )
+          : await _ethereumService.broadcastSignedTransaction(
+              transfer.envelope.signedTransactionBase64,
+            );
       await _persistTransfer(
         transfer.copyWith(
           status: TransferStatus.broadcastSubmitted,
           updatedAt: _clock(),
           transactionSignature: signature,
-          explorerUrl: _solanaService.explorerUrlFor(signature).toString(),
+          explorerUrl: (transfer.chain == ChainKind.solana
+                  ? _solanaService.explorerUrlFor(signature)
+                  : _ethereumService.explorerUrlFor(signature))
+              .toString(),
         ),
       );
       unawaited(_refreshSubmittedTransfersSoon());
@@ -910,7 +1155,9 @@ class BitsendAppState extends ChangeNotifier {
     final bool hasTransport = !results.contains(ConnectivityResult.none);
     if (hasTransport) {
       try {
-        _hasDevnet = await _solanaService.isDevnetReachable();
+        _hasDevnet = _activeChain == ChainKind.solana
+            ? await _solanaService.isDevnetReachable()
+            : await _ethereumService.isReachable();
       } catch (_) {
         _hasDevnet = false;
       }
@@ -949,7 +1196,18 @@ class BitsendAppState extends ChangeNotifier {
         blockhashFreshnessWindow;
   }
 
+  bool get _isCachedEthereumContextExpired {
+    if (_cachedEthereumContext == null) {
+      return true;
+    }
+    return _clock().difference(_cachedEthereumContext!.fetchedAt) >
+        ethereumContextFreshnessWindow;
+  }
+
   Future<void> _ensureFreshCachedBlockhash() async {
+    if (_activeChain != ChainKind.solana) {
+      return _ensureFreshEthereumContext();
+    }
     if (_cachedBlockhash == null || _isCachedBlockhashExpired) {
       try {
         await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
@@ -978,6 +1236,19 @@ class BitsendAppState extends ChangeNotifier {
     }
   }
 
+  Future<void> _ensureFreshEthereumContext() async {
+    if (_cachedEthereumContext == null || _isCachedEthereumContextExpired) {
+      if (!_hasInternet || _offlineWallet == null) {
+        throw const FormatException(
+          'Refresh offline send readiness while online before sending from the offline wallet.',
+        );
+      }
+      await _updateCachedEthereumContext(
+        await _ethereumService.prepareTransferContext(_offlineWallet!.address),
+      );
+    }
+  }
+
   Future<void> _syncCachedBlockhashValidity() async {
     if (_cachedBlockhash == null || !_hasDevnet) {
       return;
@@ -999,6 +1270,18 @@ class BitsendAppState extends ChangeNotifier {
   Future<void> _clearCachedBlockhash() async {
     _cachedBlockhash = null;
     await _store.saveSetting('cached_blockhash', null);
+  }
+
+  Future<void> _updateCachedEthereumContext(
+    EthereumPreparedContext context,
+  ) async {
+    _cachedEthereumContext = context;
+    await _store.saveSetting('cached_eth_context', context.toJson());
+  }
+
+  Future<void> _clearCachedEthereumContext() async {
+    _cachedEthereumContext = null;
+    await _store.saveSetting('cached_eth_context', null);
   }
 
   Future<void> _refreshSubmittedTransfersSoon() async {
@@ -1030,6 +1313,36 @@ class BitsendAppState extends ChangeNotifier {
     final String? signature = transfer.transactionSignature;
     if (signature == null) {
       return false;
+    }
+
+    if (transfer.chain == ChainKind.ethereum) {
+      final TransactionReceipt? receipt = await _ethereumService
+          .getTransactionReceipt(signature);
+      if (receipt == null) {
+        return false;
+      }
+      if (receipt.status == false) {
+        await _persistTransfer(
+          transfer.copyWith(
+            status: TransferStatus.broadcastFailed,
+            updatedAt: _clock(),
+            lastError:
+                'Ethereum rejected the signed transfer during settlement.',
+          ),
+        );
+        return true;
+      }
+      await _persistTransfer(
+        transfer.copyWith(
+          status: TransferStatus.confirmed,
+          updatedAt: _clock(),
+          transactionSignature: signature,
+          explorerUrl: _ethereumService.explorerUrlFor(signature).toString(),
+          confirmedAt: _clock(),
+          clearLastError: true,
+        ),
+      );
+      return true;
     }
 
     final SignatureStatus? status = await _solanaService.getSignatureStatus(
@@ -1075,6 +1388,21 @@ class BitsendAppState extends ChangeNotifier {
         normalized.contains('block height exceeded') ||
         normalized.contains('transaction expired') ||
         normalized.contains('signature has expired');
+  }
+
+  bool _isValidAddressForChain(String address, ChainKind chain) {
+    final String normalized = address.trim();
+    return chain == ChainKind.solana
+        ? isValidAddress(normalized)
+        : _ethereumService.isValidAddress(normalized);
+  }
+
+  int _estimatedEthereumFeeHeadroom() {
+    final EthereumPreparedContext? context = _cachedEthereumContext;
+    if (context == null) {
+      return ChainKind.ethereum.fallbackFeeHeadroomBaseUnits;
+    }
+    return context.gasPriceWei * EthereumService.transferGasLimit;
   }
 
   String _cleanErrorMessage(Object error) {

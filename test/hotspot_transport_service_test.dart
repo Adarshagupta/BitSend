@@ -83,6 +83,7 @@ OfflineEnvelope _sampleEnvelope() {
   return OfflineEnvelope.create(
     transferId: 'hotspot-test-transfer',
     createdAt: createdAt,
+    chain: ChainKind.solana,
     senderAddress: 'Sender1111111111111111111111111111111111',
     receiverAddress: 'Receiver11111111111111111111111111111111',
     amountLamports: 250000000,

@@ -43,6 +43,7 @@ void main() {
       hasOfflineFundsValue: false,
       hasOfflineReadyBlockhashValue: false,
       walletSummaryValue: const WalletSummary(
+        chain: ChainKind.solana,
         balanceSol: 1.2,
         offlineBalanceSol: 0,
         offlineAvailableSol: 0,
@@ -321,6 +322,7 @@ void main() {
 }
 
 const WalletProfile _wallet = WalletProfile(
+  chain: ChainKind.solana,
   address: '6g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1R',
   displayAddress: '6g7h...Qk1R',
   seedPhrase: 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
@@ -328,6 +330,7 @@ const WalletProfile _wallet = WalletProfile(
 );
 
 const WalletProfile _offlineWallet = WalletProfile(
+  chain: ChainKind.solana,
   address: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
   displayAddress: '5g7h...Qk1Z',
   seedPhrase: 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
@@ -346,6 +349,7 @@ PendingTransfer _transfer({
   final OfflineEnvelope envelope = OfflineEnvelope.create(
     transferId: transferId,
     createdAt: now,
+    chain: ChainKind.solana,
     senderAddress: senderAddress,
     receiverAddress: receiverAddress,
     amountLamports: amountLamports,
@@ -354,6 +358,7 @@ PendingTransfer _transfer({
   );
   return PendingTransfer(
     transferId: transferId,
+    chain: ChainKind.solana,
     direction: direction,
     status: status,
     amountLamports: amountLamports,
@@ -376,6 +381,7 @@ class _TestBitsendAppState extends BitsendAppState {
     this.hasOfflineFundsValue = false,
     this.hasOfflineReadyBlockhashValue = false,
     this.walletSummaryValue = const WalletSummary(
+      chain: ChainKind.solana,
       balanceSol: 0,
       offlineBalanceSol: 0,
       offlineAvailableSol: 0,

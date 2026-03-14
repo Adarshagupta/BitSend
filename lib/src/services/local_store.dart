@@ -18,11 +18,12 @@ class LocalStore {
     final dbPath = path.join(directory.path, 'bitsend.db');
     _database = await openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE pending_transfers (
             transfer_id TEXT PRIMARY KEY,
+            chain TEXT NOT NULL,
             direction TEXT NOT NULL,
             status TEXT NOT NULL,
             amount_lamports INTEGER NOT NULL,
@@ -45,6 +46,13 @@ class LocalStore {
             value TEXT
           )
         ''');
+      },
+      onUpgrade: (Database db, int oldVersion, int newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(
+            "ALTER TABLE pending_transfers ADD COLUMN chain TEXT NOT NULL DEFAULT 'solana'",
+          );
+        }
       },
     );
 

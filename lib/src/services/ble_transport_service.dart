@@ -97,6 +97,7 @@ class BleTransportService {
     required EnvelopeHandler onEnvelope,
     required String receiverDisplayAddress,
     required String receiverAddress,
+    required ChainKind receiverChain,
   }) async {
     if (_advertising) {
       return;
@@ -119,6 +120,7 @@ class BleTransportService {
           GATTCharacteristic.immutable(
             uuid: receiverInfoCharacteristicUuid,
             value: _receiverInfoBytes(
+              receiverChain: receiverChain,
               receiverAddress: receiverAddress,
               receiverDisplayAddress: receiverDisplayAddress,
             ),
@@ -462,8 +464,10 @@ class BleTransportService {
       final Map<String, dynamic> info =
           jsonDecode(utf8.decode(infoBytes)) as Map<String, dynamic>;
       final String address = (info['address'] as String? ?? '').trim();
-      final String displayAddress = (info['displayAddress'] as String? ?? '').trim();
-      if (!isValidAddress(address)) {
+      final String displayAddress = (info['displayAddress'] as String? ?? '')
+          .trim();
+      final ChainKind? chain = _parseChain(info['chain'] as String?);
+      if (!_isRecognizedAddress(address)) {
         return fallback;
       }
       int? liveRssi = fallback.rssi;
@@ -478,7 +482,10 @@ class BleTransportService {
       }
       return ReceiverDiscoveryItem(
         id: fallback.id,
-        label: displayAddress.isEmpty ? fallback.label : displayAddress,
+        label: _formatReceiverLabel(
+          displayAddress.isEmpty ? fallback.label : displayAddress,
+          chain,
+        ),
         subtitle: address,
         transport: fallback.transport,
         address: address,
@@ -641,12 +648,14 @@ class BleTransportService {
   }
 
   Uint8List _receiverInfoBytes({
+    required ChainKind receiverChain,
     required String receiverAddress,
     required String receiverDisplayAddress,
   }) {
     return Uint8List.fromList(
       utf8.encode(
         jsonEncode(<String, String>{
+          'chain': receiverChain.name,
           'address': receiverAddress,
           'displayAddress': receiverDisplayAddress,
         }),
@@ -724,6 +733,31 @@ class BleTransportService {
       return candidate;
     }
     return current;
+  }
+
+  bool _isRecognizedAddress(String address) {
+    final String normalized = address.trim();
+    return isValidAddress(normalized) ||
+        RegExp(r'^0x[a-fA-F0-9]{40}$').hasMatch(normalized);
+  }
+
+  ChainKind? _parseChain(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return null;
+    }
+    for (final ChainKind chain in ChainKind.values) {
+      if (chain.name == raw) {
+        return chain;
+      }
+    }
+    return null;
+  }
+
+  String _formatReceiverLabel(String label, ChainKind? chain) {
+    if (chain == null) {
+      return label;
+    }
+    return '$label · ${chain.shortLabel}';
   }
 
   int _compareReceivers(ReceiverDiscoveryItem a, ReceiverDiscoveryItem b) {

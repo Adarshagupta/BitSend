@@ -462,6 +462,21 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
 class FundWalletScreen extends StatelessWidget {
   const FundWalletScreen({super.key});
 
+  Future<void> _copyAddress(
+    BuildContext context,
+    BitsendAppState state,
+  ) async {
+    final String? address = state.wallet?.address;
+    if (address == null || address.isEmpty) {
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: address));
+    if (!context.mounted) {
+      return;
+    }
+    _showSnack(context, 'Address copied.');
+  }
+
   Future<void> _requestAirdrop(
     BuildContext context,
     BitsendAppState state,
@@ -497,11 +512,15 @@ class FundWalletScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
+    final ChainKind chain = state.activeChain;
     final bool funded = state.hasEnoughFunding;
+    final double minimumFunding = chain.minimumFundingAmount;
     return BitsendPageScaffold(
       title: 'Fund this wallet',
       subtitle:
-          'Add a little devnet SOL now, or skip and fund it later from Home.',
+          chain == ChainKind.solana
+              ? 'Add a little test SOL now, or skip and fund it later from Home.'
+              : 'Use a Sepolia faucet now, or skip and fund it later from Home.',
       actions: <Widget>[
         IconButton(
           onPressed: () => _refresh(context, state),
@@ -539,14 +558,16 @@ class FundWalletScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
                           Text(
-                            funded ? 'Wallet funded' : 'Needs devnet SOL',
+                            funded
+                                ? 'Wallet funded'
+                                : 'Needs ${chain.shortLabel}',
                             style: Theme.of(context).textTheme.titleLarge,
                           ),
                           const SizedBox(height: 6),
                           Text(
                             funded
                                 ? 'Setup balance is ready. You can enter the app and top up the offline wallet later.'
-                                : 'Target ${Formatters.sol(minimumFundingSol)} so setup can move forward cleanly.',
+                                : 'Target ${Formatters.asset(minimumFunding, chain)} so setup can move forward cleanly.',
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
                         ],
@@ -556,7 +577,7 @@ class FundWalletScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 20),
                 Text(
-                  Formatters.sol(state.mainBalanceSol),
+                  Formatters.asset(state.mainBalanceSol, chain),
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
                 const SizedBox(height: 6),
@@ -582,12 +603,16 @@ class FundWalletScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  'Get test SOL',
+                  chain == ChainKind.solana
+                      ? 'Get test SOL'
+                      : 'Fund on Sepolia',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Request 1 SOL from the devnet faucet, then refresh the balance.',
+                  chain == ChainKind.solana
+                      ? 'Request 1 SOL from the devnet faucet, then refresh the balance.'
+                      : 'Copy the address, use any Sepolia faucet, then refresh the balance.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 18),
@@ -597,8 +622,14 @@ class FundWalletScreen extends StatelessWidget {
                       child: ElevatedButton(
                         onPressed: state.working
                             ? null
-                            : () => _requestAirdrop(context, state),
-                        child: const Text('Airdrop 1 SOL'),
+                            : chain == ChainKind.solana
+                            ? () => _requestAirdrop(context, state)
+                            : () => _copyAddress(context, state),
+                        child: Text(
+                          chain == ChainKind.solana
+                              ? 'Airdrop 1 SOL'
+                              : 'Copy address',
+                        ),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -619,12 +650,12 @@ class FundWalletScreen extends StatelessWidget {
                   children: <Widget>[
                     _MiniCue(
                       icon: Icons.cloud_done_rounded,
-                      label: 'Devnet',
+                      label: chain == ChainKind.solana ? 'Devnet' : 'Sepolia',
                       active: state.hasDevnet,
                     ),
                     _MiniCue(
                       icon: Icons.account_balance_wallet_outlined,
-                      label: 'Min ${Formatters.sol(minimumFundingSol)}',
+                      label: 'Min ${Formatters.asset(minimumFunding, chain)}',
                       active: funded,
                     ),
                     _MiniCue(
@@ -641,8 +672,10 @@ class FundWalletScreen extends StatelessWidget {
           InlineBanner(
             title: funded ? 'Ready to continue' : 'Funding can wait',
             caption: funded
-                ? 'The wallet has enough devnet SOL for setup.'
-                : 'If the faucet is slow, skip for now and come back from Deposit or Home later.',
+                ? 'The wallet has enough ${chain.shortLabel} for setup.'
+                : chain == ChainKind.solana
+                ? 'If the faucet is slow, skip for now and come back from Deposit or Home later.'
+                : 'Skip for now, then fund from Deposit with any Sepolia faucet later.',
             icon: funded
                 ? Icons.check_circle_outline_rounded
                 : Icons.schedule_rounded,
@@ -680,10 +713,11 @@ class OnboardingPrepareScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
     final WalletSummary summary = state.walletSummary;
+    final ChainKind chain = state.activeChain;
     return BitsendPageScaffold(
       title: 'Offline wallet',
       subtitle:
-          'A second wallet is derived automatically. Top it up from Home before any offline send.',
+          'A second ${chain.shortLabel} wallet is derived automatically. Top it up from Home before any offline send.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -692,7 +726,7 @@ class OnboardingPrepareScreen extends StatelessWidget {
               children: <Widget>[
                 MetricCard(
                   label: 'Main wallet balance',
-                  value: Formatters.sol(summary.balanceSol),
+                  value: Formatters.asset(summary.balanceSol, chain),
                   caption: 'Source balance for later top-ups.',
                 ),
                 const SizedBox(height: 12),
@@ -706,7 +740,7 @@ class OnboardingPrepareScreen extends StatelessWidget {
                 const SizedBox(height: 12),
                 MetricCard(
                   label: 'Offline wallet balance',
-                  value: Formatters.sol(summary.offlineBalanceSol),
+                  value: Formatters.asset(summary.offlineBalanceSol, chain),
                   caption: 'Move funds here before any offline send.',
                 ),
                 const SizedBox(height: 12),
@@ -809,6 +843,25 @@ class HomeDashboardScreen extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
+          SegmentedButton<ChainKind>(
+            segments: const <ButtonSegment<ChainKind>>[
+              ButtonSegment<ChainKind>(
+                value: ChainKind.solana,
+                label: Text('Solana'),
+                icon: Icon(Icons.blur_circular_rounded),
+              ),
+              ButtonSegment<ChainKind>(
+                value: ChainKind.ethereum,
+                label: Text('Ethereum'),
+                icon: Icon(Icons.diamond_rounded),
+              ),
+            ],
+            selected: <ChainKind>{state.activeChain},
+            onSelectionChanged: (Set<ChainKind> value) async {
+              await state.setActiveChain(value.first);
+            },
+          ),
+          const SizedBox(height: 14),
           Wrap(
             spacing: 10,
             runSpacing: 10,
@@ -824,7 +877,9 @@ class HomeDashboardScreen extends StatelessWidget {
                 icon: Icons.wifi_tethering_rounded,
               ),
               StatusRailChip(
-                label: 'Devnet',
+                label: state.activeChain == ChainKind.solana
+                    ? 'Devnet'
+                    : 'Sepolia',
                 active: status.hasDevnet,
                 icon: Icons.cloud_done_rounded,
               ),
@@ -867,7 +922,7 @@ class HomeDashboardScreen extends StatelessWidget {
                 delay: 100,
                 child: ActionTile(
                   title: 'Deposit',
-                  caption: 'Receive SOL',
+                  caption: 'Receive ${state.activeChain.shortLabel}',
                   icon: Icons.south_west_rounded,
                   onTap: () {
                     Navigator.of(context).pushNamed(AppRoutes.deposit);
@@ -974,6 +1029,7 @@ class _DepositScreenState extends State<DepositScreen> {
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
+    final ChainKind chain = state.activeChain;
     final WalletProfile? targetWallet = _target == _DepositTarget.main
         ? state.wallet
         : state.offlineWallet;
@@ -983,12 +1039,12 @@ class _DepositScreenState extends State<DepositScreen> {
     final String? fullAddress = targetWallet?.address;
     final String shortAddress = targetWallet?.displayAddress ?? 'Unavailable';
     final String balance = _target == _DepositTarget.main
-        ? Formatters.sol(state.mainBalanceSol)
-        : Formatters.sol(state.offlineBalanceSol);
+        ? Formatters.asset(state.mainBalanceSol, chain)
+        : Formatters.asset(state.offlineBalanceSol, chain);
 
     return BitsendPageScaffold(
-      title: 'Deposit SOL',
-      subtitle: 'Pick a wallet and share the address.',
+      title: 'Deposit ${chain.shortLabel}',
+      subtitle: 'Pick a wallet and share the ${chain.shortLabel} address.',
       actions: <Widget>[
         IconButton(
           onPressed: () async {
@@ -1039,7 +1095,7 @@ class _DepositScreenState extends State<DepositScreen> {
             shortAddress: shortAddress,
             balance: balance,
             statusLabel: _target == _DepositTarget.main
-                ? 'Devnet'
+                ? (chain == ChainKind.solana ? 'Devnet' : 'Sepolia')
                 : state.hasOfflineReadyBlockhash
                 ? 'Ready'
                 : 'Needs refresh',
@@ -1082,8 +1138,12 @@ class _DepositScreenState extends State<DepositScreen> {
                       child: OutlinedButton(
                         onPressed: state.working || fullAddress == null
                             ? null
-                            : () => _requestAirdrop(state),
-                        child: const Text('Airdrop'),
+                            : chain == ChainKind.solana
+                            ? () => _requestAirdrop(state)
+                            : () => state.refreshWalletData(),
+                        child: Text(
+                          chain == ChainKind.solana ? 'Airdrop' : 'Refresh',
+                        ),
                       ),
                     ),
                   ],
@@ -1148,6 +1208,7 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
     final WalletSummary summary = state.walletSummary;
+    final ChainKind chain = state.activeChain;
     return BitsendPageScaffold(
       title: 'Offline Wallet',
       subtitle: 'Fund once. Refresh before handoff.',
@@ -1167,9 +1228,12 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           _OfflineWalletScene(
-            mainBalance: Formatters.sol(summary.balanceSol),
-            offlineBalance: Formatters.sol(summary.offlineBalanceSol),
-            spendableBalance: Formatters.sol(summary.offlineAvailableSol),
+            mainBalance: Formatters.asset(summary.balanceSol, chain),
+            offlineBalance: Formatters.asset(summary.offlineBalanceSol, chain),
+            spendableBalance: Formatters.asset(
+              summary.offlineAvailableSol,
+              chain,
+            ),
             mainAddress: state.wallet?.displayAddress ?? 'Main unavailable',
             offlineAddress: summary.offlineWalletAddress == null
                 ? 'Offline unavailable'
@@ -1184,7 +1248,10 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('Move SOL', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  'Move ${chain.shortLabel}',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 14),
                 TextField(
                   controller: _topUpController,
@@ -1194,9 +1261,9 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
                   inputFormatters: <TextInputFormatter>[
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                   ],
-                  decoration: const InputDecoration(
-                    labelText: 'Top up amount in SOL',
-                    hintText: '0.100',
+                  decoration: InputDecoration(
+                    labelText: 'Top up amount in ${chain.shortLabel}',
+                    hintText: chain == ChainKind.solana ? '0.100' : '0.010',
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -1351,6 +1418,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
     BitsendAppState state,
     ReceiverInvitePayload invite,
   ) async {
+    await state.setActiveChain(invite.chain);
     state.setSendTransport(invite.transport);
     if (invite.transport == TransportKind.hotspot) {
       state.updateReceiver(
@@ -1430,9 +1498,9 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                 const SizedBox(height: 10),
                 TextField(
                   controller: _addressController,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Receiver address',
-                    hintText: 'Receiver devnet address',
+                    hintText: state.activeChain.receiverHint,
                   ),
                 ),
                 if (transport == TransportKind.hotspot) ...<Widget>[
@@ -1501,7 +1569,10 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                                   setState(() {
                                     _selectedBleReceiverId = item.id;
                                     _selectedBleReceiverName = item.label;
-                                    if (isValidAddress(item.resolvedAddress)) {
+                                    if (_isValidAddressForChain(
+                                      item.resolvedAddress,
+                                      state.activeChain,
+                                    )) {
                                       _addressController.text =
                                           item.resolvedAddress;
                                     }
@@ -1586,8 +1657,9 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
+    final ChainKind chain = state.activeChain;
     final double amount = double.tryParse(_amountController.text.trim()) ?? 0;
-    final int lamports = (amount * 1000000000).round();
+    final int baseUnits = chain.amountToBaseUnits(amount);
     final String? readinessMessage = _sendReadinessMessage(state);
     final bool autoRefreshOnSign =
         state.hasOfflineFunds &&
@@ -1595,7 +1667,7 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
         state.hasInternet;
     return BitsendPageScaffold(
       title: 'Amount',
-      subtitle: 'Enter the amount in SOL.',
+      subtitle: 'Enter the amount in ${chain.shortLabel}.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -1612,10 +1684,11 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
               ),
             ),
           if (autoRefreshOnSign)
-            const InlineBanner(
+            InlineBanner(
               title: 'Will refresh on sign',
-              caption:
-                  'Offline funds are ready. A fresh devnet blockhash will be fetched automatically when you sign.',
+              caption: chain == ChainKind.solana
+                  ? 'Offline funds are ready. A fresh devnet blockhash will be fetched automatically when you sign.'
+                  : 'Offline funds are ready. A fresh Sepolia nonce and gas quote will be fetched automatically when you sign.',
               icon: Icons.sync_rounded,
             ),
           if (readinessMessage != null || autoRefreshOnSign)
@@ -1632,9 +1705,9 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
                   inputFormatters: <TextInputFormatter>[
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                   ],
-                  decoration: const InputDecoration(
-                    labelText: 'Amount in SOL',
-                    hintText: '0.250',
+                  decoration: InputDecoration(
+                    labelText: 'Amount in ${chain.shortLabel}',
+                    hintText: chain == ChainKind.solana ? '0.250' : '0.010',
                   ),
                   onChanged: (_) {
                     setState(() {});
@@ -1642,12 +1715,15 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
                 ),
                 const SizedBox(height: 16),
                 DetailRow(
-                  label: 'Lamports',
-                  value: Formatters.lamports(lamports),
+                  label: 'Base units',
+                  value: Formatters.baseUnits(baseUnits, chain),
                 ),
                 DetailRow(
                   label: 'Offline wallet available',
-                  value: Formatters.sol(state.offlineSpendableBalanceSol),
+                  value: Formatters.asset(
+                    state.offlineSpendableBalanceSol,
+                    chain,
+                  ),
                 ),
                 DetailRow(
                   label: 'Offline wallet',
@@ -1674,6 +1750,7 @@ class SendReviewScreen extends StatelessWidget {
     final BitsendAppState state = BitsendStateScope.of(context);
     final SendDraft draft = state.sendDraft;
     final WalletSummary summary = state.walletSummary;
+    final ChainKind chain = draft.chain;
     if (!draft.hasReceiver || !draft.hasAmount) {
       return BitsendPageScaffold(
         title: 'Review transfer',
@@ -1722,20 +1799,22 @@ class SendReviewScreen extends StatelessWidget {
                 ),
                 DetailRow(
                   label: 'Amount',
-                  value: Formatters.sol(draft.amountSol),
+                  value: Formatters.asset(draft.amountSol, chain),
                 ),
                 DetailRow(
                   label: 'Offline balance left',
-                  value: Formatters.sol(
+                  value: Formatters.asset(
                     summary.offlineAvailableSol > draft.amountSol
                         ? summary.offlineAvailableSol - draft.amountSol
                         : 0,
+                    chain,
                   ),
                 ),
                 DetailRow(
-                  label: 'Blockhash age',
+                  label: 'Readiness age',
                   value: Formatters.durationLabel(summary.blockhashAge),
                 ),
+                DetailRow(label: 'Chain', value: chain.networkLabel),
                 DetailRow(label: 'Transport', value: draft.transport.label),
               ],
             ),
@@ -2397,7 +2476,7 @@ class _TransferReceiptSurface extends StatelessWidget {
               ),
               const SizedBox(height: 24),
               Text(
-                Formatters.sol(transfer.amountSol),
+                Formatters.asset(transfer.amountSol, transfer.chain),
                 style: Theme.of(context).textTheme.displaySmall?.copyWith(
                   color: AppColors.ink,
                   fontWeight: FontWeight.w700,
@@ -2988,7 +3067,7 @@ class TransferDetailScreen extends StatelessWidget {
                 DetailRow(label: 'Receiver', value: transfer.receiverAddress),
                 DetailRow(
                   label: 'Amount',
-                  value: Formatters.sol(transfer.amountSol),
+                  value: Formatters.asset(transfer.amountSol, transfer.chain),
                 ),
                 DetailRow(
                   label: 'Created',
@@ -3245,8 +3324,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: _rpcController,
-                  decoration: const InputDecoration(
-                    hintText: 'https://api.devnet.solana.com',
+                  decoration: InputDecoration(
+                    hintText: state.activeChain == ChainKind.solana
+                        ? defaultRpcEndpoint
+                        : defaultEthereumRpcEndpoint,
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -3285,7 +3366,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const InlineBanner(
             title: 'Reset',
             caption:
-                'Clearing local data removes the wallet, queue, cached blockhash, and saved RPC settings from this device.',
+                'Clearing local data removes the wallet, queue, cached readiness data, and saved RPC settings from this device.',
             icon: Icons.delete_outline_rounded,
           ),
         ],
@@ -3894,7 +3975,7 @@ class _DashboardHero extends StatelessWidget {
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      Formatters.sol(summary.balanceSol),
+                      Formatters.asset(summary.balanceSol, summary.chain),
                       style: Theme.of(context).textTheme.displaySmall?.copyWith(
                         color: Colors.white,
                         fontSize: 36,
@@ -3910,7 +3991,10 @@ class _DashboardHero extends StatelessWidget {
                           width: statWidth,
                           child: _HeroMetric(
                             label: 'Offline',
-                            value: Formatters.sol(summary.offlineBalanceSol),
+                            value: Formatters.asset(
+                              summary.offlineBalanceSol,
+                              summary.chain,
+                            ),
                             icon: Icons.account_balance_wallet_outlined,
                           ),
                         ),
@@ -3918,7 +4002,10 @@ class _DashboardHero extends StatelessWidget {
                           width: statWidth,
                           child: _HeroMetric(
                             label: 'Spendable',
-                            value: Formatters.sol(summary.offlineAvailableSol),
+                            value: Formatters.asset(
+                              summary.offlineAvailableSol,
+                              summary.chain,
+                            ),
                             icon: Icons.arrow_outward_rounded,
                           ),
                         ),
@@ -4038,7 +4125,7 @@ class _WelcomeHero extends StatelessWidget {
         final double illustrationHeight = compact ? 176 : 208;
         return Semantics(
           container: true,
-          label: 'Send locally first, then settle later on devnet.',
+          label: 'Send locally first, then settle later on-chain.',
           child: DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -4500,7 +4587,8 @@ class _TransferCard extends StatelessWidget {
     return Semantics(
       button: true,
       label: directionLabel,
-      value: '${Formatters.sol(transfer.amountSol)}, ${transfer.status.label}',
+      value:
+          '${Formatters.asset(transfer.amountSol, transfer.chain)}, ${transfer.status.label}',
       hint: 'Open transfer details',
       child: Material(
         color: Colors.transparent,
@@ -4530,7 +4618,7 @@ class _TransferCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 14),
                 Text(
-                  Formatters.sol(transfer.amountSol),
+                  Formatters.asset(transfer.amountSol, transfer.chain),
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 8),
@@ -4767,6 +4855,7 @@ ReceiverInvitePayload? _receiverInvitePayload(
     return null;
   }
   return ReceiverInvitePayload(
+    chain: state.activeChain,
     transport: transport,
     address: wallet.address,
     displayAddress: wallet.displayAddress,
@@ -4779,6 +4868,13 @@ bool _looksLikeBluetoothDisabled(String message) {
   return normalized.contains('bluetooth is turned off') ||
       normalized.contains('bluetooth is still initializing') ||
       normalized.contains('turn it on');
+}
+
+bool _isValidAddressForChain(String value, ChainKind chain) {
+  final String normalized = value.trim();
+  return chain == ChainKind.solana
+      ? isValidAddress(normalized)
+      : RegExp(r'^0x[a-fA-F0-9]{40}$').hasMatch(normalized);
 }
 
 Future<void> _showBluetoothPrompt(BuildContext context, String message) async {

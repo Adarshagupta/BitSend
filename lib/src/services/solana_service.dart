@@ -149,6 +149,7 @@ class SolanaService {
     return OfflineEnvelope.create(
       transferId: transferId,
       createdAt: createdAt,
+      chain: ChainKind.solana,
       senderAddress: sender.address,
       receiverAddress: receiverAddress,
       amountLamports: lamports,
@@ -235,6 +236,7 @@ class SolanaService {
     }
 
     return ValidatedTransactionDetails(
+      chain: ChainKind.solana,
       senderAddress: senderAddress,
       receiverAddress: receiverAddress,
       amountLamports: amountLamports,

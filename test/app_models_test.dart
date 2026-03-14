@@ -5,6 +5,7 @@ void main() {
   group('ReceiverInvitePayload', () {
     test('round-trips hotspot payloads through QR text', () {
       const ReceiverInvitePayload payload = ReceiverInvitePayload(
+        chain: ChainKind.solana,
         transport: TransportKind.hotspot,
         address: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
         displayAddress: '5g7h...Qk1Z',
@@ -101,6 +102,7 @@ PendingTransfer _transfer({
   final DateTime now = DateTime(2026, 3, 14, 12);
   return PendingTransfer(
     transferId: 'transfer-${direction.name}-${status.name}',
+    chain: ChainKind.solana,
     direction: direction,
     status: status,
     amountLamports: 250000000,
@@ -112,6 +114,7 @@ PendingTransfer _transfer({
     envelope: OfflineEnvelope.create(
       transferId: 'transfer-${direction.name}-${status.name}',
       createdAt: now,
+      chain: ChainKind.solana,
       senderAddress: 'Sender1111111111111111111111111111111111',
       receiverAddress: 'Receiver11111111111111111111111111111111',
       amountLamports: 250000000,
