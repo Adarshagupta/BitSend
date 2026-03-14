@@ -1,140 +1,189 @@
-# bitsend
+# BitSend
 
-`bitsend` is a Flutter Android app for hybrid crypto payments with two wallet engines:
+**BitSend** is a Flutter Android application for **hybrid crypto payments** supporting both **offline-first transfers** and **online wallet transactions**.
 
-- `Local`: offline-first handoff over BLE or hotspot, then later on-chain settlement
-- `BitGo`: online-only submit through a backend-managed BitGo demo wallet
+The app currently supports **two wallet engines**:
 
-The app currently supports:
+* **Local Mode** – Offline-first transfers using BLE or hotspot, with later on-chain settlement.
+* **BitGo Mode** – Online transactions submitted through a backend-managed BitGo demo wallet.
 
-- Solana: devnet/mainnet in Local mode
-- Ethereum: Sepolia/mainnet in Local mode
-- BitGo demo backend mode for both chains through a deployed Cloudflare Worker
+Supported chains:
 
-## Repo layout
+* **Solana** – Devnet / Mainnet (Local Mode)
+* **Ethereum** – Sepolia / Mainnet (Local Mode)
+* **BitGo demo backend** for both chains using a deployed **Cloudflare Worker**
 
-- `lib/`: Flutter app
-- `backend-worker/`: deployed Cloudflare Worker backend used by the app
-- `backend/`: local Node backend retained for future live BitGo work
+---
 
-## Flutter app
+# Repository Structure
 
-### Install app dependencies
+```
+bitsend/
+│
+├── lib/                # Flutter mobile application
+├── backend-worker/     # Cloudflare Worker backend (default BitGo demo backend)
+├── backend/            # Local Node.js backend for future live BitGo integration
+```
 
-```powershell
+---
+
+# Flutter App
+
+## Install Dependencies
+
+```bash
 flutter pub get
 ```
 
-### Run the app
+## Run the Application
 
-```powershell
+```bash
 flutter run
 ```
 
-### Validate the app
+## Validate Code
 
-```powershell
+Run static analysis:
+
+```bash
 dart analyze
+```
+
+Run tests:
+
+```bash
 flutter test
 ```
 
-## BitGo backend
+---
 
-The app now defaults to the deployed Cloudflare Worker:
+# BitGo Backend
 
-```text
+The mobile app is configured by default to use the **deployed Cloudflare Worker backend**:
+
+```
 https://bitsend-bitgo-backend.blueadarsh1.workers.dev
 ```
 
-Health check:
+### Health Check
 
-```text
+```
 https://bitsend-bitgo-backend.blueadarsh1.workers.dev/health
 ```
 
 Expected response:
 
 ```json
-{"ok":true,"mode":"mock"}
+{
+  "ok": true,
+  "mode": "mock"
+}
 ```
 
-### Cloudflare Worker backend
+The Worker runs in **mock mode** to allow the mobile app to operate over HTTPS without requiring a local server.
 
-This is the backend the app is configured to use by default for BitGo demo mode.
+---
 
-### Install Worker dependencies
+# Cloudflare Worker Backend
 
-```powershell
+The Worker acts as the **default backend for BitGo demo mode**.
+
+## Install Dependencies
+
+```bash
 cd backend-worker
 npm install
 ```
 
-### Run the Worker locally
+## Run Locally
 
-```powershell
+```bash
 npm run dev
 ```
 
-### Deploy the Worker
+## Deploy Worker
 
-```powershell
+Login to Cloudflare:
+
+```bash
 npx wrangler whoami
+```
+
+Deploy the Worker:
+
+```bash
 npm run deploy
 ```
 
-The deployed worker uses a Durable Object for demo sessions and transfer state.
+The Worker uses **Durable Objects** to manage demo sessions and transfer state.
 
-Important:
+---
 
-- The Worker is the default app backend for BitGo demo mode.
-- The Worker currently runs in `mock` mode on Cloudflare.
-- This keeps the mobile app runnable over HTTPS without needing a local server.
+# BitGo Mode Setup (Inside the App)
 
-## BitGo app setup
+1. Open the **BitSend Flutter app**
+2. Navigate to **Settings**
+3. Verify the **BitGo backend URL** points to:
 
-1. Open the Flutter app.
-2. Go to `Settings`.
-3. Confirm `BitGo backend` points to the Worker URL.
-4. Tap `Connect BitGo demo`.
-5. Switch the Home header wallet mode from `Local` to `BitGo`.
+```
+https://bitsend-bitgo-backend.blueadarsh1.workers.dev
+```
 
-If you want to override the backend manually, you still can.
+4. Tap **Connect BitGo Demo**
+5. Change the wallet mode from **Local → BitGo**
 
-## Local Node backend
+---
 
-The original Node backend is still in `backend/`.
+# Local Node Backend (Optional)
 
-Use it only if you want to keep iterating on a future live BitGo path locally:
+The repository also contains a **Node.js backend** used for experimentation with live BitGo SDK support.
 
-```powershell
+Use this backend only if you want to run a **local BitGo integration**.
+
+## Run Local Backend
+
+```bash
 cd backend
 npm install
 npm run build
 npm start
 ```
 
-Default local endpoint:
+Default endpoint:
 
-```text
+```
 http://127.0.0.1:8788
 ```
 
-On a physical Android phone, use the deployed Worker URL unless you intentionally want to point the app at your own local machine.
+⚠️ When running the app on a **physical Android device**, prefer using the **deployed Worker URL** instead of the local backend.
 
-## What was verified
+---
 
-Verified in this repo:
+# Verification
 
-- Flutter Dart analysis on the touched app files
-- Focused Flutter tests for the touched app files
-- Worker `npm install`
-- Worker `npm run typecheck`
-- Worker `wrangler deploy --dry-run`
-- Worker deployment to Cloudflare
-- Live Worker `/health` response in mock mode
+The following checks were verified in this repository:
 
-## Current limits
+* Flutter **Dart analysis**
+* Flutter **unit tests**
+* Worker **dependency installation**
+* Worker **type checking**
+* Worker **dry-run deployment**
+* Worker **Cloudflare deployment**
+* Live Worker `/health` endpoint response
 
-- The deployed Cloudflare Worker is currently a BitGo demo/mock backend, not a live BitGo signer
-- Live BitGo SDK execution is still kept in the local Node backend because the BitGo SDK imports unsupported Node modules for the Workers runtime
-- Local mode and BitGo mode are parallel flows by design: BitGo mode does not do offline envelope receive or hotspot settlement
+---
+
+# Current Limitations
+
+* The deployed Cloudflare Worker currently runs in **mock BitGo mode**.
+* **Live BitGo SDK execution** is still limited to the local Node backend due to Node module incompatibilities with the Workers runtime.
+* **Local Mode and BitGo Mode operate independently** by design:
+
+  * BitGo Mode does **not support offline transfers**
+  * Offline transfers are handled exclusively in **Local Mode**
+
+---
+
+# License
+
+This project is provided for development and demonstration purposes.
