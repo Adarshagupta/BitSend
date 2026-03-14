@@ -1,8 +1,13 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:path_provider/path_provider.dart' as path_provider;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:solana/solana.dart' show isValidAddress;
 
@@ -1535,14 +1540,11 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
     if (!state.hasWallet || !state.hasOfflineWallet) {
       return 'Set up the wallet first.';
     }
-    if (!state.hasOfflineFunds && !state.hasOfflineReadyBlockhash) {
-      return 'Top up the offline wallet and refresh readiness first.';
-    }
     if (!state.hasOfflineFunds) {
       return 'Top up the offline wallet first.';
     }
-    if (!state.hasOfflineReadyBlockhash) {
-      return 'Refresh readiness before signing.';
+    if (!state.hasOfflineReadyBlockhash && !state.hasInternet) {
+      return 'Connect online and refresh readiness before signing.';
     }
     return null;
   }
@@ -1587,6 +1589,10 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
     final double amount = double.tryParse(_amountController.text.trim()) ?? 0;
     final int lamports = (amount * 1000000000).round();
     final String? readinessMessage = _sendReadinessMessage(state);
+    final bool autoRefreshOnSign =
+        state.hasOfflineFunds &&
+        !state.hasOfflineReadyBlockhash &&
+        state.hasInternet;
     return BitsendPageScaffold(
       title: 'Amount',
       subtitle: 'Enter the amount in SOL.',
@@ -1605,7 +1611,15 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
                 child: const Text('Open offline wallet'),
               ),
             ),
-          if (readinessMessage != null) const SizedBox(height: 16),
+          if (autoRefreshOnSign)
+            const InlineBanner(
+              title: 'Will refresh on sign',
+              caption:
+                  'Offline funds are ready. A fresh devnet blockhash will be fetched automatically when you sign.',
+              icon: Icons.sync_rounded,
+            ),
+          if (readinessMessage != null || autoRefreshOnSign)
+            const SizedBox(height: 16),
           SectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1882,76 +1896,109 @@ class _SendProgressScreenState extends State<SendProgressScreen> {
   }
 }
 
-class SendSuccessScreen extends StatelessWidget {
+class SendSuccessScreen extends StatefulWidget {
   const SendSuccessScreen({super.key});
+
+  @override
+  State<SendSuccessScreen> createState() => _SendSuccessScreenState();
+}
+
+class _SendSuccessScreenState extends State<SendSuccessScreen> {
+  final GlobalKey _receiptKey = GlobalKey();
+  bool _didCelebrate = false;
+
+  void _celebrate(PendingTransfer? transfer) {
+    if (_didCelebrate || transfer == null) {
+      return;
+    }
+    _didCelebrate = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      HapticFeedback.heavyImpact();
+      unawaited(SystemSound.play(SystemSoundType.alert));
+    });
+  }
+
+  Future<void> _saveReceipt(PendingTransfer transfer) async {
+    try {
+      final String path = await _captureReceiptImage(
+        context,
+        _receiptKey,
+        transfer.transferId,
+      );
+      await Clipboard.setData(ClipboardData(text: path));
+      if (!mounted) {
+        return;
+      }
+      _showSnack(context, 'Receipt image saved. Path copied.');
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showSnack(context, _messageFor(error));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
     final PendingTransfer? transfer = state.lastSentTransfer;
+    _celebrate(transfer);
     return BitsendPageScaffold(
       title: 'Delivered',
       subtitle:
           'The signed transfer was delivered. Any online device can settle it.',
+      showBack: false,
       child: transfer == null
           ? const EmptyStateCard(
               title: 'No transfer found',
               caption: 'Send a transfer first to see the delivery receipt.',
               icon: Icons.assignment_late_rounded,
             )
-          : SectionCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      const Icon(
-                        Icons.check_circle_rounded,
-                        color: AppColors.emerald,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Sent offline. Settlement can continue automatically.',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  DetailRow(label: 'Transfer ID', value: transfer.transferId),
-                  DetailRow(
-                    label: 'Source wallet',
-                    value: Formatters.shortAddress(transfer.senderAddress),
-                  ),
-                  DetailRow(label: 'Receiver', value: transfer.receiverAddress),
-                  DetailRow(
-                    label: 'Amount',
-                    value: Formatters.sol(transfer.amountSol),
-                  ),
-                  DetailRow(
-                    label: 'Transport',
-                    value: transfer.transport.label,
-                  ),
-                  if (transfer.transactionSignature != null)
-                    DetailRow(
-                      label: 'Signature',
-                      value: Formatters.shortAddress(
-                        transfer.transactionSignature!,
-                      ),
-                    ),
-                ],
-              ),
+          : _TransferReceiptSurface(
+              boundaryKey: _receiptKey,
+              eyebrow: 'Delivery receipt',
+              title: 'Sent offline',
+              caption:
+                  'Receiver stored the signed transfer. Settlement can continue automatically when any device is online.',
+              icon: Icons.check_circle_rounded,
+              tone: AppColors.emerald,
+              transfer: transfer,
+              focusLabel: 'Receiver',
+              focusValue: transfer.receiverAddress,
             ),
-      bottom: ElevatedButton(
-        onPressed: () {
-          Navigator.of(context).pushNamedAndRemoveUntil(
-            AppRoutes.pending,
-            ModalRoute.withName(AppRoutes.home),
-          );
-        },
-        child: const Text('Open pending'),
-      ),
+      bottom: transfer == null
+          ? ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pushNamedAndRemoveUntil(
+                  AppRoutes.pending,
+                  ModalRoute.withName(AppRoutes.home),
+                );
+              },
+              child: const Text('Open pending'),
+            )
+          : Row(
+              children: <Widget>[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _saveReceipt(transfer),
+                    icon: const Icon(Icons.image_outlined),
+                    label: const Text('Save image'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.of(context).pushNamedAndRemoveUntil(
+                        AppRoutes.pending,
+                        ModalRoute.withName(AppRoutes.home),
+                      );
+                    },
+                    child: const Text('Open pending'),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }
@@ -1964,9 +2011,16 @@ class ReceiveListenScreen extends StatefulWidget {
 }
 
 class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
+  final ScrollController _scrollController = ScrollController();
   String? _seenTransferId;
   String? _seenAnnouncement;
   bool _started = false;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
@@ -1991,12 +2045,17 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
     }
     if (state.lastReceivedTransferId != null &&
         state.lastReceivedTransferId != _seenTransferId) {
-      _seenTransferId = state.lastReceivedTransferId;
+      final String transferId = state.lastReceivedTransferId!;
+      _seenTransferId = transferId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) {
           return;
         }
-        Navigator.of(context).pushReplacementNamed(AppRoutes.receiveResult);
+        state.acknowledgeLastReceivedTransfer();
+        Navigator.of(context).pushNamed(
+          AppRoutes.receiveResult,
+          arguments: transferId,
+        );
       });
     }
   }
@@ -2049,6 +2108,7 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
     final ReceiverInvitePayload? invite = _receiverInvitePayload(
       state,
       transport,
+      activeListener: activeListener,
     );
     return BitsendPageScaffold(
       title: 'Receive',
@@ -2062,101 +2122,706 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
       ],
       showBack: false,
       showHeader: false,
+      scrollController: _scrollController,
       primaryTab: BitsendPrimaryTab.home,
       onPrimaryTabSelected: (BitsendPrimaryTab tab) {
         _navigatePrimaryTab(context, tab);
       },
-      child: FadeSlideIn(
-        delay: 0,
-        child: _ReceiveStudioCard(
-          transport: transport,
-          activeListener: activeListener,
-          hasWallet: state.hasWallet,
-          invite: invite,
-          receiverDisplayAddress: state.wallet?.displayAddress ?? 'Wallet missing',
-          receiverAddress: state.wallet?.address ?? 'Set up the wallet first.',
-          endpoint: state.localEndpoint,
-          onTransportChanged: (TransportKind next) async {
-            if (state.listenerRunning) {
-              await state.stopReceiver();
-            }
-            state.setReceiveTransport(next);
-          },
-          onToggle: state.hasWallet ? () => _toggle(state) : null,
-          onOpenPending: () {
-            Navigator.of(context).pushNamed(AppRoutes.pending);
-          },
+      child: _ReceiveStudioCard(
+        scrollController: _scrollController,
+        transport: transport,
+        activeListener: activeListener,
+        hasWallet: state.hasWallet,
+        invite: invite,
+        receiverDisplayAddress: state.wallet?.displayAddress ?? 'Wallet missing',
+        receiverAddress: state.wallet?.address ?? 'Set up the wallet first.',
+        endpoint: state.localEndpoint,
+        onTransportChanged: (TransportKind next) async {
+          if (state.listenerRunning) {
+            await state.stopReceiver();
+          }
+          state.setReceiveTransport(next);
+        },
+        onToggle: state.hasWallet ? () => _toggle(state) : null,
+        onOpenPending: () {
+          Navigator.of(context).pushNamed(AppRoutes.pending);
+        },
+      ),
+    );
+  }
+}
+
+class ReceiveResultScreen extends StatefulWidget {
+  const ReceiveResultScreen({super.key, this.transferId});
+
+  final String? transferId;
+
+  @override
+  State<ReceiveResultScreen> createState() => _ReceiveResultScreenState();
+}
+
+class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
+  final GlobalKey _receiptKey = GlobalKey();
+  bool _didCelebrate = false;
+
+  void _celebrate(PendingTransfer? transfer) {
+    if (_didCelebrate || transfer == null) {
+      return;
+    }
+    _didCelebrate = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      HapticFeedback.mediumImpact();
+      unawaited(SystemSound.play(SystemSoundType.alert));
+    });
+  }
+
+  Future<void> _saveReceipt(PendingTransfer transfer) async {
+    try {
+      final String path = await _captureReceiptImage(
+        context,
+        _receiptKey,
+        transfer.transferId,
+      );
+      await Clipboard.setData(ClipboardData(text: path));
+      if (!mounted) {
+        return;
+      }
+      _showSnack(context, 'Receipt image saved. Path copied.');
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showSnack(context, _messageFor(error));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final BitsendAppState state = BitsendStateScope.of(context);
+    final PendingTransfer? transfer = widget.transferId == null
+        ? state.lastReceivedTransfer
+        : state.transferById(widget.transferId!);
+    _celebrate(transfer);
+    return BitsendPageScaffold(
+      title: 'Transfer received',
+      subtitle: 'Stored locally and ready for later settlement.',
+      child: transfer == null
+          ? const EmptyStateCard(
+              title: 'No transfer loaded',
+              caption:
+                  'Go back to Receive and wait for the next offline handoff.',
+              icon: Icons.inbox_rounded,
+            )
+          : _TransferReceiptSurface(
+              boundaryKey: _receiptKey,
+              eyebrow: 'Receive receipt',
+              title: 'Signed handoff stored',
+              caption:
+                  'This transfer can settle from any device that later comes online.',
+              icon: Icons.inventory_2_rounded,
+              tone: AppColors.amber,
+              transfer: transfer,
+              focusLabel: 'Sender',
+              focusValue: transfer.senderAddress,
+            ),
+      bottom: transfer == null
+          ? ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).maybePop();
+              },
+              child: const Text('Back to receive'),
+            )
+          : Row(
+              children: <Widget>[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _saveReceipt(transfer),
+                    icon: const Icon(Icons.image_outlined),
+                    label: const Text('Save image'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.of(context).pushNamed(
+                        AppRoutes.transferDetail(transfer.transferId),
+                      );
+                    },
+                    child: const Text('Open timeline'),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+Future<String> _captureReceiptImage(
+  BuildContext context,
+  GlobalKey boundaryKey,
+  String transferId,
+) async {
+  final BuildContext? boundaryContext = boundaryKey.currentContext;
+  if (boundaryContext == null) {
+    throw StateError('Receipt is still preparing. Try again in a moment.');
+  }
+  final RenderRepaintBoundary boundary =
+      boundaryContext.findRenderObject()! as RenderRepaintBoundary;
+  final double pixelRatio =
+      MediaQuery.devicePixelRatioOf(context).clamp(1.8, 3.0).toDouble();
+  final ui.Image image = await boundary.toImage(
+    pixelRatio: pixelRatio,
+  );
+  final ByteData? byteData = await image.toByteData(
+    format: ui.ImageByteFormat.png,
+  );
+  if (byteData == null) {
+    throw StateError('Could not generate the receipt image.');
+  }
+  final Directory directory =
+      await path_provider.getApplicationDocumentsDirectory();
+  final String safeTransferId = transferId.replaceAll(
+    RegExp(r'[^A-Za-z0-9_-]'),
+    '_',
+  );
+  final File file = File(
+    '${directory.path}/bitsend-receipt-$safeTransferId.png',
+  );
+  final Uint8List bytes = byteData.buffer.asUint8List();
+  await file.writeAsBytes(bytes, flush: true);
+  return file.path;
+}
+
+class _TransferReceiptSurface extends StatelessWidget {
+  const _TransferReceiptSurface({
+    required this.boundaryKey,
+    required this.eyebrow,
+    required this.title,
+    required this.caption,
+    required this.icon,
+    required this.tone,
+    required this.transfer,
+    required this.focusLabel,
+    required this.focusValue,
+  });
+
+  final GlobalKey boundaryKey;
+  final String eyebrow;
+  final String title;
+  final String caption;
+  final IconData icon;
+  final Color tone;
+  final PendingTransfer transfer;
+  final String focusLabel;
+  final String focusValue;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<_ReceiptMilestone> milestones = _receiptMilestones(transfer);
+    final List<_ReceiptIndicator> indicators = _receiptIndicators(transfer);
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 540),
+      curve: Curves.easeOutCubic,
+      builder: (BuildContext context, double value, Widget? child) {
+        return Transform.translate(
+          offset: Offset(0, 28 * (1 - value)),
+          child: Opacity(opacity: value, child: child),
+        );
+      },
+      child: RepaintBoundary(
+        key: boundaryKey,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(22, 22, 22, 22),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(34),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: <Color>[
+                Colors.white.withValues(alpha: 0.98),
+                tone.withValues(alpha: 0.08),
+              ],
+            ),
+            border: Border.all(color: tone.withValues(alpha: 0.14)),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: AppColors.ink.withValues(alpha: 0.08),
+                blurRadius: 30,
+                offset: const Offset(0, 14),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      eyebrow.toUpperCase(),
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: tone,
+                        letterSpacing: 0.9,
+                      ),
+                    ),
+                  ),
+                  StatusPill(status: transfer.status),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Container(
+                width: 58,
+                height: 58,
+                decoration: BoxDecoration(
+                  color: tone.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Icon(icon, color: tone, size: 30),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                title,
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  color: AppColors.ink,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                caption,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyLarge?.copyWith(color: AppColors.slate),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                Formatters.sol(transfer.amountSol),
+                style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                  color: AppColors.ink,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -1.1,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '$focusLabel ${Formatters.shortAddress(focusValue)}',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(color: AppColors.slate),
+              ),
+              const SizedBox(height: 20),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: indicators
+                    .map(
+                      (_ReceiptIndicator indicator) => _ReceiptIndicatorChip(
+                        indicator: indicator,
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
+              const SizedBox(height: 24),
+              _ReceiptDivider(color: tone),
+              const SizedBox(height: 18),
+              Text(
+                'Status journey',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 16),
+              _ReceiptTimeline(milestones: milestones, tone: tone),
+              const SizedBox(height: 24),
+              _ReceiptDivider(color: tone),
+              const SizedBox(height: 18),
+              Text(
+                'Transfer details',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 12),
+              DetailRow(label: 'Transfer ID', value: transfer.transferId),
+              DetailRow(label: focusLabel, value: focusValue),
+              DetailRow(
+                label: 'Transport',
+                value: transfer.transport.shortLabel,
+              ),
+              DetailRow(
+                label: 'Updated',
+                value: Formatters.dateTime(transfer.updatedAt),
+              ),
+              if (transfer.remoteEndpoint != null)
+                DetailRow(label: 'Endpoint', value: transfer.remoteEndpoint!),
+              if (transfer.transactionSignature != null)
+                DetailRow(
+                  label: 'Signature',
+                  value: Formatters.shortAddress(
+                    transfer.transactionSignature!,
+                  ),
+                ),
+              if (transfer.lastError != null) ...<Widget>[
+                const SizedBox(height: 10),
+                Text(
+                  transfer.lastError!,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: transfer.status == TransferStatus.expired
+                        ? AppColors.red
+                        : AppColors.amber,
+                  ),
+                ),
+              ],
+              if (transfer.explorerUrl != null) ...<Widget>[
+                const SizedBox(height: 18),
+                Text(
+                  'Explorer',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  transfer.explorerUrl!,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class ReceiveResultScreen extends StatelessWidget {
-  const ReceiveResultScreen({super.key});
+class _ReceiptTimeline extends StatelessWidget {
+  const _ReceiptTimeline({required this.milestones, required this.tone});
+
+  final List<_ReceiptMilestone> milestones;
+  final Color tone;
 
   @override
   Widget build(BuildContext context) {
-    final BitsendAppState state = BitsendStateScope.of(context);
-    final PendingTransfer? transfer = state.lastReceivedTransfer;
-    return BitsendPageScaffold(
-      title: 'Received',
-      subtitle:
-          'The signed transfer was saved. Settlement continues when a device is online.',
-      child: transfer == null
-          ? const EmptyStateCard(
-              title: 'No transfer stored yet',
-              caption:
-                  'Start listening and wait for the sender to deliver a transfer.',
-              icon: Icons.inbox_rounded,
-            )
-          : SectionCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      const Icon(
-                        Icons.inventory_2_rounded,
-                        color: AppColors.amber,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Received offline and ready to settle.',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  DetailRow(label: 'Transfer ID', value: transfer.transferId),
-                  DetailRow(label: 'Sender', value: transfer.senderAddress),
-                  DetailRow(
-                    label: 'Amount',
-                    value: Formatters.sol(transfer.amountSol),
-                  ),
-                  if (transfer.transactionSignature != null)
-                    DetailRow(
-                      label: 'Signature',
-                      value: Formatters.shortAddress(
-                        transfer.transactionSignature!,
-                      ),
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final bool compact = constraints.maxWidth < 520;
+        if (compact) {
+          return Column(
+            children: milestones
+                .map(
+                  (_ReceiptMilestone milestone) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _ReceiptTimelineRow(
+                      milestone: milestone,
+                      tone: tone,
                     ),
-                ],
-              ),
-            ),
-      bottom: ElevatedButton(
-        onPressed: () {
-          Navigator.of(context).pushNamedAndRemoveUntil(
-            AppRoutes.pending,
-            ModalRoute.withName(AppRoutes.home),
+                  ),
+                )
+                .toList(growable: false),
           );
-        },
-        child: const Text('Open pending'),
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: milestones
+              .asMap()
+              .entries
+              .map(
+                (MapEntry<int, _ReceiptMilestone> entry) => Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      right: entry.key == milestones.length - 1 ? 0 : 12,
+                    ),
+                    child: _ReceiptTimelineRow(
+                      milestone: entry.value,
+                      tone: tone,
+                    ),
+                  ),
+                ),
+              )
+              .toList(growable: false),
+        );
+      },
+    );
+  }
+}
+
+class _ReceiptTimelineRow extends StatelessWidget {
+  const _ReceiptTimelineRow({required this.milestone, required this.tone});
+
+  final _ReceiptMilestone milestone;
+  final Color tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color = switch (milestone.state) {
+      _ReceiptMilestoneState.complete => tone,
+      _ReceiptMilestoneState.current => AppColors.amber,
+      _ReceiptMilestoneState.error => AppColors.red,
+      _ReceiptMilestoneState.pending => AppColors.slateTint,
+    };
+    final Color background = switch (milestone.state) {
+      _ReceiptMilestoneState.complete => tone.withValues(alpha: 0.12),
+      _ReceiptMilestoneState.current => AppColors.amberTint.withValues(alpha: 0.92),
+      _ReceiptMilestoneState.error => AppColors.redTint.withValues(alpha: 0.92),
+      _ReceiptMilestoneState.pending => AppColors.canvasWarm,
+    };
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        children: <Widget>[
+          Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: milestone.state == _ReceiptMilestoneState.complete
+                  ? color
+                  : Colors.white,
+              border: Border.all(color: color, width: 2),
+            ),
+            child: milestone.state == _ReceiptMilestoneState.complete
+                ? const Icon(Icons.check, size: 14, color: Colors.white)
+                : milestone.state == _ReceiptMilestoneState.error
+                ? Icon(Icons.close_rounded, size: 14, color: color)
+                : milestone.state == _ReceiptMilestoneState.current
+                ? Container(
+                    margin: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                    ),
+                  )
+                : null,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              milestone.label,
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(color: AppColors.ink),
+            ),
+          ),
+        ],
       ),
     );
   }
+}
+
+class _ReceiptIndicatorChip extends StatelessWidget {
+  const _ReceiptIndicatorChip({required this.indicator});
+
+  final _ReceiptIndicator indicator;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: indicator.background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(indicator.icon, size: 16, color: indicator.color),
+          const SizedBox(width: 8),
+          Text(
+            indicator.label,
+            style: Theme.of(
+              context,
+            ).textTheme.labelLarge?.copyWith(color: indicator.color),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReceiptDivider extends StatelessWidget {
+  const _ReceiptDivider({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 1,
+      color: color.withValues(alpha: 0.12),
+    );
+  }
+}
+
+class _ReceiptIndicator {
+  const _ReceiptIndicator({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.background,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final Color background;
+}
+
+enum _ReceiptMilestoneState { pending, current, complete, error }
+
+class _ReceiptMilestone {
+  const _ReceiptMilestone({required this.label, required this.state});
+
+  final String label;
+  final _ReceiptMilestoneState state;
+}
+
+List<_ReceiptIndicator> _receiptIndicators(PendingTransfer transfer) {
+  final _ReceiptIndicator settlementIndicator = switch (transfer.status) {
+    TransferStatus.confirmed => const _ReceiptIndicator(
+      label: 'Confirmed',
+      icon: Icons.verified_rounded,
+      color: AppColors.emerald,
+      background: AppColors.emeraldTint,
+    ),
+    TransferStatus.broadcastSubmitted => const _ReceiptIndicator(
+      label: 'Awaiting confirmation',
+      icon: Icons.cloud_done_rounded,
+      color: AppColors.blue,
+      background: AppColors.blueTint,
+    ),
+    TransferStatus.broadcastFailed || TransferStatus.expired => const _ReceiptIndicator(
+      label: 'Needs resend',
+      icon: Icons.error_outline_rounded,
+      color: AppColors.red,
+      background: AppColors.redTint,
+    ),
+    _ => const _ReceiptIndicator(
+      label: 'Awaiting settlement',
+      icon: Icons.hourglass_top_rounded,
+      color: AppColors.amber,
+      background: AppColors.amberTint,
+    ),
+  };
+
+  return <_ReceiptIndicator>[
+    const _ReceiptIndicator(
+      label: 'Signed by sender',
+      icon: Icons.gesture_rounded,
+      color: AppColors.emerald,
+      background: AppColors.emeraldTint,
+    ),
+    const _ReceiptIndicator(
+      label: 'Amount locked',
+      icon: Icons.lock_outline_rounded,
+      color: AppColors.blue,
+      background: AppColors.blueTint,
+    ),
+    settlementIndicator,
+  ];
+}
+
+List<_ReceiptMilestone> _receiptMilestones(PendingTransfer transfer) {
+  final String firstLabel = transfer.isInbound
+      ? 'Received offline'
+      : 'Sent offline';
+  return switch (transfer.status) {
+    TransferStatus.created ||
+    TransferStatus.sentOffline ||
+    TransferStatus.receivedPendingBroadcast => <_ReceiptMilestone>[
+      const _ReceiptMilestone(
+        label: 'Signed',
+        state: _ReceiptMilestoneState.complete,
+      ),
+      _ReceiptMilestone(
+        label: firstLabel,
+        state: _ReceiptMilestoneState.complete,
+      ),
+      const _ReceiptMilestone(
+        label: 'Broadcasting',
+        state: _ReceiptMilestoneState.pending,
+      ),
+      const _ReceiptMilestone(
+        label: 'Confirmed',
+        state: _ReceiptMilestoneState.pending,
+      ),
+    ],
+    TransferStatus.broadcasting => <_ReceiptMilestone>[
+      const _ReceiptMilestone(
+        label: 'Signed',
+        state: _ReceiptMilestoneState.complete,
+      ),
+      _ReceiptMilestone(
+        label: firstLabel,
+        state: _ReceiptMilestoneState.complete,
+      ),
+      const _ReceiptMilestone(
+        label: 'Broadcasting',
+        state: _ReceiptMilestoneState.current,
+      ),
+      const _ReceiptMilestone(
+        label: 'Confirmed',
+        state: _ReceiptMilestoneState.pending,
+      ),
+    ],
+    TransferStatus.broadcastSubmitted => <_ReceiptMilestone>[
+      const _ReceiptMilestone(
+        label: 'Signed',
+        state: _ReceiptMilestoneState.complete,
+      ),
+      _ReceiptMilestone(
+        label: firstLabel,
+        state: _ReceiptMilestoneState.complete,
+      ),
+      const _ReceiptMilestone(
+        label: 'Broadcasting',
+        state: _ReceiptMilestoneState.complete,
+      ),
+      const _ReceiptMilestone(
+        label: 'Confirmed',
+        state: _ReceiptMilestoneState.current,
+      ),
+    ],
+    TransferStatus.confirmed => <_ReceiptMilestone>[
+      const _ReceiptMilestone(
+        label: 'Signed',
+        state: _ReceiptMilestoneState.complete,
+      ),
+      _ReceiptMilestone(
+        label: firstLabel,
+        state: _ReceiptMilestoneState.complete,
+      ),
+      const _ReceiptMilestone(
+        label: 'Broadcasting',
+        state: _ReceiptMilestoneState.complete,
+      ),
+      const _ReceiptMilestone(
+        label: 'Confirmed',
+        state: _ReceiptMilestoneState.complete,
+      ),
+    ],
+    TransferStatus.broadcastFailed || TransferStatus.expired => <_ReceiptMilestone>[
+      const _ReceiptMilestone(
+        label: 'Signed',
+        state: _ReceiptMilestoneState.complete,
+      ),
+      _ReceiptMilestone(
+        label: firstLabel,
+        state: _ReceiptMilestoneState.complete,
+      ),
+      const _ReceiptMilestone(
+        label: 'Broadcasting',
+        state: _ReceiptMilestoneState.error,
+      ),
+      const _ReceiptMilestone(
+        label: 'Confirmed',
+        state: _ReceiptMilestoneState.pending,
+      ),
+    ],
+  };
 }
 
 class PendingScreen extends StatefulWidget {
@@ -4091,12 +4756,14 @@ class _ProgressTile extends StatelessWidget {
 ReceiverInvitePayload? _receiverInvitePayload(
   BitsendAppState state,
   TransportKind transport,
+  {required bool activeListener}
 ) {
   final WalletProfile? wallet = state.wallet;
   if (wallet == null) {
     return null;
   }
-  if (transport == TransportKind.hotspot && state.localEndpoint == null) {
+  if (transport == TransportKind.hotspot &&
+      (!activeListener || state.localEndpoint == null)) {
     return null;
   }
   return ReceiverInvitePayload(
@@ -4136,6 +4803,7 @@ Future<void> _showBluetoothPrompt(BuildContext context, String message) async {
 
 class _ReceiveStudioCard extends StatelessWidget {
   const _ReceiveStudioCard({
+    required this.scrollController,
     required this.transport,
     required this.activeListener,
     required this.hasWallet,
@@ -4148,6 +4816,7 @@ class _ReceiveStudioCard extends StatelessWidget {
     required this.onOpenPending,
   });
 
+  final ScrollController scrollController;
   final TransportKind transport;
   final bool activeListener;
   final bool hasWallet;
@@ -4161,8 +4830,6 @@ class _ReceiveStudioCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bool showEndpointWarning =
-        transport == TransportKind.hotspot && endpoint == null;
     final String title = !hasWallet
         ? 'Wallet needed before receive'
         : activeListener
@@ -4182,6 +4849,8 @@ class _ReceiveStudioCard extends StatelessWidget {
     final String helper = transport == TransportKind.hotspot
         ? (endpoint ?? 'Join a local Wi-Fi or hotspot first.')
         : 'bitsend BLE receiver';
+    final bool showEndpointWarning =
+        transport == TransportKind.hotspot && endpoint == null;
 
     return Semantics(
       container: true,
@@ -4208,153 +4877,358 @@ class _ReceiveStudioCard extends StatelessWidget {
             },
           );
 
-          final Widget infoColumn = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text('Receive', style: Theme.of(context).textTheme.headlineSmall),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
+          return AnimatedBuilder(
+            animation: scrollController,
+            builder: (BuildContext context, Widget? child) {
+              final double rawOffset = scrollController.hasClients
+                  ? scrollController.offset
+                  : 0;
+              final double collapse = (rawOffset / 220).clamp(0, 1).toDouble();
+              final double qrScale = ui.lerpDouble(1, 0.54, collapse)!;
+              final double qrOpacity = ui.lerpDouble(1, 0.06, collapse)!;
+              final double qrTop = ui.lerpDouble(62, 8, collapse)!;
+              final double heroHeight = wide ? 362 : 338;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  _ReceiveSoftPill(
-                    icon: transport.icon,
-                    label: transport.shortLabel,
-                    color: _transportTone(transport),
-                    background: _transportTone(transport).withValues(alpha: 0.14),
+                  SizedBox(
+                    height: heroHeight,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      alignment: Alignment.topCenter,
+                      children: <Widget>[
+                        Positioned(
+                          top: 28,
+                          child: IgnorePointer(
+                            child: Container(
+                              width: wide ? 340 : 280,
+                              height: wide ? 340 : 280,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: RadialGradient(
+                                  colors: <Color>[
+                                    _transportTone(transport).withValues(
+                                      alpha: activeListener ? 0.16 : 0.1,
+                                    ),
+                                    AppColors.canvas.withValues(alpha: 0),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          top: 0,
+                          child: Center(
+                            child: Wrap(
+                              alignment: WrapAlignment.center,
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: <Widget>[
+                                _ReceiveSoftPill(
+                                  icon: transport.icon,
+                                  label: transport.shortLabel,
+                                  color: _transportTone(transport),
+                                  background: _transportTone(
+                                    transport,
+                                  ).withValues(alpha: 0.14),
+                                ),
+                                _ReceiveSoftPill(
+                                  icon: activeListener
+                                      ? Icons.radio_button_checked_rounded
+                                      : Icons.pause_circle_outline_rounded,
+                                  label: activeListener ? 'Live' : 'Standby',
+                                  color: activeListener
+                                      ? AppColors.emerald
+                                      : AppColors.amber,
+                                  background: (activeListener
+                                          ? AppColors.emeraldTint
+                                          : AppColors.amberTint)
+                                      .withValues(alpha: 0.92),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          top: qrTop,
+                          child: Transform.scale(
+                            scale: qrScale,
+                            alignment: Alignment.topCenter,
+                            child: Opacity(
+                              opacity: qrOpacity,
+                              child: _ReceiveHeroQr(
+                                invite: invite,
+                                transport: transport,
+                                activeListener: activeListener,
+                                hasWallet: hasWallet,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  _ReceiveSoftPill(
-                    icon: activeListener
-                        ? Icons.radio_button_checked_rounded
-                        : Icons.pause_circle_outline_rounded,
-                    label: activeListener ? 'Live' : 'Standby',
-                    color: activeListener ? AppColors.emerald : AppColors.amber,
-                    background: (activeListener
-                            ? AppColors.emeraldTint
-                            : AppColors.amberTint)
-                        .withValues(alpha: 0.92),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.68),
+                      borderRadius: BorderRadius.circular(30),
+                      boxShadow: <BoxShadow>[
+                        BoxShadow(
+                          color: AppColors.ink.withValues(alpha: 0.06),
+                          blurRadius: 26,
+                          offset: const Offset(0, 12),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        if (wide)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    Text(
+                                      'Receive',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .headlineSmall,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      title,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleLarge,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(child: transportSwitch),
+                            ],
+                          )
+                        else ...<Widget>[
+                          Text(
+                            'Receive',
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          transportSwitch,
+                          const SizedBox(height: 14),
+                          Text(
+                            title,
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ],
+                        const SizedBox(height: 18),
+                        Text(caption, style: Theme.of(context).textTheme.bodyMedium),
+                        const SizedBox(height: 18),
+                        _ReceiveScene(
+                          transport: transport,
+                          activeListener: activeListener,
+                        ),
+                        const SizedBox(height: 18),
+                        const _ReceiveSectionDivider(),
+                        const SizedBox(height: 18),
+                        Text(
+                          receiverDisplayAddress,
+                          style: Theme.of(
+                            context,
+                          ).textTheme.titleLarge?.copyWith(color: AppColors.ink),
+                        ),
+                        const SizedBox(height: 6),
+                        SelectionArea(
+                          child: Text(
+                            receiverAddress,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: AppColors.slate,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        _ReceiveMetaLine(
+                          icon: transport.icon,
+                          label: transport == TransportKind.hotspot
+                              ? 'Endpoint'
+                              : 'Signal',
+                          value: helper,
+                        ),
+                        const SizedBox(height: 8),
+                        _ReceiveMetaLine(
+                          icon: Icons.rule_rounded,
+                          label: 'Check',
+                          value:
+                              'Only matching signer, receiver, amount, and checksum are stored.',
+                        ),
+                        if (showEndpointWarning) ...<Widget>[
+                          const SizedBox(height: 12),
+                          Text(
+                            'Connect to the same Wi-Fi or hotspot, then start listening to publish a live local endpoint.',
+                            style: Theme.of(
+                              context,
+                            ).textTheme.bodySmall?.copyWith(color: AppColors.amber),
+                          ),
+                        ],
+                        const SizedBox(height: 18),
+                        const _ReceiveSectionDivider(),
+                        const SizedBox(height: 18),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: <Widget>[
+                            ElevatedButton.icon(
+                              onPressed: onToggle,
+                              icon: Icon(
+                                activeListener
+                                    ? Icons.stop_circle_outlined
+                                    : Icons.play_arrow_rounded,
+                              ),
+                              label: Text(
+                                activeListener
+                                    ? 'Stop listener'
+                                    : 'Start listener',
+                              ),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: onOpenPending,
+                              icon: const Icon(Icons.schedule_send_rounded),
+                              label: const Text('Open pending'),
+                            ),
+                            if (invite != null)
+                              TextButton.icon(
+                                onPressed: () async {
+                                  await Clipboard.setData(
+                                    ClipboardData(text: invite!.toQrData()),
+                                  );
+                                  if (!context.mounted) {
+                                    return;
+                                  }
+                                  _showSnack(
+                                    context,
+                                    'Receiver QR payload copied.',
+                                  );
+                                },
+                                icon: const Icon(Icons.copy_all_rounded),
+                                label: const Text('Copy QR'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 18),
-              transportSwitch,
-              const SizedBox(height: 22),
-              _ReceiveScene(
-                transport: transport,
-                activeListener: activeListener,
-              ),
-              const SizedBox(height: 22),
-              Text(title, style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 8),
-              Text(caption, style: Theme.of(context).textTheme.bodyMedium),
-              const SizedBox(height: 18),
-              Text(
-                receiverDisplayAddress,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(color: AppColors.ink),
-              ),
-              const SizedBox(height: 6),
-              SelectionArea(
-                child: Text(
-                  receiverAddress,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppColors.slate,
-                    height: 1.35,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              _ReceiveMetaLine(
-                icon: transport.icon,
-                label: transport == TransportKind.hotspot ? 'Endpoint' : 'Signal',
-                value: helper,
-              ),
-              const SizedBox(height: 8),
-              _ReceiveMetaLine(
-                icon: Icons.rule_rounded,
-                label: 'Check',
-                value:
-                    'Only matching signer, receiver, amount, and checksum are stored.',
-              ),
-              if (showEndpointWarning) ...<Widget>[
-                const SizedBox(height: 10),
-                Text(
-                  'No hotspot endpoint yet. Connect this device to the same Wi-Fi or hotspot first.',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: AppColors.amber),
-                ),
-              ],
-            ],
-          );
-
-          final Widget actionRow = Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: <Widget>[
-              ElevatedButton.icon(
-                onPressed: onToggle,
-                icon: Icon(
-                  activeListener
-                      ? Icons.stop_circle_outlined
-                      : Icons.play_arrow_rounded,
-                ),
-                label: Text(
-                  activeListener ? 'Stop listener' : 'Start listener',
-                ),
-              ),
-              OutlinedButton.icon(
-                onPressed: onOpenPending,
-                icon: const Icon(Icons.schedule_send_rounded),
-                label: const Text('Open pending'),
-              ),
-              if (invite != null)
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    await Clipboard.setData(
-                      ClipboardData(text: invite!.toQrData()),
-                    );
-                    if (!context.mounted) {
-                      return;
-                    }
-                    _showSnack(context, 'Receiver QR payload copied.');
-                  },
-                  icon: const Icon(Icons.copy_all_rounded),
-                  label: const Text('Copy QR'),
-                ),
-            ],
-          );
-
-          final Widget qrPanel = _ReceiveQrPanel(
-            invite: invite,
-            transport: transport,
-            activeListener: activeListener,
-            hasWallet: hasWallet,
-          );
-
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              if (wide)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Expanded(child: infoColumn),
-                    const SizedBox(width: 24),
-                    SizedBox(width: 242, child: qrPanel),
-                  ],
-                )
-              else ...<Widget>[
-                infoColumn,
-                const SizedBox(height: 20),
-                qrPanel,
-              ],
-              const SizedBox(height: 20),
-              actionRow,
-            ],
+              );
+            },
           );
         },
+      ),
+    );
+  }
+}
+
+class _ReceiveHeroQr extends StatelessWidget {
+  const _ReceiveHeroQr({
+    required this.invite,
+    required this.transport,
+    required this.activeListener,
+    required this.hasWallet,
+  });
+
+  final ReceiverInvitePayload? invite;
+  final TransportKind transport;
+  final bool activeListener;
+  final bool hasWallet;
+
+  @override
+  Widget build(BuildContext context) {
+    final String caption = !hasWallet
+        ? 'Set up the wallet first.'
+        : invite == null
+        ? transport == TransportKind.hotspot
+            ? activeListener
+                ? 'Waiting for the local endpoint.'
+                : 'Start hotspot receive to show the live QR.'
+            : activeListener
+            ? 'BLE is live. Nearby senders can detect this receiver.'
+            : 'Start BLE receive to show the live QR.'
+        : transport == TransportKind.hotspot
+        ? 'Scan to fill address and endpoint.'
+        : 'Scan to switch the sender into BLE.';
+
+    return Container(
+      width: 244,
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: AppColors.ink.withValues(alpha: 0.08),
+            blurRadius: 28,
+            offset: const Offset(0, 14),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (invite != null)
+            QrImageView(
+              data: invite!.toQrData(),
+              version: QrVersions.auto,
+              size: 184,
+              backgroundColor: Colors.white,
+              eyeStyle: const QrEyeStyle(
+                eyeShape: QrEyeShape.square,
+                color: AppColors.ink,
+              ),
+              dataModuleStyle: const QrDataModuleStyle(
+                dataModuleShape: QrDataModuleShape.square,
+                color: AppColors.ink,
+              ),
+              semanticsLabel: 'Receiver QR code',
+            )
+          else
+            Container(
+              width: 184,
+              height: 184,
+              decoration: BoxDecoration(
+                color: AppColors.canvasWarm,
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Icon(
+                hasWallet
+                    ? transport == TransportKind.hotspot
+                        ? Icons.wifi_tethering_rounded
+                        : Icons.bluetooth_searching_rounded
+                    : Icons.account_balance_wallet_outlined,
+                size: 44,
+                color: hasWallet ? _transportTone(transport) : AppColors.slate,
+              ),
+            ),
+          const SizedBox(height: 14),
+          Text(
+            activeListener ? 'Share QR' : 'Ready QR',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            caption,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
       ),
     );
   }
@@ -4550,88 +5424,21 @@ class _ReceiveMetaLine extends StatelessWidget {
   }
 }
 
-class _ReceiveQrPanel extends StatelessWidget {
-  const _ReceiveQrPanel({
-    required this.invite,
-    required this.transport,
-    required this.activeListener,
-    required this.hasWallet,
-  });
-
-  final ReceiverInvitePayload? invite;
-  final TransportKind transport;
-  final bool activeListener;
-  final bool hasWallet;
+class _ReceiveSectionDivider extends StatelessWidget {
+  const _ReceiveSectionDivider();
 
   @override
   Widget build(BuildContext context) {
-    final String caption = !hasWallet
-        ? 'Set up the wallet first.'
-        : invite == null
-        ? 'Connect to local Wi-Fi or hotspot to generate a QR.'
-        : transport == TransportKind.hotspot
-        ? 'Scan to fill address and endpoint.'
-        : 'Scan to switch sender to BLE.';
-
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+      height: 1,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.94),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: Colors.white),
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: AppColors.ink.withValues(alpha: 0.05),
-            blurRadius: 22,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          if (invite != null)
-            QrImageView(
-              data: invite!.toQrData(),
-              version: QrVersions.auto,
-              size: 206,
-              backgroundColor: Colors.white,
-              eyeStyle: const QrEyeStyle(
-                eyeShape: QrEyeShape.square,
-                color: AppColors.ink,
-              ),
-              dataModuleStyle: const QrDataModuleStyle(
-                dataModuleShape: QrDataModuleShape.square,
-                color: AppColors.ink,
-              ),
-              semanticsLabel: 'Receiver QR code',
-            )
-          else
-            Container(
-              width: 206,
-              height: 206,
-              decoration: BoxDecoration(
-                color: AppColors.canvasWarm,
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: Icon(
-                hasWallet ? Icons.wifi_find_rounded : Icons.account_balance_wallet_outlined,
-                size: 42,
-                color: hasWallet ? AppColors.amber : AppColors.slate,
-              ),
-            ),
-          const SizedBox(height: 14),
-          Text(
-            activeListener ? 'Share QR' : 'Ready QR',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 6),
-          Text(
-            caption,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
+        gradient: LinearGradient(
+          colors: <Color>[
+            Colors.white.withValues(alpha: 0),
+            AppColors.line,
+            Colors.white.withValues(alpha: 0),
+          ],
+        ),
       ),
     );
   }
@@ -4787,6 +5594,9 @@ void _showSnack(BuildContext context, String message) {
 
 String _messageFor(Object error) {
   final String text = error.toString();
+  if (text.startsWith('HttpException: ')) {
+    return text.replaceFirst('HttpException: ', '');
+  }
   if (text.startsWith('FormatException: ')) {
     return text.replaceFirst('FormatException: ', '');
   }

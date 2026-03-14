@@ -243,10 +243,14 @@ class SolanaService {
   }
 
   Future<String> broadcastSignedTransaction(String encodedTransaction) async {
-    return rpcClient.sendTransaction(
-      encodedTransaction,
-      preflightCommitment: Commitment.confirmed,
-    );
+    try {
+      return await rpcClient.sendTransaction(
+        encodedTransaction,
+        preflightCommitment: Commitment.confirmed,
+      );
+    } catch (error) {
+      throw FormatException(_messageForBroadcastError(error));
+    }
   }
 
   Future<SignatureStatus?> getSignatureStatus(String signature) async {
@@ -326,5 +330,30 @@ class SolanaService {
     final Uri parsed = Uri.parse(rpcEndpoint);
     final String scheme = parsed.scheme == 'https' ? 'wss' : 'ws';
     return parsed.replace(scheme: scheme);
+  }
+
+  String _messageForBroadcastError(Object error) {
+    final String raw = error.toString();
+    final String normalized = raw.toLowerCase();
+    if (_looksLikeExpiredBroadcast(normalized)) {
+      return 'Signed transfer expired before settlement. Ask the sender to refresh readiness and resend.';
+    }
+    if (_looksLikeInstructionFailure(normalized)) {
+      return 'Solana rejected the signed transfer during simulation. Ask the sender to refresh readiness and resend.';
+    }
+    return raw;
+  }
+
+  bool _looksLikeExpiredBroadcast(String message) {
+    return message.contains('blockhash not found') ||
+        message.contains('block height exceeded') ||
+        message.contains('transaction expired') ||
+        message.contains('signature has expired') ||
+        message.contains('expired before settlement');
+  }
+
+  bool _looksLikeInstructionFailure(String message) {
+    return message.contains('transaction simulation failed') ||
+        message.contains('error processing instruction 0');
   }
 }

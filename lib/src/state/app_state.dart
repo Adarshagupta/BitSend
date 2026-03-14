@@ -423,6 +423,11 @@ class BitsendAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void acknowledgeLastReceivedTransfer() {
+    _lastReceivedTransferId = null;
+    notifyListeners();
+  }
+
   Future<void> refreshStatus() async {
     await _refreshConnectivityState();
     if (_wallet != null && _hasInternet) {
@@ -480,7 +485,12 @@ class BitsendAppState extends ChangeNotifier {
 
     final Ed25519HDKeyPair sender = await _walletService
         .loadOfflineSigningKeyPair();
-    await _ensureFreshCachedBlockhash();
+    await _refreshConnectivityState();
+    if (_hasInternet) {
+      await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
+    } else {
+      await _ensureFreshCachedBlockhash();
+    }
 
     final String transferId = _uuid.v4();
     final DateTime createdAt = _clock();
@@ -592,6 +602,7 @@ class BitsendAppState extends ChangeNotifier {
         .where((PendingTransfer transfer) {
           return transfer.transactionSignature != null &&
               (transfer.status == TransferStatus.sentOffline ||
+                  transfer.status == TransferStatus.receivedPendingBroadcast ||
                   transfer.status == TransferStatus.broadcastSubmitted ||
                   transfer.status == TransferStatus.broadcasting ||
                   transfer.status == TransferStatus.broadcastFailed);
@@ -833,7 +844,8 @@ class BitsendAppState extends ChangeNotifier {
     await _persistTransfer(transfer);
     _lastReceivedTransferId = transfer.transferId;
     if (_hasInternet) {
-      await _broadcastTransfer(transfer);
+      unawaited(_broadcastTransferInBackground(transfer));
+      unawaited(_refreshSubmittedTransfersSoon());
     }
     return const TransportReceiveResult(
       accepted: true,
@@ -865,7 +877,7 @@ class BitsendAppState extends ChangeNotifier {
           explorerUrl: _solanaService.explorerUrlFor(signature).toString(),
         ),
       );
-      await refreshSubmittedTransfers();
+      unawaited(_refreshSubmittedTransfersSoon());
     } catch (error) {
       bool reconciled = false;
       try {
@@ -876,8 +888,8 @@ class BitsendAppState extends ChangeNotifier {
       if (reconciled) {
         return;
       }
-      final String message = error.toString();
-      final TransferStatus status = message.toLowerCase().contains('blockhash')
+      final String message = _cleanErrorMessage(error);
+      final TransferStatus status = _isExpiredBroadcastMessage(message)
           ? TransferStatus.expired
           : TransferStatus.broadcastFailed;
       await _persistTransfer(
@@ -1054,6 +1066,29 @@ class BitsendAppState extends ChangeNotifier {
       ),
     );
     return true;
+  }
+
+  bool _isExpiredBroadcastMessage(String message) {
+    final String normalized = message.toLowerCase();
+    return normalized.contains('expired before settlement') ||
+        normalized.contains('blockhash not found') ||
+        normalized.contains('block height exceeded') ||
+        normalized.contains('transaction expired') ||
+        normalized.contains('signature has expired');
+  }
+
+  String _cleanErrorMessage(Object error) {
+    final String text = error.toString();
+    if (text.startsWith('FormatException: ')) {
+      return text.replaceFirst('FormatException: ', '');
+    }
+    if (text.startsWith('StateError: ')) {
+      return text.replaceFirst('StateError: ', '');
+    }
+    if (text.startsWith('HttpException: ')) {
+      return text.replaceFirst('HttpException: ', '');
+    }
+    return text;
   }
 
   Future<void> _runTask(String status, Future<void> Function() operation) async {

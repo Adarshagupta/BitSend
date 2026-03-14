@@ -60,6 +60,22 @@ void main() {
       ),
     );
   });
+
+  test('maps connection refused into a receiver-not-listening message', () async {
+    expect(
+      () => service.send(
+        endpoint: Uri.parse('http://127.0.0.1:1'),
+        envelope: _sampleEnvelope(),
+      ),
+      throwsA(
+        isA<HttpException>().having(
+          (HttpException error) => error.message,
+          'message',
+          contains('Receiver is not listening on hotspot yet.'),
+        ),
+      ),
+    );
+  });
 }
 
 OfflineEnvelope _sampleEnvelope() {

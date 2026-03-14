@@ -70,7 +70,12 @@ class BitsendApp extends StatelessWidget {
       AppRoutes.sendProgress => _page(settings, const SendProgressScreen()),
       AppRoutes.sendSuccess => _page(settings, const SendSuccessScreen()),
       AppRoutes.receiveListen => _page(settings, const ReceiveListenScreen()),
-      AppRoutes.receiveResult => _page(settings, const ReceiveResultScreen()),
+      AppRoutes.receiveResult => _page(
+        settings,
+        ReceiveResultScreen(
+          transferId: settings.arguments as String?,
+        ),
+      ),
       AppRoutes.pending => _page(settings, const PendingScreen()),
       AppRoutes.settings => _page(settings, const SettingsScreen()),
       _ => _page(settings, const HomeDashboardScreen()),

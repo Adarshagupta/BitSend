@@ -123,6 +123,54 @@ void main() {
     expect(find.text('Stop listener'), findsOneWidget);
   });
 
+  testWidgets('receive result screen shows the stored transfer details', (
+    WidgetTester tester,
+  ) async {
+    final PendingTransfer inbound = _transfer(
+      transferId: 'incoming-live',
+      direction: TransferDirection.inbound,
+      status: TransferStatus.receivedPendingBroadcast,
+      senderAddress: 'Sender1111111111111111111111111111111111',
+      receiverAddress: _wallet.address,
+      amountLamports: 250000000,
+    );
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      transferMap: <String, PendingTransfer>{inbound.transferId: inbound},
+      lastReceivedTransferIdValue: inbound.transferId,
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: ReceiveResultScreen(transferId: inbound.transferId),
+    );
+
+    expect(find.text('Signed handoff stored'), findsOneWidget);
+    expect(find.text('Open timeline'), findsOneWidget);
+    expect(find.text(inbound.transferId), findsOneWidget);
+  });
+
+  testWidgets('receive screen hides hotspot QR until listener is live', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      receiveTransportValue: TransportKind.hotspot,
+      localEndpointValue: 'http://192.168.82.8:8787',
+      hotspotListenerRunningValue: false,
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const ReceiveListenScreen(),
+    );
+
+    expect(find.text('Start hotspot receive to show the live QR.'), findsOneWidget);
+    expect(find.text('Copy QR'), findsNothing);
+  });
+
   testWidgets('pending screen switches between inbound and outbound transfers', (
     WidgetTester tester,
   ) async {
@@ -347,6 +395,7 @@ class _TestBitsendAppState extends BitsendAppState {
     this.localEndpointValue,
     this.hotspotListenerRunningValue = false,
     this.bleListenerRunningValue = false,
+    this.lastReceivedTransferIdValue,
   }) : super(clock: () => DateTime(2026, 3, 13, 12));
 
   final String bootRouteValue;
@@ -367,6 +416,7 @@ class _TestBitsendAppState extends BitsendAppState {
   final String? localEndpointValue;
   final bool hotspotListenerRunningValue;
   final bool bleListenerRunningValue;
+  final String? lastReceivedTransferIdValue;
 
   @override
   Future<void> initialize() async {}
@@ -426,6 +476,9 @@ class _TestBitsendAppState extends BitsendAppState {
 
   @override
   bool get bleListenerRunning => bleListenerRunningValue;
+
+  @override
+  String? get lastReceivedTransferId => lastReceivedTransferIdValue;
 
   @override
   Future<void> startReceiver() async {}

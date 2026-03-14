@@ -18,6 +18,7 @@ class BitsendPageScaffold extends StatelessWidget {
     this.showBack = true,
     this.showHeader = true,
     this.scrollable = true,
+    this.scrollController,
     this.primaryTab,
     this.onPrimaryTabSelected,
   });
@@ -30,6 +31,7 @@ class BitsendPageScaffold extends StatelessWidget {
   final bool showBack;
   final bool showHeader;
   final bool scrollable;
+  final ScrollController? scrollController;
   final BitsendPrimaryTab? primaryTab;
   final ValueChanged<BitsendPrimaryTab>? onPrimaryTabSelected;
 
@@ -101,6 +103,7 @@ class BitsendPageScaffold extends StatelessWidget {
                           children: <Widget>[
                             Positioned.fill(
                               child: ListView(
+                                controller: scrollController,
                                 keyboardDismissBehavior:
                                     ScrollViewKeyboardDismissBehavior.onDrag,
                                 padding: EdgeInsets.fromLTRB(
@@ -200,6 +203,7 @@ class BitsendPageScaffold extends StatelessWidget {
                             children: <Widget>[
                               Positioned.fill(
                                 child: ListView(
+                                  controller: scrollController,
                                   keyboardDismissBehavior:
                                       ScrollViewKeyboardDismissBehavior.onDrag,
                                   padding: EdgeInsets.fromLTRB(
