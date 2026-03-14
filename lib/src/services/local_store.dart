@@ -57,7 +57,7 @@ class LocalStore {
       'pending_transfers',
       orderBy: 'updated_at_ms DESC',
     );
-    return rows.map(PendingTransfer.fromDbMap).toList(growable: false);
+    return rows.map(PendingTransfer.fromDbMap).toList();
   }
 
   Future<void> upsertTransfer(PendingTransfer transfer) async {

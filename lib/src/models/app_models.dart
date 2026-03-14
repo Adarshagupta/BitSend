@@ -75,6 +75,40 @@ class WalletProfile {
   final WalletSetupMode mode;
 }
 
+class WalletBackupAccount {
+  const WalletBackupAccount({
+    required this.role,
+    required this.accountIndex,
+    required this.derivationPath,
+    required this.address,
+    required this.privateKeyBase64,
+  });
+
+  final String role;
+  final int accountIndex;
+  final String derivationPath;
+  final String address;
+  final String privateKeyBase64;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'role': role,
+        'accountIndex': accountIndex,
+        'derivationPath': derivationPath,
+        'address': address,
+        'privateKeyBase64': privateKeyBase64,
+      };
+}
+
+class WalletBackupExport {
+  const WalletBackupExport({
+    required this.fileName,
+    required this.filePath,
+  });
+
+  final String fileName;
+  final String filePath;
+}
+
 class CachedBlockhash {
   const CachedBlockhash({
     required this.blockhash,
@@ -150,12 +184,38 @@ class ReceiverDiscoveryItem {
     required this.label,
     required this.subtitle,
     required this.transport,
+    this.address = '',
+    this.rssi,
+    this.lastSeenAt,
+    this.metadataVerified = false,
   });
 
   final String id;
   final String label;
   final String subtitle;
   final TransportKind transport;
+  final String address;
+  final int? rssi;
+  final DateTime? lastSeenAt;
+  final bool metadataVerified;
+
+  bool get hasVerifiedAddress => metadataVerified && address.isNotEmpty;
+
+  String get resolvedAddress => hasVerifiedAddress ? address : subtitle;
+
+  String get signalLabel {
+    final int? strength = rssi;
+    if (strength == null) {
+      return 'Signal unknown';
+    }
+    if (strength >= -60) {
+      return 'Strong signal';
+    }
+    if (strength >= -75) {
+      return 'Medium signal';
+    }
+    return 'Weak signal';
+  }
 }
 
 class HomeStatus {
@@ -188,6 +248,80 @@ class WalletSummary {
   final bool readyForOffline;
   final Duration? blockhashAge;
   final String? localEndpoint;
+}
+
+class ReceiverInvitePayload {
+  const ReceiverInvitePayload({
+    required this.transport,
+    required this.address,
+    required this.displayAddress,
+    this.endpoint,
+  });
+
+  static const String type = 'bitsend.receiver';
+  static const int currentVersion = 1;
+
+  final TransportKind transport;
+  final String address;
+  final String displayAddress;
+  final String? endpoint;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'type': type,
+        'version': currentVersion,
+        'network': 'solana-devnet',
+        'transport': transport.name,
+        'address': address,
+        'displayAddress': displayAddress,
+        'endpoint': endpoint,
+      };
+
+  String toQrData() => jsonEncode(toJson());
+
+  factory ReceiverInvitePayload.fromQrData(String raw) {
+    final String trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      throw const FormatException('QR code is empty.');
+    }
+    final Map<String, dynamic> json;
+    try {
+      json = jsonDecode(trimmed) as Map<String, dynamic>;
+    } catch (_) {
+      throw const FormatException('This QR code is not a Bitsend receiver code.');
+    }
+
+    if ((json['type'] as String?) != type) {
+      throw const FormatException('This QR code is not a Bitsend receiver code.');
+    }
+    if ((json['network'] as String?) != 'solana-devnet') {
+      throw const FormatException('This QR code is for a different network.');
+    }
+    if ((json['version'] as int?) != currentVersion) {
+      throw const FormatException('This QR code version is not supported.');
+    }
+
+    final TransportKind transport = TransportKind.values.byName(
+      json['transport'] as String,
+    );
+    final String address = (json['address'] as String? ?? '').trim();
+    final String displayAddress = (json['displayAddress'] as String? ?? '')
+        .trim();
+    final String? endpoint = (json['endpoint'] as String?)?.trim();
+    if (address.isEmpty) {
+      throw const FormatException('Receiver address is missing from the QR code.');
+    }
+    if (transport == TransportKind.hotspot &&
+        (endpoint == null || endpoint.isEmpty)) {
+      throw const FormatException('Receiver hotspot endpoint is missing from the QR code.');
+    }
+
+    return ReceiverInvitePayload(
+      transport: transport,
+      address: address,
+      displayAddress: displayAddress.isEmpty ? address : displayAddress,
+      endpoint: endpoint == null || endpoint.isEmpty ? null : endpoint,
+    );
+  }
 }
 
 class OfflineEnvelope {
@@ -321,6 +455,25 @@ class PendingTransfer {
   bool get isInbound => direction == TransferDirection.inbound;
   double get amountSol => amountLamports / 1000000000;
   String get counterpartyAddress => isInbound ? senderAddress : receiverAddress;
+  bool get reservesOfflineFunds =>
+      direction == TransferDirection.outbound &&
+      switch (status) {
+        TransferStatus.sentOffline ||
+        TransferStatus.broadcasting ||
+        TransferStatus.broadcastSubmitted ||
+        TransferStatus.broadcastFailed => true,
+        _ => false,
+      };
+  bool get canBroadcast => switch (status) {
+        TransferStatus.sentOffline ||
+        TransferStatus.receivedPendingBroadcast ||
+        TransferStatus.broadcastFailed => true,
+        _ => false,
+      };
+  bool get canRetryBroadcast => status == TransferStatus.broadcastFailed;
+  bool get needsInitialBroadcast =>
+      status == TransferStatus.sentOffline ||
+      status == TransferStatus.receivedPendingBroadcast;
 
   PendingTransfer copyWith({
     TransferStatus? status,

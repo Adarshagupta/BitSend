@@ -1,5 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:solana/solana.dart' show isValidAddress;
 
 import '../app/app.dart';
 import '../app/theme.dart';
@@ -133,52 +138,13 @@ class WelcomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BitsendPageScaffold(
-      title: 'Send now. Settle later.',
-      subtitle:
-          'Sign a real devnet transfer, pass it over a local link, and broadcast it once either device is back online.',
+      title: 'Welcome',
       showBack: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          const SectionCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                _FeatureRow(
-                  icon: Icons.account_balance_wallet_rounded,
-                  title: 'Wallet on each device',
-                  caption: 'Create or restore a Solana devnet wallet locally.',
-                ),
-                SizedBox(height: 18),
-                _FeatureRow(
-                  icon: Icons.account_tree_rounded,
-                  title: 'Derived offline wallet',
-                  caption: 'A second wallet is derived for offline signing.',
-                ),
-                SizedBox(height: 18),
-                _FeatureRow(
-                  icon: Icons.swap_horiz_rounded,
-                  title: 'Local handoff',
-                  caption:
-                      'Use hotspot HTTP or BLE to pass the signed transfer.',
-                ),
-                SizedBox(height: 18),
-                _FeatureRow(
-                  icon: Icons.cloud_upload_rounded,
-                  title: 'Later settlement',
-                  caption: 'Funds move on-chain only after a later broadcast.',
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          const InlineBanner(
-            title: 'Before you start',
-            caption:
-                'Finish setup online, fund the offline wallet, then use local handoff when internet drops.',
-            icon: Icons.fact_check_rounded,
-          ),
-        ],
+      showHeader: false,
+      scrollable: false,
+      child: const Align(
+        alignment: Alignment.topCenter,
+        child: FadeSlideIn(delay: 0, child: _WelcomeHero()),
       ),
       bottom: ElevatedButton(
         onPressed: () {
@@ -201,6 +167,7 @@ class WalletSetupScreen extends StatefulWidget {
 
 class _WalletSetupScreenState extends State<WalletSetupScreen> {
   final TextEditingController _phraseController = TextEditingController();
+  String? _backupPath;
 
   @override
   void dispose() {
@@ -214,7 +181,9 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
       if (!mounted) {
         return;
       }
-      Navigator.of(context).pushReplacementNamed(AppRoutes.onboardingFund);
+      setState(() {
+        _backupPath = null;
+      });
     } catch (error) {
       _showSnack(context, _messageFor(error));
     }
@@ -226,83 +195,261 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
       if (!mounted) {
         return;
       }
-      Navigator.of(context).pushReplacementNamed(AppRoutes.onboardingFund);
+      setState(() {
+        _backupPath = null;
+      });
     } catch (error) {
       _showSnack(context, _messageFor(error));
     }
   }
 
+  Future<void> _exportBackup(BitsendAppState state) async {
+    try {
+      final WalletBackupExport export = await state.exportWalletBackup();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _backupPath = export.filePath;
+      });
+      _showSnack(context, 'Backup saved as ${export.fileName}.');
+    } catch (error) {
+      _showSnack(context, _messageFor(error));
+    }
+  }
+
+  Future<void> _copyPhrase(BitsendAppState state) async {
+    final WalletProfile? wallet = state.wallet;
+    if (wallet == null) {
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: wallet.seedPhrase));
+    if (!mounted) {
+      return;
+    }
+    _showSnack(context, 'Recovery phrase copied.');
+  }
+
+  Future<void> _copyBackupPath() async {
+    final String? backupPath = _backupPath;
+    if (backupPath == null) {
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: backupPath));
+    if (!mounted) {
+      return;
+    }
+    _showSnack(context, 'Backup path copied.');
+  }
+
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
+    final WalletProfile? wallet = state.wallet;
+    final WalletProfile? offlineWallet = state.offlineWallet;
+    final bool walletReady = wallet != null;
+    final bool isCreated = wallet?.mode == WalletSetupMode.created;
     return BitsendPageScaffold(
-      title: 'Set up this device',
-      subtitle: 'Create a wallet or restore an existing one.',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          SectionCard(
-            child: Column(
+      title: walletReady ? 'Secure your wallet' : 'Set up this device',
+      subtitle: walletReady
+          ? 'Download the backup before you continue to funding.'
+          : 'Create a wallet or restore an existing one.',
+      child: walletReady
+          ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text(
-                  'New wallet',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Generate a wallet for this device and continue to funding.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 18),
-                ElevatedButton(
-                  onPressed: state.working ? null : () => _createWallet(state),
-                  child: const Text('Create new wallet'),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          SectionCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  'Restore wallet',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Paste the recovery phrase used by this wallet.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 18),
-                TextField(
-                  controller: _phraseController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    hintText: 'Enter recovery phrase',
+                SectionCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
+                              color: AppColors.emeraldTint.withValues(
+                                alpha: 0.92,
+                              ),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Icon(
+                              isCreated
+                                  ? Icons.verified_user_rounded
+                                  : Icons.restore_rounded,
+                              color: AppColors.ink,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text(
+                                  isCreated
+                                      ? 'Wallet created'
+                                      : 'Wallet restored',
+                                  style: Theme.of(context).textTheme.titleLarge,
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  isCreated
+                                      ? 'Save the backup file now. It includes the recovery phrase plus both derived private keys.'
+                                      : 'This wallet is live on this device. Save another backup file if you need an offline copy.',
+                                  style:
+                                      Theme.of(context).textTheme.bodyMedium,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      DetailRow(label: 'Main wallet', value: wallet.displayAddress),
+                      DetailRow(
+                        label: 'Offline wallet',
+                        value:
+                            offlineWallet?.displayAddress ??
+                            'Derived wallet unavailable',
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 16),
-                OutlinedButton(
-                  onPressed: state.working ? null : () => _restoreWallet(state),
-                  child: const Text('Restore wallet'),
+                const InlineBanner(
+                  title: 'Handle with care',
+                  caption:
+                      'The backup file contains sensitive key material. Move it to safe storage and delete stray copies after saving it.',
+                  icon: Icons.key_rounded,
+                ),
+                const SizedBox(height: 16),
+                SectionCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        'Recovery phrase',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'This phrase restores both the main and offline wallets.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 16),
+                      SelectableText(
+                        wallet.seedPhrase,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 18),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: <Widget>[
+                          ElevatedButton.icon(
+                            onPressed: state.working
+                                ? null
+                                : () => _exportBackup(state),
+                            icon: const Icon(Icons.download_rounded),
+                            label: const Text('Download backup'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: () => _copyPhrase(state),
+                            icon: const Icon(Icons.copy_rounded),
+                            label: const Text('Copy phrase'),
+                          ),
+                        ],
+                      ),
+                      if (_backupPath != null) ...<Widget>[
+                        const SizedBox(height: 18),
+                        Text(
+                          'Saved file',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        SelectableText(
+                          _backupPath!,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 10),
+                        TextButton.icon(
+                          onPressed: _copyBackupPath,
+                          icon: const Icon(Icons.content_paste_go_rounded),
+                          label: const Text('Copy file path'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                SectionCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        'New wallet',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Generate a wallet for this device and continue to funding.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 18),
+                      ElevatedButton(
+                        onPressed: state.working ? null : () => _createWallet(state),
+                        child: const Text('Create new wallet'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SectionCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        'Restore wallet',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Paste the recovery phrase used by this wallet.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 18),
+                      TextField(
+                        controller: _phraseController,
+                        maxLines: 2,
+                        decoration: const InputDecoration(
+                          hintText: 'Enter recovery phrase',
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      OutlinedButton(
+                        onPressed: state.working ? null : () => _restoreWallet(state),
+                        child: const Text('Restore wallet'),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
-          ),
-          if (state.wallet != null) ...<Widget>[
-            const SizedBox(height: 16),
-            InlineBanner(
-              title: 'Wallet ready',
-              caption:
-                  'Address ${state.wallet!.displayAddress}. Save the recovery phrase before you continue.',
-              icon: Icons.verified_user_rounded,
-            ),
-          ],
-        ],
-      ),
+      bottom: walletReady
+          ? ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pushReplacementNamed(
+                  AppRoutes.onboardingFund,
+                );
+              },
+              child: const Text('Continue to funding'),
+            )
+          : null,
     );
   }
 }
@@ -338,14 +485,18 @@ class FundWalletScreen extends StatelessWidget {
     }
   }
 
+  void _skip(BuildContext context) {
+    Navigator.of(context).pushReplacementNamed(AppRoutes.home);
+  }
+
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
     final bool funded = state.hasEnoughFunding;
     return BitsendPageScaffold(
-      title: 'Fund wallet',
+      title: 'Fund this wallet',
       subtitle:
-          'Add devnet SOL so setup can finish and the offline wallet can be topped up later.',
+          'Add a little devnet SOL now, or skip and fund it later from Home.',
       actions: <Widget>[
         IconButton(
           onPressed: () => _refresh(context, state),
@@ -358,35 +509,138 @@ class FundWalletScreen extends StatelessWidget {
         children: <Widget>[
           SectionCard(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                MetricCard(
-                  label: 'Device address',
-                  value: state.wallet?.displayAddress ?? 'Wallet missing',
-                  caption:
-                      state.wallet?.address ??
-                      'Create or restore a wallet first.',
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: AppColors.amberTint.withValues(alpha: 0.9),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Icon(
+                        funded
+                            ? Icons.account_balance_wallet_rounded
+                            : Icons.south_west_rounded,
+                        color: AppColors.ink,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            funded ? 'Wallet funded' : 'Needs devnet SOL',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            funded
+                                ? 'Setup balance is ready. You can enter the app and top up the offline wallet later.'
+                                : 'Target ${Formatters.sol(minimumFundingSol)} so setup can move forward cleanly.',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                MetricCard(
-                  label: 'Available balance',
-                  value: Formatters.sol(state.mainBalanceSol),
-                  caption: funded
-                      ? 'Enough to continue.'
-                      : 'Reach at least ${Formatters.sol(minimumFundingSol)} to continue.',
+                const SizedBox(height: 20),
+                Text(
+                  Formatters.sol(state.mainBalanceSol),
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Main wallet balance',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 18),
+                DetailRow(
+                  label: 'Wallet',
+                  value: state.wallet?.displayAddress ?? 'Wallet missing',
+                ),
+                DetailRow(
+                  label: 'Address',
+                  value: state.wallet?.address ?? 'Create or restore a wallet first.',
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          SectionCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'Get test SOL',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Request 1 SOL from the devnet faucet, then refresh the balance.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: state.working
+                            ? null
+                            : () => _requestAirdrop(context, state),
+                        child: const Text('Airdrop 1 SOL'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: state.working
+                            ? null
+                            : () => _refresh(context, state),
+                        child: const Text('Refresh balance'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: <Widget>[
+                    _MiniCue(
+                      icon: Icons.cloud_done_rounded,
+                      label: 'Devnet',
+                      active: state.hasDevnet,
+                    ),
+                    _MiniCue(
+                      icon: Icons.account_balance_wallet_outlined,
+                      label: 'Min ${Formatters.sol(minimumFundingSol)}',
+                      active: funded,
+                    ),
+                    _MiniCue(
+                      icon: Icons.skip_next_rounded,
+                      label: 'Skip later',
+                      active: true,
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
           const SizedBox(height: 16),
           InlineBanner(
-            title: 'Minimum funding',
-            caption:
-                'Use an airdrop until the wallet clears the setup threshold.',
-            icon: Icons.savings_rounded,
-            action: TextButton(
-              onPressed: () => _requestAirdrop(context, state),
-              child: const Text('Airdrop'),
-            ),
+            title: funded ? 'Ready to continue' : 'Funding can wait',
+            caption: funded
+                ? 'The wallet has enough devnet SOL for setup.'
+                : 'If the faucet is slow, skip for now and come back from Deposit or Home later.',
+            icon: funded
+                ? Icons.check_circle_outline_rounded
+                : Icons.schedule_rounded,
           ),
         ],
       ),
@@ -401,11 +655,13 @@ class FundWalletScreen extends StatelessWidget {
                 : null,
             child: const Text('Continue'),
           ),
-          const SizedBox(height: 10),
-          OutlinedButton(
-            onPressed: () => _requestAirdrop(context, state),
-            child: const Text('Request airdrop'),
-          ),
+          if (!funded) ...<Widget>[
+            const SizedBox(height: 10),
+            OutlinedButton(
+              onPressed: () => _skip(context),
+              child: const Text('Skip for now'),
+            ),
+          ],
         ],
       ),
     );
@@ -481,6 +737,23 @@ class OnboardingPrepareScreen extends StatelessWidget {
 class HomeDashboardScreen extends StatelessWidget {
   const HomeDashboardScreen({super.key});
 
+  Future<void> _refreshHome(
+    BuildContext context,
+    BitsendAppState state,
+  ) async {
+    try {
+      await state.refreshStatus();
+      if (state.hasInternet) {
+        await state.refreshWalletData();
+      }
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+      _showSnack(context, _messageFor(error));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
@@ -491,6 +764,27 @@ class HomeDashboardScreen extends StatelessWidget {
         state.hasWallet &&
         state.hasOfflineFunds &&
         state.hasOfflineReadyBlockhash;
+    final String sendRoute = state.hasWallet
+        ? AppRoutes.sendTransport
+        : AppRoutes.prepare;
+    final String sendCaption = !state.hasWallet
+        ? 'Set up wallet'
+        : canSend
+        ? 'Handoff'
+        : !state.hasOfflineFunds && !state.hasOfflineReadyBlockhash
+        ? 'Fund + refresh'
+        : !state.hasOfflineFunds
+        ? 'Fund offline wallet'
+        : 'Refresh readiness';
+    final String supportStatus = !state.hasWallet
+        ? 'Set up wallet to start.'
+        : canSend
+        ? 'Offline wallet is ready.'
+        : !state.hasOfflineFunds && !state.hasOfflineReadyBlockhash
+        ? 'Fund and refresh before send.'
+        : !state.hasOfflineFunds
+        ? 'Fund the offline wallet before send.'
+        : 'Refresh readiness before send.';
 
     return BitsendPageScaffold(
       title: 'Home',
@@ -536,20 +830,31 @@ class HomeDashboardScreen extends StatelessWidget {
           const SizedBox(height: 14),
           FadeSlideIn(
             delay: 40,
-            child: _HomeSituationCard(
-              hasOfflineFunds: state.hasOfflineFunds,
-              hasReadyBlockhash: state.hasOfflineReadyBlockhash,
-              hasLocalLink: status.hasLocalLink,
-              canSend: canSend,
-              onPrimary: () {
-                Navigator.of(context).pushNamed(
-                  canSend ? AppRoutes.sendTransport : AppRoutes.prepare,
-                );
+            child: _HomeHeroActions(
+              sendCaption: sendCaption,
+              statusText: supportStatus,
+              onSend: () {
+                Navigator.of(context).pushNamed(sendRoute);
               },
+              onReceive: state.hasWallet
+                  ? () {
+                      Navigator.of(
+                        context,
+                      ).pushNamed(AppRoutes.receiveListen);
+                    }
+                  : null,
+              onFund: () {
+                Navigator.of(context).pushNamed(AppRoutes.prepare);
+              },
+              onRefresh: state.working
+                  ? null
+                  : () {
+                      _refreshHome(context, state);
+                    },
             ),
           ),
           const SizedBox(height: 20),
-          Text('Actions', style: Theme.of(context).textTheme.titleLarge),
+          Text('More', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 14),
           Column(
             children: <Widget>[
@@ -569,7 +874,7 @@ class HomeDashboardScreen extends StatelessWidget {
                 delay: 120,
                 child: ActionTile(
                   title: 'Offline Wallet',
-                  caption: 'Fund + refresh',
+                  caption: sendCaption,
                   icon: Icons.account_balance_wallet_outlined,
                   onTap: () {
                     Navigator.of(context).pushNamed(AppRoutes.prepare);
@@ -579,32 +884,6 @@ class HomeDashboardScreen extends StatelessWidget {
               const SizedBox(height: 12),
               FadeSlideIn(
                 delay: 160,
-                child: ActionTile(
-                  title: 'Send',
-                  caption: 'Handoff',
-                  icon: Icons.send_rounded,
-                  enabled: canSend,
-                  onTap: () {
-                    Navigator.of(context).pushNamed(AppRoutes.sendTransport);
-                  },
-                ),
-              ),
-              const SizedBox(height: 12),
-              FadeSlideIn(
-                delay: 200,
-                child: ActionTile(
-                  title: 'Receive',
-                  caption: 'Listen',
-                  icon: Icons.call_received_rounded,
-                  enabled: state.hasWallet,
-                  onTap: () {
-                    Navigator.of(context).pushNamed(AppRoutes.receiveListen);
-                  },
-                ),
-              ),
-              const SizedBox(height: 12),
-              FadeSlideIn(
-                delay: 240,
                 child: ActionTile(
                   title: 'Pending',
                   caption: 'Queue',
@@ -952,6 +1231,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
   late final TextEditingController _endpointController;
   String? _selectedBleReceiverId;
   String? _selectedBleReceiverName;
+  bool _autoScannedBle = false;
 
   @override
   void initState() {
@@ -972,6 +1252,18 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
     _selectedBleReceiverName = state.sendDraft.receiverPeripheralName.isEmpty
         ? null
         : state.sendDraft.receiverPeripheralName;
+    if (state.sendDraft.transport == TransportKind.ble &&
+        !_autoScannedBle &&
+        state.bleReceivers.isEmpty &&
+        !state.bleDiscovering) {
+      _autoScannedBle = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        _scanBleReceivers(state);
+      });
+    }
   }
 
   @override
@@ -1006,6 +1298,77 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
     Navigator.of(context).pushNamed(AppRoutes.sendAmount);
   }
 
+  Future<void> _scanBleReceivers(
+    BitsendAppState state, {
+    String? preferredAddress,
+  }) async {
+    try {
+      await state.scanBleReceivers();
+      if (!mounted || preferredAddress == null || preferredAddress.isEmpty) {
+        return;
+      }
+      for (final ReceiverDiscoveryItem item in state.bleReceivers) {
+        if (item.resolvedAddress == preferredAddress) {
+          setState(() {
+            _selectedBleReceiverId = item.id;
+            _selectedBleReceiverName = item.label;
+          });
+          break;
+        }
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final String message = _messageFor(error);
+      if (_looksLikeBluetoothDisabled(message)) {
+        await _showBluetoothPrompt(context, message);
+        return;
+      }
+      _showSnack(context, message);
+    }
+  }
+
+  Future<void> _scanReceiverQr(BitsendAppState state) async {
+    final ReceiverInvitePayload? invite =
+        await Navigator.of(context).push<ReceiverInvitePayload>(
+          MaterialPageRoute<ReceiverInvitePayload>(
+            builder: (_) => const _ReceiverQrScannerScreen(),
+          ),
+        );
+    if (!mounted || invite == null) {
+      return;
+    }
+    await _applyInvite(state, invite);
+  }
+
+  Future<void> _applyInvite(
+    BitsendAppState state,
+    ReceiverInvitePayload invite,
+  ) async {
+    state.setSendTransport(invite.transport);
+    if (invite.transport == TransportKind.hotspot) {
+      state.updateReceiver(
+        receiverAddress: invite.address,
+        receiverEndpoint: invite.endpoint ?? '',
+      );
+    } else {
+      state.updateReceiver(receiverAddress: invite.address);
+    }
+    setState(() {
+      _addressController.text = invite.address;
+      _endpointController.text = invite.endpoint ?? '';
+      _selectedBleReceiverId = null;
+      _selectedBleReceiverName = null;
+      if (invite.transport == TransportKind.ble) {
+        _selectedBleReceiverName = invite.displayAddress;
+      }
+    });
+    if (invite.transport == TransportKind.ble) {
+      await _scanBleReceivers(state, preferredAddress: invite.address);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
@@ -1035,8 +1398,20 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
               setState(() {
                 _selectedBleReceiverId = null;
                 _selectedBleReceiverName = null;
+                if (value.first == TransportKind.ble) {
+                  _autoScannedBle = true;
+                }
               });
+              if (value.first == TransportKind.ble && state.bleReceivers.isEmpty) {
+                _scanBleReceivers(state);
+              }
             },
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () => _scanReceiverQr(state),
+            icon: const Icon(Icons.qr_code_scanner_rounded),
+            label: const Text('Scan receiver QR'),
           ),
           const SizedBox(height: 16),
           SectionCard(
@@ -1082,18 +1457,13 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                       TextButton(
                         onPressed: state.bleDiscovering
                             ? null
-                            : () async {
-                                try {
-                                  await state.scanBleReceivers();
-                                } catch (error) {
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  _showSnack(context, _messageFor(error));
-                                }
-                              },
+                            : () => _scanBleReceivers(state),
                         child: Text(
-                          state.bleDiscovering ? 'Scanning...' : 'Scan',
+                          state.bleDiscovering
+                              ? 'Scanning...'
+                              : state.bleReceivers.isEmpty
+                              ? 'Scan'
+                              : 'Rescan',
                         ),
                       ),
                     ],
@@ -1103,7 +1473,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                     const InlineBanner(
                       title: 'No receiver selected',
                       caption:
-                          'Open Receive on the other device, switch to BLE, then scan again.',
+                          'Open Receive on the other device, switch to BLE, and keep both phones nearby. Verified wallets rise to the top.',
                       icon: Icons.bluetooth_searching_rounded,
                     )
                   else
@@ -1114,12 +1484,22 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                               padding: const EdgeInsets.only(bottom: 10),
                               child: _SelectableReceiverCard(
                                 title: item.label,
-                                caption: item.subtitle,
+                                caption: item.hasVerifiedAddress
+                                    ? item.address
+                                    : item.subtitle,
+                                detail: item.metadataVerified
+                                    ? item.signalLabel
+                                    : '${item.signalLabel} · Wallet not verified yet',
+                                verified: item.metadataVerified,
                                 selected: _selectedBleReceiverId == item.id,
                                 onTap: () {
                                   setState(() {
                                     _selectedBleReceiverId = item.id;
                                     _selectedBleReceiverName = item.label;
+                                    if (isValidAddress(item.resolvedAddress)) {
+                                      _addressController.text =
+                                          item.resolvedAddress;
+                                    }
                                   });
                                 },
                               ),
@@ -1151,6 +1531,22 @@ class SendAmountScreen extends StatefulWidget {
 class _SendAmountScreenState extends State<SendAmountScreen> {
   late final TextEditingController _amountController;
 
+  String? _sendReadinessMessage(BitsendAppState state) {
+    if (!state.hasWallet || !state.hasOfflineWallet) {
+      return 'Set up the wallet first.';
+    }
+    if (!state.hasOfflineFunds && !state.hasOfflineReadyBlockhash) {
+      return 'Top up the offline wallet and refresh readiness first.';
+    }
+    if (!state.hasOfflineFunds) {
+      return 'Top up the offline wallet first.';
+    }
+    if (!state.hasOfflineReadyBlockhash) {
+      return 'Refresh readiness before signing.';
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1177,6 +1573,11 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
       _showSnack(context, 'Enter an amount greater than zero.');
       return;
     }
+    final String? readinessMessage = _sendReadinessMessage(state);
+    if (readinessMessage != null) {
+      _showSnack(context, readinessMessage);
+      return;
+    }
     Navigator.of(context).pushNamed(AppRoutes.sendReview);
   }
 
@@ -1185,20 +1586,26 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
     final BitsendAppState state = BitsendStateScope.of(context);
     final double amount = double.tryParse(_amountController.text.trim()) ?? 0;
     final int lamports = (amount * 1000000000).round();
+    final String? readinessMessage = _sendReadinessMessage(state);
     return BitsendPageScaffold(
       title: 'Amount',
       subtitle: 'Enter the amount in SOL.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          if (!state.hasOfflineReadyBlockhash)
-            const InlineBanner(
-              title: 'Refresh readiness first',
-              caption:
-                  'This flow signs from the offline wallet and needs a fresh blockhash.',
+          if (readinessMessage != null)
+            InlineBanner(
+              title: 'Finish offline prep',
+              caption: readinessMessage,
               icon: Icons.lock_clock_rounded,
+              action: OutlinedButton(
+                onPressed: () {
+                  Navigator.of(context).pushNamed(AppRoutes.prepare);
+                },
+                child: const Text('Open offline wallet'),
+              ),
             ),
-          if (!state.hasOfflineReadyBlockhash) const SizedBox(height: 16),
+          if (readinessMessage != null) const SizedBox(height: 16),
           SectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1238,9 +1645,7 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
         ],
       ),
       bottom: ElevatedButton(
-        onPressed: state.hasOfflineReadyBlockhash && state.hasOfflineFunds
-            ? () => _continue(state)
-            : null,
+        onPressed: () => _continue(state),
         child: const Text('Review transfer'),
       ),
     );
@@ -1487,7 +1892,7 @@ class SendSuccessScreen extends StatelessWidget {
     return BitsendPageScaffold(
       title: 'Delivered',
       subtitle:
-          'The signed transfer was delivered and is waiting for broadcast.',
+          'The signed transfer was delivered. Any online device can settle it.',
       child: transfer == null
           ? const EmptyStateCard(
               title: 'No transfer found',
@@ -1507,7 +1912,7 @@ class SendSuccessScreen extends StatelessWidget {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'Sent offline and queued for later settlement.',
+                          'Sent offline. Settlement can continue automatically.',
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                       ),
@@ -1603,7 +2008,13 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
       if (!mounted) {
         return;
       }
-      _showSnack(context, _messageFor(error));
+      final String message = _messageFor(error);
+      if (state.receiveTransport == TransportKind.ble &&
+          _looksLikeBluetoothDisabled(message)) {
+        await _showBluetoothPrompt(context, message);
+        return;
+      }
+      _showSnack(context, message);
     }
   }
 
@@ -1618,7 +2029,13 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
       if (!mounted) {
         return;
       }
-      _showSnack(context, _messageFor(error));
+      final String message = _messageFor(error);
+      if (state.receiveTransport == TransportKind.ble &&
+          _looksLikeBluetoothDisabled(message)) {
+        await _showBluetoothPrompt(context, message);
+        return;
+      }
+      _showSnack(context, message);
     }
   }
 
@@ -1629,9 +2046,13 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
     final bool activeListener = transport == TransportKind.hotspot
         ? state.hotspotListenerRunning
         : state.bleListenerRunning;
+    final ReceiverInvitePayload? invite = _receiverInvitePayload(
+      state,
+      transport,
+    );
     return BitsendPageScaffold(
       title: 'Receive',
-      subtitle: 'Listen on hotspot or BLE and store validated transfers.',
+      subtitle: 'Catch a signed handoff over local Wi-Fi or BLE.',
       actions: <Widget>[
         IconButton(
           onPressed: state.refreshStatus,
@@ -1639,88 +2060,33 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
           icon: const Icon(Icons.refresh_rounded),
         ),
       ],
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          SegmentedButton<TransportKind>(
-            segments: const <ButtonSegment<TransportKind>>[
-              ButtonSegment<TransportKind>(
-                value: TransportKind.hotspot,
-                label: Text('Hotspot'),
-                icon: Icon(Icons.wifi_tethering_rounded),
-              ),
-              ButtonSegment<TransportKind>(
-                value: TransportKind.ble,
-                label: Text('BLE'),
-                icon: Icon(Icons.bluetooth_rounded),
-              ),
-            ],
-            selected: <TransportKind>{transport},
-            onSelectionChanged: (Set<TransportKind> value) async {
-              if (state.listenerRunning) {
-                await state.stopReceiver();
-              }
-              state.setReceiveTransport(value.first);
-            },
-          ),
-          const SizedBox(height: 16),
-          SectionCard(
-            child: Column(
-              children: <Widget>[
-                MetricCard(
-                  label: 'Listener status',
-                  value: activeListener ? 'Ready to receive' : 'Stopped',
-                  caption: activeListener
-                      ? (transport == TransportKind.hotspot
-                            ? 'The local HTTP server is listening on port 8787.'
-                            : 'The device is advertising the bitsend BLE service.')
-                      : 'Tap start to accept transfers.',
-                ),
-                const SizedBox(height: 12),
-                MetricCard(
-                  label: 'Receiver address',
-                  value: state.wallet?.displayAddress ?? 'Wallet missing',
-                  caption: state.wallet?.address ?? 'Set up the wallet first.',
-                ),
-                const SizedBox(height: 12),
-                MetricCard(
-                  label: transport == TransportKind.hotspot
-                      ? 'Local endpoint'
-                      : 'BLE service',
-                  value: transport == TransportKind.hotspot
-                      ? (state.localEndpoint ?? 'No local IP available')
-                      : 'bitsend BLE receiver',
-                  caption: transport == TransportKind.hotspot
-                      ? 'Share this with the sender.'
-                      : 'Ask the sender to pick BLE and scan for this device.',
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          InlineBanner(
-            title: 'Validation',
-            caption:
-                'Only envelopes with matching signer, receiver, amount, and checksum are stored.',
-            icon: Icons.rule_rounded,
-          ),
-        ],
-      ),
-      bottom: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          ElevatedButton(
-            onPressed: () => _toggle(state),
-            child: Text(activeListener ? 'Stop listener' : 'Start listener'),
-          ),
-          const SizedBox(height: 10),
-          OutlinedButton(
-            onPressed: () {
-              Navigator.of(context).pushNamed(AppRoutes.pending);
-            },
-            child: const Text('Open pending'),
-          ),
-        ],
+      showBack: false,
+      showHeader: false,
+      primaryTab: BitsendPrimaryTab.home,
+      onPrimaryTabSelected: (BitsendPrimaryTab tab) {
+        _navigatePrimaryTab(context, tab);
+      },
+      child: FadeSlideIn(
+        delay: 0,
+        child: _ReceiveStudioCard(
+          transport: transport,
+          activeListener: activeListener,
+          hasWallet: state.hasWallet,
+          invite: invite,
+          receiverDisplayAddress: state.wallet?.displayAddress ?? 'Wallet missing',
+          receiverAddress: state.wallet?.address ?? 'Set up the wallet first.',
+          endpoint: state.localEndpoint,
+          onTransportChanged: (TransportKind next) async {
+            if (state.listenerRunning) {
+              await state.stopReceiver();
+            }
+            state.setReceiveTransport(next);
+          },
+          onToggle: state.hasWallet ? () => _toggle(state) : null,
+          onOpenPending: () {
+            Navigator.of(context).pushNamed(AppRoutes.pending);
+          },
+        ),
       ),
     );
   }
@@ -1735,7 +2101,8 @@ class ReceiveResultScreen extends StatelessWidget {
     final PendingTransfer? transfer = state.lastReceivedTransfer;
     return BitsendPageScaffold(
       title: 'Received',
-      subtitle: 'The signed transfer was saved and is waiting for broadcast.',
+      subtitle:
+          'The signed transfer was saved. Settlement continues when a device is online.',
       child: transfer == null
           ? const EmptyStateCard(
               title: 'No transfer stored yet',
@@ -1756,7 +2123,7 @@ class ReceiveResultScreen extends StatelessWidget {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'Received and queued for broadcast.',
+                          'Received offline and ready to settle.',
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                       ),
@@ -2046,10 +2413,7 @@ class TransferDetailScreen extends StatelessWidget {
       ),
       bottom: _TransferDetailActions(
         transfer: transfer,
-        onRetry:
-            transfer.isInbound &&
-                (transfer.status == TransferStatus.broadcastFailed ||
-                    transfer.status == TransferStatus.receivedPendingBroadcast)
+        onRetry: transfer.canBroadcast
             ? () => _retry(context, state, transfer)
             : null,
       ),
@@ -2066,6 +2430,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _rpcController;
+  String? _backupPath;
 
   @override
   void initState() {
@@ -2112,6 +2477,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _exportBackup(BitsendAppState state) async {
+    try {
+      final WalletBackupExport export = await state.exportWalletBackup();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _backupPath = export.filePath;
+      });
+      _showSnack(context, 'Backup saved as ${export.fileName}.');
+    } catch (error) {
+      _showSnack(context, _messageFor(error));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
@@ -2147,20 +2527,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 16),
-                OutlinedButton(
-                  onPressed: state.wallet == null
-                      ? null
-                      : () async {
-                          await Clipboard.setData(
-                            ClipboardData(text: state.wallet!.seedPhrase),
-                          );
-                          if (!context.mounted) {
-                            return;
-                          }
-                          _showSnack(context, 'Recovery phrase copied.');
-                        },
-                  child: const Text('Copy phrase'),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: <Widget>[
+                    OutlinedButton(
+                      onPressed: state.wallet == null
+                          ? null
+                          : () async {
+                              await Clipboard.setData(
+                                ClipboardData(text: state.wallet!.seedPhrase),
+                              );
+                              if (!context.mounted) {
+                                return;
+                              }
+                              _showSnack(context, 'Recovery phrase copied.');
+                            },
+                      child: const Text('Copy phrase'),
+                    ),
+                    ElevatedButton(
+                      onPressed: state.wallet == null || state.working
+                          ? null
+                          : () => _exportBackup(state),
+                      child: const Text('Download backup'),
+                    ),
+                  ],
                 ),
+                if (_backupPath != null) ...<Widget>[
+                  const SizedBox(height: 16),
+                  Text(
+                    'Latest backup',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    _backupPath!,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ],
             ),
           ),
@@ -2333,172 +2737,190 @@ class _DepositSourceIcon extends StatelessWidget {
   }
 }
 
-class _HomeSituationCard extends StatelessWidget {
-  const _HomeSituationCard({
-    required this.hasOfflineFunds,
-    required this.hasReadyBlockhash,
-    required this.hasLocalLink,
-    required this.canSend,
-    required this.onPrimary,
+class _HomeHeroActions extends StatelessWidget {
+  const _HomeHeroActions({
+    required this.sendCaption,
+    required this.statusText,
+    required this.onSend,
+    required this.onReceive,
+    required this.onFund,
+    required this.onRefresh,
   });
 
-  final bool hasOfflineFunds;
-  final bool hasReadyBlockhash;
-  final bool hasLocalLink;
-  final bool canSend;
-  final VoidCallback onPrimary;
+  final String sendCaption;
+  final String statusText;
+  final VoidCallback onSend;
+  final VoidCallback? onReceive;
+  final VoidCallback onFund;
+  final VoidCallback? onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    final String title = canSend
-        ? 'Ready to send'
-        : !hasOfflineFunds
-        ? 'Fund offline wallet'
-        : 'Refresh before send';
-
-    return SectionCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Text(title, style: Theme.of(context).textTheme.titleLarge),
-              const Spacer(),
-              TextButton(
-                onPressed: onPrimary,
-                child: Text(canSend ? 'Send' : 'Open'),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: _HomePrimaryActionButton(
+                label: 'Send',
+                icon: Icons.send_rounded,
+                onPressed: onSend,
               ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          _SituationFlow(
-            hasOfflineFunds: hasOfflineFunds,
-            hasReadyBlockhash: hasReadyBlockhash,
-            canSend: canSend,
-          ),
-          const SizedBox(height: 18),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: <Widget>[
-              _MiniCue(
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _HomePrimaryActionButton(
+                label: 'Receive',
+                icon: Icons.call_received_rounded,
+                onPressed: onReceive,
+                outlined: true,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: _HomeUtilityActionButton(
+                label: 'Fund',
                 icon: Icons.account_balance_wallet_outlined,
-                label: 'Offline',
-                active: hasOfflineFunds,
+                onPressed: onFund,
               ),
-              _MiniCue(
-                icon: Icons.bolt_rounded,
-                label: 'Ready',
-                active: hasReadyBlockhash,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _HomeUtilityActionButton(
+                label: 'Refresh',
+                icon: Icons.refresh_rounded,
+                onPressed: onRefresh,
               ),
-              _MiniCue(
-                icon: Icons.wifi_tethering_rounded,
-                label: 'Link',
-                active: hasLocalLink,
-              ),
-            ],
-          ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _HomeStatusLine(
+          caption: statusText,
+          tone: sendCaption == 'Handoff'
+              ? AppColors.emerald
+              : AppColors.amber,
+        ),
+      ],
+    );
+  }
+}
+
+class _HomePrimaryActionButton extends StatelessWidget {
+  const _HomePrimaryActionButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    this.outlined = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final bool outlined;
+
+  @override
+  Widget build(BuildContext context) {
+    final ButtonStyle style = outlined
+        ? OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(50),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          )
+        : ElevatedButton.styleFrom(
+            minimumSize: const Size.fromHeight(50),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          );
+
+    final Widget child = Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: <Widget>[
+        Icon(icon, size: 18),
+        const SizedBox(width: 8),
+        Text(label),
+      ],
+    );
+
+    return outlined
+        ? OutlinedButton(
+            onPressed: onPressed,
+            style: style,
+            child: child,
+          )
+        : ElevatedButton(
+            onPressed: onPressed,
+            style: style,
+            child: child,
+          );
+  }
+}
+
+class _HomeUtilityActionButton extends StatelessWidget {
+  const _HomeUtilityActionButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(42),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        backgroundColor: Colors.white.withValues(alpha: 0.36),
+        textStyle: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          Icon(icon, size: 16),
+          const SizedBox(width: 8),
+          Text(label),
         ],
       ),
     );
   }
 }
 
-class _SituationFlow extends StatelessWidget {
-  const _SituationFlow({
-    required this.hasOfflineFunds,
-    required this.hasReadyBlockhash,
-    required this.canSend,
-  });
+class _HomeStatusLine extends StatelessWidget {
+  const _HomeStatusLine({required this.caption, required this.tone});
 
-  final bool hasOfflineFunds;
-  final bool hasReadyBlockhash;
-  final bool canSend;
+  final String caption;
+  final Color tone;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: <Widget>[
-        const Expanded(
-          child: _SituationNode(
-            icon: Icons.account_balance_wallet_rounded,
-            label: 'Main',
-            active: true,
+    return Semantics(
+      label: caption,
+      child: Row(
+        children: <Widget>[
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: tone, shape: BoxShape.circle),
           ),
-        ),
-        _FlowConnector(active: hasOfflineFunds),
-        Expanded(
-          child: _SituationNode(
-            icon: Icons.account_balance_wallet_outlined,
-            label: 'Offline',
-            active: hasOfflineFunds,
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              caption,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppColors.ink.withValues(alpha: 0.78),
+              ),
+            ),
           ),
-        ),
-        _FlowConnector(active: hasReadyBlockhash),
-        Expanded(
-          child: _SituationNode(
-            icon: Icons.send_rounded,
-            label: 'Send',
-            active: canSend,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _SituationNode extends StatelessWidget {
-  const _SituationNode({
-    required this.icon,
-    required this.label,
-    required this.active,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: <Widget>[
-        Container(
-          width: 54,
-          height: 54,
-          decoration: BoxDecoration(
-            color: active
-                ? AppColors.emeraldTint
-                : Colors.white.withValues(alpha: 0.7),
-            shape: BoxShape.circle,
-          ),
-          child: Icon(
-            icon,
-            color: active ? AppColors.emerald : AppColors.slate,
-            size: 24,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(label, style: Theme.of(context).textTheme.bodySmall),
-      ],
-    );
-  }
-}
-
-class _FlowConnector extends StatelessWidget {
-  const _FlowConnector({required this.active});
-
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        height: 2,
-        margin: const EdgeInsets.only(bottom: 22),
-        decoration: BoxDecoration(
-          color: active ? AppColors.emerald : AppColors.line,
-          borderRadius: BorderRadius.circular(999),
-        ),
+        ],
       ),
     );
   }
@@ -2939,8 +3361,415 @@ class _HeroStatusChip extends StatelessWidget {
   }
 }
 
-class _FeatureRow extends StatelessWidget {
-  const _FeatureRow({
+class _WelcomeHero extends StatelessWidget {
+  const _WelcomeHero();
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final bool compact = constraints.maxHeight < 620;
+        final double illustrationHeight = compact ? 176 : 208;
+        return Semantics(
+          container: true,
+          label: 'Send locally first, then settle later on devnet.',
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: <Color>[
+                  Colors.white.withValues(alpha: 0.92),
+                  AppColors.emeraldTint.withValues(alpha: 0.96),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(34),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: AppColors.ink.withValues(alpha: 0.07),
+                  blurRadius: 30,
+                  offset: const Offset(0, 18),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 22, 24, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Row(
+                    children: const <Widget>[
+                      _WelcomeHeroBadge(
+                        icon: Icons.wifi_protected_setup_rounded,
+                        label: 'bitsend',
+                      ),
+                      Spacer(),
+                      _WelcomeHeroBadge(
+                        icon: Icons.cloud_upload_rounded,
+                        label: 'Later broadcast',
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: compact ? 18 : 20),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Text(
+                      'Send now. Settle later.',
+                      style: theme.textTheme.displaySmall?.copyWith(
+                        fontSize: compact ? 31 : 34,
+                        height: 1.0,
+                        letterSpacing: -1.0,
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: compact ? 8 : 10),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 480),
+                    child: Text(
+                      'Sign nearby, then broadcast later.',
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        color: AppColors.mutedInk,
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: compact ? 18 : 24),
+                  _WelcomeIllustration(height: illustrationHeight),
+                  SizedBox(height: compact ? 16 : 18),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: const <Widget>[
+                      _MiniCue(
+                        icon: Icons.account_balance_wallet_outlined,
+                        label: 'Local wallet',
+                        active: true,
+                      ),
+                      _MiniCue(
+                        icon: Icons.swap_horiz_rounded,
+                        label: 'BLE / Hotspot',
+                        active: true,
+                      ),
+                      _MiniCue(
+                        icon: Icons.cloud_done_rounded,
+                        label: 'Devnet later',
+                        active: true,
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: compact ? 18 : 20),
+                  const _WelcomeStageStrip(),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _WelcomeHeroBadge extends StatelessWidget {
+  const _WelcomeHeroBadge({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(icon, size: 16, color: AppColors.ink),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppColors.ink,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WelcomeIllustration extends StatelessWidget {
+  const _WelcomeIllustration({required this.height});
+
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: height,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: <Widget>[
+          Positioned(
+            top: 6,
+            left: 12,
+            child: Container(
+              width: 76,
+              height: 76,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.42),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 10,
+            right: 32,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.84),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                child: Icon(
+                  Icons.cloud_upload_rounded,
+                  color: AppColors.emerald,
+                  size: 24,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 58,
+            child: Center(
+              child: Container(
+                width: 58,
+                height: 58,
+                decoration: BoxDecoration(
+                  color: AppColors.ink,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: AppColors.ink.withValues(alpha: 0.18),
+                      blurRadius: 26,
+                      offset: const Offset(0, 14),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.swap_horiz_rounded,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 90,
+            right: 90,
+            bottom: 82,
+            child: const _WelcomeConnectorDots(),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 66,
+            child: Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AppColors.canvasWarm,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  child: Text('Signed handoff'),
+                ),
+              ),
+            ),
+          ),
+          const Align(
+            alignment: Alignment.bottomLeft,
+            child: _WelcomeDeviceCard(
+              icon: Icons.phone_android_rounded,
+              title: 'Sender',
+              label: 'Sign',
+              accentColor: AppColors.ink,
+            ),
+          ),
+          const Align(
+            alignment: Alignment.bottomRight,
+            child: _WelcomeDeviceCard(
+              icon: Icons.phone_iphone_rounded,
+              title: 'Receiver',
+              label: 'Store',
+              accentColor: AppColors.emerald,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WelcomeConnectorDots extends StatelessWidget {
+  const _WelcomeConnectorDots();
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final int segments =
+            ((constraints.maxWidth / 16).floor().clamp(8, 24)) as int;
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: List<Widget>.generate(segments, (int index) {
+            return Container(
+              width: index == segments ~/ 2 ? 12 : 8,
+              height: 3,
+              decoration: BoxDecoration(
+                color: index.isEven
+                    ? AppColors.emerald.withValues(alpha: 0.9)
+                    : AppColors.emeraldTint,
+                borderRadius: BorderRadius.circular(999),
+              ),
+            );
+          }),
+        );
+      },
+    );
+  }
+}
+
+class _WelcomeDeviceCard extends StatelessWidget {
+  const _WelcomeDeviceCard({
+    required this.icon,
+    required this.title,
+    required this.label,
+    required this.accentColor,
+  });
+
+  final IconData icon;
+  final String title;
+  final String label;
+  final Color accentColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 132,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.84),
+        borderRadius: BorderRadius.circular(26),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: AppColors.ink.withValues(alpha: 0.06),
+            blurRadius: 22,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: accentColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: accentColor),
+          ),
+          const SizedBox(height: 14),
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppColors.slate,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WelcomeStageStrip extends StatelessWidget {
+  const _WelcomeStageStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final bool compact = constraints.maxWidth < 480;
+        if (compact) {
+          return const Column(
+            children: <Widget>[
+              _WelcomeStageNode(
+                icon: Icons.draw_rounded,
+                title: 'Sign',
+                caption: 'Local wallet',
+              ),
+              SizedBox(height: 12),
+              _WelcomeStageNode(
+                icon: Icons.bluetooth_searching_rounded,
+                title: 'Share',
+                caption: 'BLE or hotspot',
+              ),
+              SizedBox(height: 12),
+              _WelcomeStageNode(
+                icon: Icons.cloud_upload_rounded,
+                title: 'Settle',
+                caption: 'Broadcast later',
+              ),
+            ],
+          );
+        }
+        return const Row(
+          children: <Widget>[
+            Expanded(
+              child: _WelcomeStageNode(
+                icon: Icons.draw_rounded,
+                title: 'Sign',
+                caption: 'Local wallet',
+              ),
+            ),
+            _WelcomeStageConnector(),
+            Expanded(
+              child: _WelcomeStageNode(
+                icon: Icons.bluetooth_searching_rounded,
+                title: 'Share',
+                caption: 'BLE or hotspot',
+              ),
+            ),
+            _WelcomeStageConnector(),
+            Expanded(
+              child: _WelcomeStageNode(
+                icon: Icons.cloud_upload_rounded,
+                title: 'Settle',
+                caption: 'Broadcast later',
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _WelcomeStageNode extends StatelessWidget {
+  const _WelcomeStageNode({
     required this.icon,
     required this.title,
     required this.caption,
@@ -2952,33 +3781,41 @@ class _FeatureRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
-      label: title,
-      hint: caption,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: AppColors.canvas,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Icon(icon, color: AppColors.ink),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            color: AppColors.blueTint,
+            borderRadius: BorderRadius.circular(12),
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(title, style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 4),
-                Text(caption, style: Theme.of(context).textTheme.bodyMedium),
-              ],
-            ),
-          ),
-        ],
+          child: Icon(icon, color: AppColors.blue, size: 20),
+        ),
+        const SizedBox(height: 12),
+        Text(title, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 4),
+        Text(caption, style: Theme.of(context).textTheme.bodyMedium),
+      ],
+    );
+  }
+}
+
+class _WelcomeStageConnector extends StatelessWidget {
+  const _WelcomeStageConnector();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Container(
+        width: 18,
+        height: 2,
+        decoration: BoxDecoration(
+          color: AppColors.emerald.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(999),
+        ),
       ),
     );
   }
@@ -3056,12 +3893,16 @@ class _SelectableReceiverCard extends StatelessWidget {
   const _SelectableReceiverCard({
     required this.title,
     required this.caption,
+    required this.detail,
+    required this.verified,
     required this.selected,
     required this.onTap,
   });
 
   final String title;
   final String caption;
+  final String detail;
+  final bool verified;
   final bool selected;
   final VoidCallback onTap;
 
@@ -3108,6 +3949,39 @@ class _SelectableReceiverCard extends StatelessWidget {
                         caption,
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: <Widget>[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: verified
+                                  ? AppColors.emeraldTint
+                                  : AppColors.amberTint,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              verified ? 'Verified' : 'Preview',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: verified
+                                        ? AppColors.emerald
+                                        : AppColors.amber,
+                                  ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              detail,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -3135,7 +4009,7 @@ class _TransferDetailActions extends StatelessWidget {
     return ElevatedButton(
       onPressed: onRetry,
       child: Text(
-        transfer.status == TransferStatus.receivedPendingBroadcast
+        transfer.needsInitialBroadcast
             ? 'Broadcast now'
             : 'Retry broadcast',
       ),
@@ -3214,6 +4088,684 @@ class _ProgressTile extends StatelessWidget {
   }
 }
 
+ReceiverInvitePayload? _receiverInvitePayload(
+  BitsendAppState state,
+  TransportKind transport,
+) {
+  final WalletProfile? wallet = state.wallet;
+  if (wallet == null) {
+    return null;
+  }
+  if (transport == TransportKind.hotspot && state.localEndpoint == null) {
+    return null;
+  }
+  return ReceiverInvitePayload(
+    transport: transport,
+    address: wallet.address,
+    displayAddress: wallet.displayAddress,
+    endpoint: transport == TransportKind.hotspot ? state.localEndpoint : null,
+  );
+}
+
+bool _looksLikeBluetoothDisabled(String message) {
+  final String normalized = message.toLowerCase();
+  return normalized.contains('bluetooth is turned off') ||
+      normalized.contains('bluetooth is still initializing') ||
+      normalized.contains('turn it on');
+}
+
+Future<void> _showBluetoothPrompt(BuildContext context, String message) async {
+  await showDialog<void>(
+    context: context,
+    builder: (BuildContext dialogContext) {
+      return AlertDialog(
+        title: const Text('Turn on Bluetooth'),
+        content: Text(message),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+            },
+            child: const Text('Close'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+class _ReceiveStudioCard extends StatelessWidget {
+  const _ReceiveStudioCard({
+    required this.transport,
+    required this.activeListener,
+    required this.hasWallet,
+    required this.invite,
+    required this.receiverDisplayAddress,
+    required this.receiverAddress,
+    required this.endpoint,
+    required this.onTransportChanged,
+    required this.onToggle,
+    required this.onOpenPending,
+  });
+
+  final TransportKind transport;
+  final bool activeListener;
+  final bool hasWallet;
+  final ReceiverInvitePayload? invite;
+  final String receiverDisplayAddress;
+  final String receiverAddress;
+  final String? endpoint;
+  final Future<void> Function(TransportKind value) onTransportChanged;
+  final VoidCallback? onToggle;
+  final VoidCallback onOpenPending;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool showEndpointWarning =
+        transport == TransportKind.hotspot && endpoint == null;
+    final String title = !hasWallet
+        ? 'Wallet needed before receive'
+        : activeListener
+        ? 'Ready to catch a handoff'
+        : transport == TransportKind.hotspot
+        ? 'Open same-network receive'
+        : 'Open Bluetooth receive';
+    final String caption = !hasWallet
+        ? 'Create or restore a wallet first.'
+        : transport == TransportKind.hotspot
+        ? activeListener
+            ? 'Share the QR on the same Wi-Fi or hotspot. The sender fills your address and endpoint in one scan.'
+            : 'Start when both phones share the same Wi-Fi or hotspot.'
+        : activeListener
+        ? 'Keep Bluetooth on and leave this screen open so nearby senders can discover this receiver.'
+        : 'Start when Bluetooth is on and both phones are nearby.';
+    final String helper = transport == TransportKind.hotspot
+        ? (endpoint ?? 'Join a local Wi-Fi or hotspot first.')
+        : 'bitsend BLE receiver';
+
+    return Semantics(
+      container: true,
+      label: 'Receive setup',
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final bool wide = constraints.maxWidth >= 620;
+          final Widget transportSwitch = SegmentedButton<TransportKind>(
+            segments: const <ButtonSegment<TransportKind>>[
+              ButtonSegment<TransportKind>(
+                value: TransportKind.hotspot,
+                label: Text('Hotspot'),
+                icon: Icon(Icons.wifi_tethering_rounded),
+              ),
+              ButtonSegment<TransportKind>(
+                value: TransportKind.ble,
+                label: Text('BLE'),
+                icon: Icon(Icons.bluetooth_rounded),
+              ),
+            ],
+            selected: <TransportKind>{transport},
+            onSelectionChanged: (Set<TransportKind> value) {
+              onTransportChanged(value.first);
+            },
+          );
+
+          final Widget infoColumn = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text('Receive', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: <Widget>[
+                  _ReceiveSoftPill(
+                    icon: transport.icon,
+                    label: transport.shortLabel,
+                    color: _transportTone(transport),
+                    background: _transportTone(transport).withValues(alpha: 0.14),
+                  ),
+                  _ReceiveSoftPill(
+                    icon: activeListener
+                        ? Icons.radio_button_checked_rounded
+                        : Icons.pause_circle_outline_rounded,
+                    label: activeListener ? 'Live' : 'Standby',
+                    color: activeListener ? AppColors.emerald : AppColors.amber,
+                    background: (activeListener
+                            ? AppColors.emeraldTint
+                            : AppColors.amberTint)
+                        .withValues(alpha: 0.92),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              transportSwitch,
+              const SizedBox(height: 22),
+              _ReceiveScene(
+                transport: transport,
+                activeListener: activeListener,
+              ),
+              const SizedBox(height: 22),
+              Text(title, style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              Text(caption, style: Theme.of(context).textTheme.bodyMedium),
+              const SizedBox(height: 18),
+              Text(
+                receiverDisplayAddress,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(color: AppColors.ink),
+              ),
+              const SizedBox(height: 6),
+              SelectionArea(
+                child: Text(
+                  receiverAddress,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppColors.slate,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              _ReceiveMetaLine(
+                icon: transport.icon,
+                label: transport == TransportKind.hotspot ? 'Endpoint' : 'Signal',
+                value: helper,
+              ),
+              const SizedBox(height: 8),
+              _ReceiveMetaLine(
+                icon: Icons.rule_rounded,
+                label: 'Check',
+                value:
+                    'Only matching signer, receiver, amount, and checksum are stored.',
+              ),
+              if (showEndpointWarning) ...<Widget>[
+                const SizedBox(height: 10),
+                Text(
+                  'No hotspot endpoint yet. Connect this device to the same Wi-Fi or hotspot first.',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: AppColors.amber),
+                ),
+              ],
+            ],
+          );
+
+          final Widget actionRow = Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: <Widget>[
+              ElevatedButton.icon(
+                onPressed: onToggle,
+                icon: Icon(
+                  activeListener
+                      ? Icons.stop_circle_outlined
+                      : Icons.play_arrow_rounded,
+                ),
+                label: Text(
+                  activeListener ? 'Stop listener' : 'Start listener',
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: onOpenPending,
+                icon: const Icon(Icons.schedule_send_rounded),
+                label: const Text('Open pending'),
+              ),
+              if (invite != null)
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    await Clipboard.setData(
+                      ClipboardData(text: invite!.toQrData()),
+                    );
+                    if (!context.mounted) {
+                      return;
+                    }
+                    _showSnack(context, 'Receiver QR payload copied.');
+                  },
+                  icon: const Icon(Icons.copy_all_rounded),
+                  label: const Text('Copy QR'),
+                ),
+            ],
+          );
+
+          final Widget qrPanel = _ReceiveQrPanel(
+            invite: invite,
+            transport: transport,
+            activeListener: activeListener,
+            hasWallet: hasWallet,
+          );
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              if (wide)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Expanded(child: infoColumn),
+                    const SizedBox(width: 24),
+                    SizedBox(width: 242, child: qrPanel),
+                  ],
+                )
+              else ...<Widget>[
+                infoColumn,
+                const SizedBox(height: 20),
+                qrPanel,
+              ],
+              const SizedBox(height: 20),
+              actionRow,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ReceiveSoftPill extends StatelessWidget {
+  const _ReceiveSoftPill({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.background,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final Color background;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: color, height: 1),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReceiveScene extends StatelessWidget {
+  const _ReceiveScene({
+    required this.transport,
+    required this.activeListener,
+  });
+
+  final TransportKind transport;
+  final bool activeListener;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color tone = _transportTone(transport);
+    return Row(
+      children: <Widget>[
+        const _ReceiveSceneNode(
+          icon: Icons.send_to_mobile_rounded,
+          label: 'Sender',
+          emphasized: false,
+        ),
+        Expanded(
+          child: _ReceiveSceneConnector(
+            color: tone,
+            active: activeListener,
+          ),
+        ),
+        _ReceiveSceneNode(
+          icon: transport.icon,
+          label: transport.shortLabel,
+          emphasized: true,
+          color: tone,
+        ),
+        Expanded(
+          child: _ReceiveSceneConnector(
+            color: tone,
+            active: activeListener,
+          ),
+        ),
+        _ReceiveSceneNode(
+          icon: Icons.account_balance_wallet_rounded,
+          label: 'You',
+          emphasized: activeListener,
+          color: tone,
+        ),
+      ],
+    );
+  }
+}
+
+class _ReceiveSceneNode extends StatelessWidget {
+  const _ReceiveSceneNode({
+    required this.icon,
+    required this.label,
+    required this.emphasized,
+    this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool emphasized;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color foreground = emphasized ? (color ?? AppColors.ink) : AppColors.slate;
+    final Color background = emphasized
+        ? foreground.withValues(alpha: 0.12)
+        : Colors.white.withValues(alpha: 0.64);
+    return Column(
+      children: <Widget>[
+        Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(color: background, shape: BoxShape.circle),
+          child: Icon(icon, color: foreground, size: 22),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: foreground),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReceiveSceneConnector extends StatelessWidget {
+  const _ReceiveSceneConnector({
+    required this.color,
+    required this.active,
+  });
+
+  final Color color;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 2,
+      margin: const EdgeInsets.only(bottom: 22),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: <Color>[
+            color.withValues(alpha: active ? 0.18 : 0.08),
+            color.withValues(alpha: active ? 0.78 : 0.24),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(999),
+      ),
+    );
+  }
+}
+
+class _ReceiveMetaLine extends StatelessWidget {
+  const _ReceiveMetaLine({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Icon(icon, size: 16, color: AppColors.slate),
+        const SizedBox(width: 8),
+        Text(
+          '$label:',
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            value,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: AppColors.ink.withValues(alpha: 0.82),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReceiveQrPanel extends StatelessWidget {
+  const _ReceiveQrPanel({
+    required this.invite,
+    required this.transport,
+    required this.activeListener,
+    required this.hasWallet,
+  });
+
+  final ReceiverInvitePayload? invite;
+  final TransportKind transport;
+  final bool activeListener;
+  final bool hasWallet;
+
+  @override
+  Widget build(BuildContext context) {
+    final String caption = !hasWallet
+        ? 'Set up the wallet first.'
+        : invite == null
+        ? 'Connect to local Wi-Fi or hotspot to generate a QR.'
+        : transport == TransportKind.hotspot
+        ? 'Scan to fill address and endpoint.'
+        : 'Scan to switch sender to BLE.';
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: Colors.white),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: AppColors.ink.withValues(alpha: 0.05),
+            blurRadius: 22,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (invite != null)
+            QrImageView(
+              data: invite!.toQrData(),
+              version: QrVersions.auto,
+              size: 206,
+              backgroundColor: Colors.white,
+              eyeStyle: const QrEyeStyle(
+                eyeShape: QrEyeShape.square,
+                color: AppColors.ink,
+              ),
+              dataModuleStyle: const QrDataModuleStyle(
+                dataModuleShape: QrDataModuleShape.square,
+                color: AppColors.ink,
+              ),
+              semanticsLabel: 'Receiver QR code',
+            )
+          else
+            Container(
+              width: 206,
+              height: 206,
+              decoration: BoxDecoration(
+                color: AppColors.canvasWarm,
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Icon(
+                hasWallet ? Icons.wifi_find_rounded : Icons.account_balance_wallet_outlined,
+                size: 42,
+                color: hasWallet ? AppColors.amber : AppColors.slate,
+              ),
+            ),
+          const SizedBox(height: 14),
+          Text(
+            activeListener ? 'Share QR' : 'Ready QR',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            caption,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Color _transportTone(TransportKind transport) => switch (transport) {
+  TransportKind.hotspot => AppColors.blue,
+  TransportKind.ble => AppColors.emerald,
+};
+
+class _ReceiverQrScannerScreen extends StatefulWidget {
+  const _ReceiverQrScannerScreen();
+
+  @override
+  State<_ReceiverQrScannerScreen> createState() => _ReceiverQrScannerScreenState();
+}
+
+class _ReceiverQrScannerScreenState extends State<_ReceiverQrScannerScreen> {
+  final MobileScannerController _controller = MobileScannerController(
+    formats: const <BarcodeFormat>[BarcodeFormat.qrCode],
+  );
+  bool _handled = false;
+  String? _error;
+
+  Future<void> _handleCapture(BarcodeCapture capture) async {
+    if (_handled || capture.barcodes.isEmpty) {
+      return;
+    }
+    final String? raw = capture.barcodes.first.rawValue;
+    if (raw == null || raw.trim().isEmpty) {
+      return;
+    }
+
+    try {
+      final ReceiverInvitePayload invite = ReceiverInvitePayload.fromQrData(raw);
+      _handled = true;
+      await _controller.stop();
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(invite);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = _messageFor(error);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: <Widget>[
+          MobileScanner(
+            controller: _controller,
+            onDetect: (BarcodeCapture capture) {
+              _handleCapture(capture);
+            },
+            onDetectError: (Object error, StackTrace stackTrace) {
+              if (!mounted) {
+                return;
+              }
+              setState(() {
+                _error = _messageFor(error);
+              });
+            },
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  IconButton.filledTonal(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.14),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          'Scan receiver QR',
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(color: Colors.white),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Point the camera at the receiver QR to fill the address and transport.',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: Colors.white70),
+                        ),
+                        if (_error != null) ...<Widget>[
+                          const SizedBox(height: 12),
+                          Text(
+                            _error!,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: AppColors.amberTint),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 void _navigatePrimaryTab(BuildContext context, BitsendPrimaryTab tab) {
   final String route = switch (tab) {
     BitsendPrimaryTab.home => AppRoutes.home,
@@ -3237,6 +4789,13 @@ String _messageFor(Object error) {
   final String text = error.toString();
   if (text.startsWith('FormatException: ')) {
     return text.replaceFirst('FormatException: ', '');
+  }
+  if (text.startsWith('StateError: ')) {
+    return text.replaceFirst('StateError: ', '');
+  }
+  if (text.startsWith('TimeoutException')) {
+    final int separator = text.indexOf(': ');
+    return separator == -1 ? text : text.substring(separator + 2);
   }
   return text;
 }

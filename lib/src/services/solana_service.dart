@@ -25,6 +25,7 @@ class SolanaService {
   }
 
   static const Duration _defaultConfirmationTimeout = Duration(seconds: 60);
+  static const Duration _defaultAirdropBalanceTimeout = Duration(seconds: 30);
 
   SolanaClient get client => SolanaClient(
         rpcUrl: Uri.parse(_rpcEndpoint),
@@ -50,17 +51,54 @@ class SolanaService {
     return result.value;
   }
 
-  Future<String> requestAirdrop(String address, {double sol = 1}) async {
-    final String signature = await rpcClient.requestAirdrop(
+  Future<String> requestAirdrop(
+    String address, {
+    double sol = 1,
+    Duration confirmationTimeout = _defaultConfirmationTimeout,
+    Duration balanceTimeout = _defaultAirdropBalanceTimeout,
+    Duration pollInterval = const Duration(seconds: 2),
+  }) async {
+    final int lamports = (sol * lamportsPerSol).round();
+    final int startingBalance = await getBalanceLamports(address);
+    final String signature;
+    try {
+      signature = await submitAirdropRequest(address, lamports);
+    } catch (error) {
+      final String message = error.toString().toLowerCase();
+      if (message.contains('429') ||
+          message.contains('too many requests') ||
+          message.contains('rate limit')) {
+        throw const FormatException(
+          'Devnet airdrop is rate limited right now. Wait a minute and try again.',
+        );
+      }
+      rethrow;
+    }
+
+    try {
+      await waitForConfirmation(
+        signature,
+        desiredStatus: ConfirmationStatus.confirmed,
+        timeout: confirmationTimeout,
+        pollInterval: pollInterval,
+      );
+    } on TimeoutException {
+      await waitForBalanceIncrease(
+        address,
+        minimumBalanceLamports: startingBalance + lamports,
+        timeout: balanceTimeout,
+        pollInterval: pollInterval,
+      );
+    }
+    return signature;
+  }
+
+  Future<String> submitAirdropRequest(String address, int lamports) {
+    return rpcClient.requestAirdrop(
       address,
-      (sol * lamportsPerSol).round(),
+      lamports,
       commitment: Commitment.confirmed,
     );
-    await waitForConfirmation(
-      signature,
-      desiredStatus: ConfirmationStatus.confirmed,
-    );
-    return signature;
   }
 
   Future<CachedBlockhash> getFreshBlockhash() async {
@@ -220,6 +258,26 @@ class SolanaService {
       return null;
     }
     return result.value.first;
+  }
+
+  Future<void> waitForBalanceIncrease(
+    String address, {
+    required int minimumBalanceLamports,
+    Duration timeout = _defaultAirdropBalanceTimeout,
+    Duration pollInterval = const Duration(seconds: 2),
+  }) async {
+    final DateTime deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      if (await getBalanceLamports(address) >= minimumBalanceLamports) {
+        return;
+      }
+      await Future<void>.delayed(pollInterval);
+    }
+
+    throw TimeoutException(
+      'Timed out waiting for the devnet airdrop balance update.',
+      timeout,
+    );
   }
 
   Future<void> waitForConfirmation(

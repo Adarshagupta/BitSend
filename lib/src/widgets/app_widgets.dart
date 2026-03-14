@@ -17,6 +17,7 @@ class BitsendPageScaffold extends StatelessWidget {
     this.bottom,
     this.showBack = true,
     this.showHeader = true,
+    this.scrollable = true,
     this.primaryTab,
     this.onPrimaryTabSelected,
   });
@@ -28,6 +29,7 @@ class BitsendPageScaffold extends StatelessWidget {
   final Widget? bottom;
   final bool showBack;
   final bool showHeader;
+  final bool scrollable;
   final BitsendPrimaryTab? primaryTab;
   final ValueChanged<BitsendPrimaryTab>? onPrimaryTabSelected;
 
@@ -35,14 +37,20 @@ class BitsendPageScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     final bool hasPrimaryNav =
         primaryTab != null && onPrimaryTabSelected != null;
+    final bool useFixedLayout = !scrollable && !hasPrimaryNav;
     final bool hasBottomContent = bottom != null;
     final double scrollBottomPadding = hasPrimaryNav
         ? hasBottomContent
               ? 224
               : 138
+        : useFixedLayout
+        ? 28
+        : hasBottomContent
+        ? 148
         : 28;
 
     return Scaffold(
+      extendBody: true,
       body: DecoratedBox(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -82,6 +90,7 @@ class BitsendPageScaffold extends StatelessWidget {
               ),
             ),
             SafeArea(
+              bottom: false,
               child: Align(
                 alignment: Alignment.topCenter,
                 child: ConstrainedBox(
@@ -118,7 +127,7 @@ class BitsendPageScaffold extends StatelessWidget {
                             Align(
                               alignment: Alignment.bottomCenter,
                               child: Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                                 child: SafeArea(
                                   top: false,
                                   child: Column(
@@ -139,9 +148,57 @@ class BitsendPageScaffold extends StatelessWidget {
                             ),
                           ],
                         )
-                        : Column(
+                        : useFixedLayout
+                        ? Stack(
                             children: <Widget>[
-                              Expanded(
+                              Positioned.fill(
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    20,
+                                    10,
+                                    20,
+                                    0,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: <Widget>[
+                                      _PageChrome(
+                                        showBack: showBack,
+                                        actions: actions,
+                                      ),
+                                      SizedBox(height: showHeader ? 18 : 8),
+                                      if (showHeader)
+                                        _PageHeader(
+                                          title: title,
+                                          subtitle: subtitle,
+                                        ),
+                                      Expanded(child: child),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (hasBottomContent)
+                                Align(
+                                  alignment: Alignment.bottomCenter,
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      0,
+                                      16,
+                                      12,
+                                    ),
+                                    child: SafeArea(
+                                      top: false,
+                                      child: _BottomSurface(child: bottom!),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          )
+                        : Stack(
+                            children: <Widget>[
+                              Positioned.fill(
                                 child: ListView(
                                   keyboardDismissBehavior:
                                       ScrollViewKeyboardDismissBehavior.onDrag,
@@ -167,16 +224,19 @@ class BitsendPageScaffold extends StatelessWidget {
                                 ),
                               ),
                               if (hasBottomContent)
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    16,
-                                    0,
-                                    16,
-                                    16,
-                                  ),
-                                  child: SafeArea(
-                                    top: false,
-                                    child: _BottomSurface(child: bottom!),
+                                Align(
+                                  alignment: Alignment.bottomCenter,
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      0,
+                                      16,
+                                      12,
+                                    ),
+                                    child: SafeArea(
+                                      top: false,
+                                      child: _BottomSurface(child: bottom!),
+                                    ),
                                   ),
                                 ),
                             ],
@@ -261,29 +321,30 @@ class _PrimaryBottomNav extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 560),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(26),
             boxShadow: <BoxShadow>[
               BoxShadow(
-                color: AppColors.ink.withValues(alpha: 0.12),
-                blurRadius: 34,
-                offset: const Offset(0, 18),
+                color: AppColors.ink.withValues(alpha: 0.14),
+                blurRadius: 42,
+                spreadRadius: -6,
+                offset: const Offset(0, 20),
               ),
             ],
           ),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(26),
             child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.82),
-                  borderRadius: BorderRadius.circular(22),
+                  color: Colors.white.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(26),
                   border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.7),
+                    color: Colors.white.withValues(alpha: 0.9),
                   ),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
                   child: Row(
                     children: items
                         .map(

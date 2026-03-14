@@ -125,9 +125,8 @@ class BitsendAppState extends ChangeNotifier {
 
   int get reservedOfflineLamports => _pendingTransfers
       .where((PendingTransfer transfer) {
-        return transfer.direction == TransferDirection.outbound &&
-            transfer.senderAddress == _offlineWallet?.address &&
-            transfer.status == TransferStatus.sentOffline;
+        return transfer.senderAddress == _offlineWallet?.address &&
+            transfer.reservesOfflineFunds;
       })
       .fold<int>(
         0,
@@ -201,7 +200,7 @@ class BitsendAppState extends ChangeNotifier {
       if (_wallet != null) {
         await refreshWalletData();
         if (_hasInternet) {
-          await broadcastPendingInboundTransfers();
+          await broadcastPendingTransfers();
           await refreshSubmittedTransfers();
         }
       }
@@ -212,7 +211,7 @@ class BitsendAppState extends ChangeNotifier {
         await _refreshConnectivityState();
         if (_hasInternet) {
           await refreshWalletData();
-          await broadcastPendingInboundTransfers();
+          await broadcastPendingTransfers();
           await refreshSubmittedTransfers();
         }
       });
@@ -234,6 +233,13 @@ class BitsendAppState extends ChangeNotifier {
     _wallet = await _walletService.restoreWallet(seedPhrase);
     _offlineWallet = await _walletService.loadOfflineWallet();
     notifyListeners();
+  }
+
+  Future<WalletBackupExport> exportWalletBackup() {
+    return _runTaskWithResult(
+      'Saving wallet backup...',
+      _walletService.exportWalletBackup,
+    );
   }
 
   Future<void> refreshWalletData() async {
@@ -277,12 +283,19 @@ class BitsendAppState extends ChangeNotifier {
           : 'Requesting devnet airdrop...',
       () async {
         await _refreshConnectivityState();
-        if (!_hasDevnet) {
-          throw const SocketException(
-            'Solana devnet RPC is unavailable right now.',
-          );
+        try {
+          await _solanaService.requestAirdrop(targetWallet.address, sol: 1);
+          _hasDevnet = true;
+          _hasInternet = true;
+          _statusMessage = null;
+        } on SocketException {
+          _hasDevnet = false;
+          _hasInternet = false;
+          rethrow;
+        } catch (error) {
+          _statusMessage = error.toString();
+          rethrow;
         }
-        await _solanaService.requestAirdrop(targetWallet.address, sol: 1);
         await refreshWalletData();
       },
     );
@@ -293,7 +306,6 @@ class BitsendAppState extends ChangeNotifier {
       if (_offlineWallet == null) {
         throw const FormatException('Create or restore a wallet first.');
       }
-      await requestLocalPermissions();
       await _refreshConnectivityState();
       if (!_hasInternet) {
         throw const SocketException(
@@ -339,7 +351,7 @@ class BitsendAppState extends ChangeNotifier {
     });
   }
 
-  Future<void> requestLocalPermissions() async {
+  Future<void> requestBlePermissions() async {
     final Map<Permission, PermissionStatus> statuses = await <Permission>[
       Permission.locationWhenInUse,
       Permission.bluetoothScan,
@@ -352,6 +364,10 @@ class BitsendAppState extends ChangeNotifier {
           status == PermissionStatus.limited,
     );
     notifyListeners();
+  }
+
+  Future<void> requestLocalPermissions() {
+    return requestBlePermissions();
   }
 
   Future<void> setRpcEndpoint(String value) async {
@@ -411,7 +427,7 @@ class BitsendAppState extends ChangeNotifier {
     await _refreshConnectivityState();
     if (_wallet != null && _hasInternet) {
       await refreshWalletData();
-      await broadcastPendingInboundTransfers();
+      await broadcastPendingTransfers();
       await refreshSubmittedTransfers();
     } else if (_wallet != null) {
       notifyListeners();
@@ -419,7 +435,7 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   Future<void> scanBleReceivers() async {
-    await requestLocalPermissions();
+    await requestBlePermissions();
     _bleDiscovering = true;
     notifyListeners();
     try {
@@ -513,6 +529,10 @@ class BitsendAppState extends ChangeNotifier {
 
     await _persistTransfer(transfer);
     _lastSentTransferId = transfer.transferId;
+    if (_hasInternet) {
+      unawaited(_broadcastTransferInBackground(transfer));
+      unawaited(_refreshSubmittedTransfersSoon());
+    }
     clearDraft();
     return transfer;
   }
@@ -521,7 +541,9 @@ class BitsendAppState extends ChangeNotifier {
     if (_wallet == null) {
       throw const FormatException('Create or restore a wallet first.');
     }
-    await requestLocalPermissions();
+    if (_receiveTransport == TransportKind.ble) {
+      await requestBlePermissions();
+    }
     await _refreshConnectivityState();
     if (_receiveTransport == TransportKind.hotspot) {
       await _bleTransportService.stop();
@@ -531,6 +553,7 @@ class BitsendAppState extends ChangeNotifier {
       await _bleTransportService.start(
         onEnvelope: _handleIncomingEnvelope,
         receiverDisplayAddress: _wallet!.displayAddress,
+        receiverAddress: _wallet!.address,
       );
     }
     notifyListeners();
@@ -544,24 +567,24 @@ class BitsendAppState extends ChangeNotifier {
 
   Future<void> retryBroadcast(String transferId) async {
     final PendingTransfer? transfer = transferById(transferId);
-    if (transfer == null) {
+    if (transfer == null || !transfer.canBroadcast) {
       return;
     }
     await _broadcastTransfer(transfer);
   }
 
-  Future<void> broadcastPendingInboundTransfers() async {
+  Future<void> broadcastPendingTransfers() async {
     final List<PendingTransfer> pending = _pendingTransfers
-        .where((PendingTransfer transfer) {
-          return transfer.direction == TransferDirection.inbound &&
-              (transfer.status == TransferStatus.receivedPendingBroadcast ||
-                  transfer.status == TransferStatus.broadcastFailed);
-        })
+        .where((PendingTransfer transfer) => transfer.canBroadcast)
         .toList(growable: false);
 
     for (final PendingTransfer transfer in pending) {
       await _broadcastTransfer(transfer);
     }
+  }
+
+  Future<void> broadcastPendingInboundTransfers() async {
+    await broadcastPendingTransfers();
   }
 
   Future<void> refreshSubmittedTransfers() async {
@@ -570,10 +593,12 @@ class BitsendAppState extends ChangeNotifier {
           return transfer.transactionSignature != null &&
               (transfer.status == TransferStatus.sentOffline ||
                   transfer.status == TransferStatus.broadcastSubmitted ||
-                  transfer.status == TransferStatus.broadcasting);
+                  transfer.status == TransferStatus.broadcasting ||
+                  transfer.status == TransferStatus.broadcastFailed);
         })
         .toList(growable: false);
 
+    bool shouldRefreshBalances = false;
     for (final PendingTransfer transfer in submitted) {
       final SignatureStatus? status = await _solanaService.getSignatureStatus(
         transfer.transactionSignature!,
@@ -611,6 +636,7 @@ class BitsendAppState extends ChangeNotifier {
       }
       if (nextStatus == TransferStatus.confirmed &&
           transfer.status != TransferStatus.confirmed) {
+        shouldRefreshBalances = true;
         await _persistTransfer(
           transfer.copyWith(
             status: nextStatus,
@@ -623,6 +649,10 @@ class BitsendAppState extends ChangeNotifier {
           ),
         );
       }
+    }
+
+    if (shouldRefreshBalances && _wallet != null && _hasInternet) {
+      await refreshWalletData();
     }
   }
 
@@ -678,7 +708,7 @@ class BitsendAppState extends ChangeNotifier {
       const _TimelineNode(
         title: 'Broadcasting',
         caption:
-            'An online device is submitting the signed transaction to Solana devnet.',
+            'Either device can later submit the signed transaction to Solana devnet.',
       ),
       const _TimelineNode(
         title: 'Submitted',
@@ -745,6 +775,7 @@ class BitsendAppState extends ChangeNotifier {
 
   Future<void> _persistTransfer(PendingTransfer transfer) async {
     await _store.upsertTransfer(transfer);
+    _pendingTransfers = List<PendingTransfer>.from(_pendingTransfers);
     final int index = _pendingTransfers.indexWhere(
       (PendingTransfer item) => item.transferId == transfer.transferId,
     );
@@ -958,6 +989,23 @@ class BitsendAppState extends ChangeNotifier {
     await _store.saveSetting('cached_blockhash', null);
   }
 
+  Future<void> _refreshSubmittedTransfersSoon() async {
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      await refreshSubmittedTransfers();
+    } catch (_) {
+      // Ignore opportunistic refresh failures; normal status refresh still works.
+    }
+  }
+
+  Future<void> _broadcastTransferInBackground(PendingTransfer transfer) async {
+    try {
+      await _broadcastTransfer(transfer);
+    } catch (_) {
+      // Background settlement should never surface an uncaught async error.
+    }
+  }
+
   TransferStatus? _nextStatusForSignature(SignatureStatus status) {
     return switch (status.confirmationStatus) {
       ConfirmationStatus.processed => TransferStatus.broadcastSubmitted,
@@ -1008,16 +1056,23 @@ class BitsendAppState extends ChangeNotifier {
     return true;
   }
 
-  Future<void> _runTask(
+  Future<void> _runTask(String status, Future<void> Function() operation) async {
+    await _runTaskWithResult<void>(status, () async {
+      await operation();
+    });
+  }
+
+  Future<T> _runTaskWithResult<T>(
     String status,
-    Future<void> Function() operation,
+    Future<T> Function() operation,
   ) async {
     _working = true;
     _statusMessage = status;
     notifyListeners();
     try {
-      await operation();
+      final T result = await operation();
       _statusMessage = null;
+      return result;
     } catch (error) {
       _statusMessage = error.toString();
       rethrow;

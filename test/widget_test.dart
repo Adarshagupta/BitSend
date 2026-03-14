@@ -31,10 +31,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Set up wallet'), findsOneWidget);
-    expect(find.text('Operational constraints'), findsOneWidget);
+    expect(find.text('Send now. Settle later.'), findsOneWidget);
   });
 
-  testWidgets('home shows send locked banner when not prepared', (WidgetTester tester) async {
+  testWidgets('home shows send prep card when not prepared', (
+    WidgetTester tester,
+  ) async {
     final _TestBitsendAppState state = _TestBitsendAppState(
       walletValue: _wallet,
       hasEnoughFundingValue: true,
@@ -57,8 +59,68 @@ void main() {
       child: const HomeDashboardScreen(),
     );
 
-    expect(find.text('Send is locked'), findsOneWidget);
+    expect(find.text('Fund'), findsOneWidget);
+    expect(find.text('Refresh'), findsOneWidget);
+    expect(find.text('Send'), findsOneWidget);
     expect(find.text('Offline Wallet'), findsAtLeastNWidgets(1));
+  });
+
+  testWidgets('wallet setup shows backup actions after a wallet exists', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      offlineWalletValue: _offlineWallet,
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const WalletSetupScreen(),
+    );
+
+    expect(find.text('Secure your wallet'), findsOneWidget);
+    expect(find.text('Download backup'), findsOneWidget);
+    expect(find.text('Continue to funding'), findsOneWidget);
+  });
+
+  testWidgets('fund screen allows skipping when wallet is not funded', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      hasEnoughFundingValue: false,
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const FundWalletScreen(),
+    );
+
+    expect(find.text('Airdrop 1 SOL'), findsOneWidget);
+    expect(find.text('Skip for now'), findsOneWidget);
+  });
+
+  testWidgets('receive screen shows the integrated receive panel', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      receiveTransportValue: TransportKind.hotspot,
+      localEndpointValue: 'http://192.168.82.8:8787',
+      hotspotListenerRunningValue: true,
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const ReceiveListenScreen(),
+    );
+
+    expect(find.text('Ready to catch a handoff'), findsOneWidget);
+    expect(find.text('Share QR'), findsOneWidget);
+    expect(find.text('Stop listener'), findsOneWidget);
   });
 
   testWidgets('pending screen switches between inbound and outbound transfers', (
@@ -149,11 +211,77 @@ void main() {
     expect(find.text('RPC accepted the signature.'), findsOneWidget);
     expect(find.text('Inbound transfer'), findsOneWidget);
   });
+
+  testWidgets('outbound transfer detail offers broadcast fallback', (
+    WidgetTester tester,
+  ) async {
+    final PendingTransfer transfer = _transfer(
+      transferId: 'tx-outbound',
+      direction: TransferDirection.outbound,
+      status: TransferStatus.sentOffline,
+      senderAddress: _offlineWallet.address,
+      receiverAddress: _wallet.address,
+      amountLamports: 300000000,
+    );
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      transferMap: <String, PendingTransfer>{transfer.transferId: transfer},
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const TransferDetailScreen(transferId: 'tx-outbound'),
+    );
+
+    expect(find.text('Broadcast now'), findsOneWidget);
+  });
+
+  testWidgets('BLE receiver selection fills the receiver address', (
+    WidgetTester tester,
+  ) async {
+    const String receiverAddress =
+        '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z';
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      sendDraftValue: const SendDraft(transport: TransportKind.ble),
+      bleReceiversValue: const <ReceiverDiscoveryItem>[
+        ReceiverDiscoveryItem(
+          id: 'ble-1',
+          label: '5g7h...Qk1Z',
+          subtitle: '5g7h...Qk1Z',
+          transport: TransportKind.ble,
+          address: receiverAddress,
+          metadataVerified: true,
+          rssi: -52,
+        ),
+      ],
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const SendTransportScreen(),
+    );
+
+    await tester.tap(find.text('5g7h...Qk1Z'));
+    await tester.pumpAndSettle();
+
+    final TextField addressField = tester.widget<TextField>(
+      find.byType(TextField).first,
+    );
+    expect(addressField.controller?.text, receiverAddress);
+  });
 }
 
 const WalletProfile _wallet = WalletProfile(
   address: '6g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1R',
   displayAddress: '6g7h...Qk1R',
+  seedPhrase: 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
+  mode: WalletSetupMode.created,
+);
+
+const WalletProfile _offlineWallet = WalletProfile(
+  address: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+  displayAddress: '5g7h...Qk1Z',
   seedPhrase: 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
   mode: WalletSetupMode.created,
 );
@@ -195,6 +323,7 @@ class _TestBitsendAppState extends BitsendAppState {
   _TestBitsendAppState({
     this.bootRouteValue = AppRoutes.home,
     this.walletValue,
+    this.offlineWalletValue,
     this.hasEnoughFundingValue = false,
     this.hasOfflineFundsValue = false,
     this.hasOfflineReadyBlockhashValue = false,
@@ -211,10 +340,18 @@ class _TestBitsendAppState extends BitsendAppState {
     this.outboundTransfers = const <PendingTransfer>[],
     this.transferMap = const <String, PendingTransfer>{},
     this.timelineValue = const <TransferTimelineState>[],
+    this.sendDraftValue = const SendDraft(),
+    this.bleReceiversValue = const <ReceiverDiscoveryItem>[],
+    this.bleDiscoveringValue = false,
+    this.receiveTransportValue = TransportKind.hotspot,
+    this.localEndpointValue,
+    this.hotspotListenerRunningValue = false,
+    this.bleListenerRunningValue = false,
   }) : super(clock: () => DateTime(2026, 3, 13, 12));
 
   final String bootRouteValue;
   final WalletProfile? walletValue;
+  final WalletProfile? offlineWalletValue;
   final bool hasEnoughFundingValue;
   final bool hasOfflineFundsValue;
   final bool hasOfflineReadyBlockhashValue;
@@ -223,6 +360,13 @@ class _TestBitsendAppState extends BitsendAppState {
   final List<PendingTransfer> outboundTransfers;
   final Map<String, PendingTransfer> transferMap;
   final List<TransferTimelineState> timelineValue;
+  final SendDraft sendDraftValue;
+  final List<ReceiverDiscoveryItem> bleReceiversValue;
+  final bool bleDiscoveringValue;
+  final TransportKind receiveTransportValue;
+  final String? localEndpointValue;
+  final bool hotspotListenerRunningValue;
+  final bool bleListenerRunningValue;
 
   @override
   Future<void> initialize() async {}
@@ -232,6 +376,9 @@ class _TestBitsendAppState extends BitsendAppState {
 
   @override
   WalletProfile? get wallet => walletValue;
+
+  @override
+  WalletProfile? get offlineWallet => offlineWalletValue;
 
   @override
   bool get hasWallet => walletValue != null;
@@ -254,6 +401,37 @@ class _TestBitsendAppState extends BitsendAppState {
         hasLocalLink: false,
         hasDevnet: false,
       );
+
+  @override
+  SendDraft get sendDraft => sendDraftValue;
+
+  @override
+  List<ReceiverDiscoveryItem> get bleReceivers => bleReceiversValue;
+
+  @override
+  bool get bleDiscovering => bleDiscoveringValue;
+
+  @override
+  TransportKind get receiveTransport => receiveTransportValue;
+
+  @override
+  String? get localEndpoint => localEndpointValue;
+
+  @override
+  bool get listenerRunning =>
+      hotspotListenerRunningValue || bleListenerRunningValue;
+
+  @override
+  bool get hotspotListenerRunning => hotspotListenerRunningValue;
+
+  @override
+  bool get bleListenerRunning => bleListenerRunningValue;
+
+  @override
+  Future<void> startReceiver() async {}
+
+  @override
+  Future<void> stopReceiver() async {}
 
   @override
   List<PendingTransfer> recentActivity() => <PendingTransfer>[

@@ -9,6 +9,7 @@ import 'transport_contract.dart';
 
 class HotspotTransportService {
   static const int port = 8787;
+  static const Duration _requestTimeout = Duration(seconds: 8);
 
   HttpServer? _server;
 
@@ -65,16 +66,69 @@ class HotspotTransportService {
     required OfflineEnvelope envelope,
   }) async {
     final Uri requestUri = endpoint.replace(path: '/v1/envelopes');
-    final http.Response response = await http.post(
-      requestUri,
-      headers: <String, String>{'Content-Type': 'application/json'},
-      body: jsonEncode(envelope.toJson()),
-    );
-    if (response.statusCode >= 400) {
+    final http.Response response;
+    try {
+      response = await http
+          .post(
+            requestUri,
+            headers: <String, String>{
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode(envelope.toJson()),
+          )
+          .timeout(_requestTimeout);
+    } on TimeoutException {
       throw HttpException(
-        'Local transfer failed (${response.statusCode}): ${response.body}',
+        'Local transfer timed out. Confirm the receiver is listening and retry.',
         uri: requestUri,
       );
+    }
+    final String? receiverMessage = _messageFromResponse(response.body);
+    if (response.statusCode >= 400) {
+      throw HttpException(
+        receiverMessage == null
+            ? 'Local transfer failed (${response.statusCode}).'
+            : 'Local transfer failed: $receiverMessage',
+        uri: requestUri,
+      );
+    }
+    if (receiverMessage == null) {
+      return;
+    }
+    final bool accepted = _acceptedFromResponse(response.body) ?? true;
+    if (!accepted) {
+      throw HttpException(
+        'Local transfer failed: $receiverMessage',
+        uri: requestUri,
+      );
+    }
+  }
+
+  String? _messageFromResponse(String body) {
+    if (body.trim().isEmpty) {
+      return null;
+    }
+    try {
+      final Map<String, dynamic> json =
+          jsonDecode(body) as Map<String, dynamic>;
+      final String? message = (json['message'] as String?)?.trim();
+      return message == null || message.isEmpty ? null : message;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool? _acceptedFromResponse(String body) {
+    if (body.trim().isEmpty) {
+      return null;
+    }
+    try {
+      final Map<String, dynamic> json =
+          jsonDecode(body) as Map<String, dynamic>;
+      return json['accepted'] as bool?;
+    } catch (_) {
+      return null;
     }
   }
 }
