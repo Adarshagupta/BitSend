@@ -17,3 +17,4 @@ if (-not $content.Contains('SET PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.
   $content = $content.Replace($needle, $insert)
   Set-Content -Path $path -Value $content -Encoding ascii
 }
+
