@@ -5,7 +5,11 @@ void main() {
   group('BitGoBackendHealth', () {
     test('parses backend mode labels from health payloads', () {
       final BitGoBackendHealth live = BitGoBackendHealth.fromJson(
-        const <String, dynamic>{'ok': true, 'mode': 'live'},
+        const <String, dynamic>{
+          'ok': true,
+          'mode': 'live',
+          'version': '2026.03.15.2',
+        },
       );
       final BitGoBackendHealth mock = BitGoBackendHealth.fromJson(
         const <String, dynamic>{'ok': true, 'mode': 'mock'},
@@ -13,6 +17,7 @@ void main() {
 
       expect(live.mode, BitGoBackendMode.live);
       expect(live.mode.isLive, isTrue);
+      expect(live.version, '2026.03.15.2');
       expect(mock.mode, BitGoBackendMode.mock);
       expect(mock.mode.label, 'Mock');
     });

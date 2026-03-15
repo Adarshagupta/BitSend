@@ -520,10 +520,15 @@ extension BitGoBackendModeX on BitGoBackendMode {
 }
 
 class BitGoBackendHealth {
-  const BitGoBackendHealth({required this.ok, required this.mode});
+  const BitGoBackendHealth({
+    required this.ok,
+    required this.mode,
+    this.version = '',
+  });
 
   final bool ok;
   final BitGoBackendMode mode;
+  final String version;
 
   factory BitGoBackendHealth.fromJson(Map<String, dynamic> json) {
     final String rawMode =
@@ -535,6 +540,7 @@ class BitGoBackendHealth {
         'mock' => BitGoBackendMode.mock,
         _ => BitGoBackendMode.unknown,
       },
+      version: (json['version'] as String?)?.trim() ?? '',
     );
   }
 }
@@ -1045,8 +1051,16 @@ class PendingTransfer {
   double get amountSol => chain.amountFromBaseUnits(amountLamports);
   String get counterpartyAddress => isInbound ? senderAddress : receiverAddress;
   bool get isReceiptSavedInFileverse => fileverseStorageMode == 'fileverse';
+  bool get hasReceiptLink =>
+      fileverseReceiptUrl != null && fileverseReceiptUrl!.isNotEmpty;
+  bool get hasReceiptArchive =>
+      (fileverseReceiptId != null && fileverseReceiptId!.isNotEmpty) ||
+      hasReceiptLink ||
+      fileverseSavedAt != null ||
+      (fileverseMessage != null && fileverseMessage!.isNotEmpty);
   String? get receiptStorageLabel => switch (fileverseStorageMode) {
     'fileverse' => 'Saved in Fileverse',
+    'worker' => 'Archived by Bitsend',
     _ => null,
   };
   bool get reservesOfflineFunds =>

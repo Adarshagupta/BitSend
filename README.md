@@ -1,25 +1,46 @@
-# bitsend
+# BitSend
 
-`bitsend` is a Flutter Android app for hybrid crypto payments with two wallet engines:
+BitSend is a multichain Flutter payment app built for fast wallet setup, clean transfer flows, and flexible settlement across local and managed wallet paths.
 
-- `Local`: offline-first handoff over BLE or hotspot, then later on-chain settlement
-- `BitGo`: online-only submit through a backend-managed BitGo demo wallet
+## Highlights
 
-The app currently supports:
+- Offline-first local wallet flow with hotspot and BLE handoff
+- Managed wallet backend flow for online submission
+- Multichain support for Solana, Ethereum, and Base
+- ENS-aware EVM send flow with `.eth` name resolution and optional payment preference records
+- Local and offline wallet derivation for secure device-to-device transfer preparation
+- Fileverse-powered receipt publishing through the backend
+- Cloudflare Worker backend for wallet sessions, transfer orchestration, and receipt services
+- Clean mobile-first Flutter UI with onboarding, funding, send, receive, settings, and activity flows
 
-- Solana: devnet/mainnet in Local mode
-- Ethereum: Sepolia/mainnet in Local mode
-- BitGo demo backend mode for both chains through a deployed Cloudflare Worker
+## Chain Support
 
-## Repo layout
+- Solana Devnet and Mainnet
+- Ethereum Sepolia and Mainnet
+- Base Sepolia and Mainnet
 
-- `lib/`: Flutter app
-- `backend-worker/`: deployed Cloudflare Worker backend used by the app
-- `backend/`: local Node backend retained for future live BitGo work
+## Tech Stack
 
-## Flutter app
+- Flutter
+- Dart
+- Cloudflare Workers
+- Durable Objects
+- SQLite-backed Worker state
+- Solana SDK
+- web3dart
+- BLE and hotspot transport layers
+- Fileverse receipt integration
 
-### Install app dependencies
+## Repository Layout
+
+- `lib/`: Flutter application
+- `backend-worker/`: Cloudflare Worker backend
+- `backend/`: additional backend workspace for integration work
+- `test/`: Flutter test suite
+
+## Flutter App
+
+### Install dependencies
 
 ```powershell
 flutter pub get
@@ -34,132 +55,97 @@ flutter run
 ### Validate the app
 
 ```powershell
-dart analyze
 flutter test
 ```
 
-## BitGo backend
+## Backend Worker
 
-The app now defaults to the deployed Cloudflare Worker:
-
-```text
-https://bitsend-bitgo-backend.blueadarsh1.workers.dev
-```
-
-Health check:
-
-```text
-https://bitsend-bitgo-backend.blueadarsh1.workers.dev/health
-```
-
-Expected response:
-
-```json
-{"ok":true,"mode":"mock"}
-```
-
-### Cloudflare Worker backend
-
-This is the backend the app is configured to use by default for BitGo demo mode.
-
-### Install Worker dependencies
+### Install dependencies
 
 ```powershell
 cd backend-worker
 npm install
 ```
 
-### Run the Worker locally
+### Run locally
 
 ```powershell
 npm run dev
 ```
 
-### Deploy the Worker
+### Deploy
 
 ```powershell
-npx wrangler whoami
 npm run deploy
 ```
 
-The deployed worker uses a Durable Object for demo sessions and transfer state.
+## Worker Environment
 
-### Fileverse upstream
+Configure the wallet and receipt backend through Worker environment variables.
 
-Receipt publishing to Fileverse is handled by the Worker, not directly by the
-Flutter app. This repo is configured to use the Fileverse server root:
+### Managed wallet variables
 
-```text
-https://quiet-island-41070-e71391e7dca9.herokuapp.com/
-```
+- `BITGO_ENV`
+- `BITGO_ACCESS_TOKEN`
+- `BITGO_API_BASE_URL`
+- `BITGO_EXPRESS_BASE_URL`
+- `BITGO_WALLET_PASSPHRASE`
+- `BITGO_ETH_TESTNET_WALLET_ID`
+- `BITGO_ETH_TESTNET_ADDRESS`
+- `BITGO_ETH_MAINNET_WALLET_ID`
+- `BITGO_ETH_MAINNET_ADDRESS`
+- `BITGO_BASE_TESTNET_WALLET_ID`
+- `BITGO_BASE_TESTNET_ADDRESS`
+- `BITGO_BASE_MAINNET_WALLET_ID`
+- `BITGO_BASE_MAINNET_ADDRESS`
+- `BITGO_SOL_TESTNET_WALLET_ID`
+- `BITGO_SOL_TESTNET_ADDRESS`
+- `BITGO_SOL_MAINNET_WALLET_ID`
+- `BITGO_SOL_MAINNET_ADDRESS`
 
-The Worker derives the ddocs endpoint automatically as:
+### Fileverse variables
 
-```text
-https://quiet-island-41070-e71391e7dca9.herokuapp.com/api/ddocs
-```
+- `FILEVERSE_API_KEY`
+- `FILEVERSE_RECEIPT_UPSTREAM`
+- `FILEVERSE_DDOCS_ENDPOINT`
 
-Before deploying, set the Fileverse API key as a Worker secret:
+## App Flow
 
-```powershell
-cd backend-worker
-npx wrangler secret put FILEVERSE_API_KEY
-```
+1. Create or restore a wallet.
+2. Choose a chain and network.
+3. Fund the main wallet or connect the managed wallet backend.
+4. Move funds into the offline signer when using the local flow.
+5. Send through hotspot, BLE, or managed online submission.
+6. Track activity and publish receipts through the backend.
 
-If you need to override the ddocs path explicitly, set
-`FILEVERSE_DDOCS_ENDPOINT`. Otherwise `FILEVERSE_SERVER_URL` is enough.
+## ENS Usage
 
-Important:
+On EVM send flows, BitSend accepts either a normal `0x...` wallet address or an ENS `.eth` name in the receiver field.
 
-- The Worker is the default app backend for BitGo demo mode.
-- The Worker currently runs in `mock` mode on Cloudflare.
-- This keeps the mobile app runnable over HTTPS without needing a local server.
+1. Open the send flow on Ethereum or Base.
+2. Enter the receiver as a raw address like `0x...` or an ENS name like `alice.eth`.
+3. If you enter a `.eth` name, BitSend resolves it to the destination address before signing.
+4. If that ENS name has BitSend payment preference text records, the app reads and shows the preferred chain and token as routing hints.
+5. Use that ENS preference to send on the recipient's preferred chain or in the recipient's preferred token setup.
 
-## BitGo app setup
+BitSend does not automatically convert assets or force a chain switch from the ENS record. The `.eth` preference is shown to help the sender choose the right route before submission.
 
-1. Open the Flutter app.
-2. Go to `Settings`.
-3. Confirm `BitGo backend` points to the Worker URL.
-4. Tap `Connect BitGo demo`.
-5. Switch the Home header wallet mode from `Local` to `BitGo`.
+You can also manage ENS payment preferences from Settings. Add the ENS name, then save the preferred chain and preferred token that other BitSend users should see when they send to that `.eth` name. Reading and writing ENS records requires internet access, and saving ENS preferences submits an Ethereum mainnet transaction from the ENS manager wallet, so that wallet must have enough ETH for gas.
 
-If you want to override the backend manually, you still can.
+## Product Focus
 
-## Local Node backend
+BitSend brings together:
 
-The original Node backend is still in `backend/`.
+- local-first crypto transfer UX
+- managed online settlement
+- multichain wallet support
+- mobile-native transport options
+- backend-backed receipt persistence
 
-Use it only if you want to keep iterating on a future live BitGo path locally:
+## Development Notes
 
-```powershell
-cd backend
-npm install
-npm run build
-npm start
-```
-
-Default local endpoint:
-
-```text
-http://127.0.0.1:8788
-```
-
-On a physical Android phone, use the deployed Worker URL unless you intentionally want to point the app at your own local machine.
-
-## What was verified
-
-Verified in this repo:
-
-- Flutter Dart analysis on the touched app files
-- Focused Flutter tests for the touched app files
-- Worker `npm install`
-- Worker `npm run typecheck`
-- Worker `wrangler deploy --dry-run`
-- Worker deployment to Cloudflare
-- Live Worker `/health` response in mock mode
-
-## Current limits
-
-- The deployed Cloudflare Worker is currently a BitGo demo/mock backend, not a live BitGo signer
-- Live BitGo SDK execution is still kept in the local Node backend because the BitGo SDK imports unsupported Node modules for the Workers runtime
-- Local mode and BitGo mode are parallel flows by design: BitGo mode does not do offline envelope receive or hotspot settlement
+- Flutter app state lives in `lib/src/state/`
+- Wallet and chain models live in `lib/src/models/`
+- Chain services live in `lib/src/services/`
+- Main UI flows live in `lib/src/screens/`
+- Worker routes and transfer logic live in `backend-worker/src/index.ts`

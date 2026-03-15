@@ -77,6 +77,7 @@ type FileverseReceiptRecord = {
 };
 
 type StoredFileverseReceiptRecord = FileverseReceiptRecord & {
+  upstreamReceiptId?: string;
   transferId: string;
   chain: AppChain;
   network: AppNetwork;
@@ -124,6 +125,7 @@ const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 const fileverseSyncPollAttempts = 45;
 const fileverseSyncPollDelayMs = 2000;
 const bitgoRequestTimeoutMs = 20000;
+const backendVersion = '2026.03.15.3';
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type',
@@ -140,7 +142,11 @@ class HttpError extends Error {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<Response> {
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
@@ -156,6 +162,7 @@ export default {
         return jsonResponse({
           ok: true,
           mode: getGatewayMode(env),
+          version: backendVersion,
         });
       }
 
@@ -254,8 +261,23 @@ export default {
           state,
           url.origin,
           input,
+          ctx,
         );
         return jsonResponse(receipt);
+      }
+
+      if (
+        request.method === 'GET' &&
+        url.pathname.startsWith('/v1/fileverse/receipts/')
+      ) {
+        const receiptId = decodeURIComponent(
+          url.pathname.substring('/v1/fileverse/receipts/'.length),
+        );
+        const receipt = await state.loadFileverseReceipt(receiptId);
+        if (!receipt) {
+          return jsonResponse({ message: 'Receipt not found.' }, 404);
+        }
+        return jsonResponse(clientFileverseReceiptRecord(receipt));
       }
 
       return jsonResponse({ message: 'Not found.' }, 404);
@@ -324,6 +346,15 @@ export class BitGoState extends DurableObject<Env> {
     receipt: StoredFileverseReceiptRecord,
   ): Promise<void> {
     await this.ctx.storage.put(fileverseReceiptKey(receipt.receiptId), receipt);
+    if (
+      receipt.upstreamReceiptId &&
+      receipt.upstreamReceiptId !== receipt.receiptId
+    ) {
+      await this.ctx.storage.put(
+        fileverseReceiptKey(receipt.upstreamReceiptId),
+        receipt,
+      );
+    }
   }
 
   async loadFileverseReceipt(
@@ -414,82 +445,112 @@ async function publishFileverseReceipt(
   state: DurableObjectStub<BitGoState>,
   origin: string,
   input: FileverseReceiptInput,
+  ctx: ExecutionContext,
 ): Promise<FileverseReceiptRecord> {
   const archiveReceiptId = `bitsend-${input.transferId}-${crypto.randomUUID().slice(0, 8)}`;
   const archiveReceiptUrl = new URL(
     `/fileverse/receipts/${encodeURIComponent(archiveReceiptId)}`,
     origin,
   ).toString();
-  let ddocsFailureMessage: string | null = null;
+  const queuedReceipt = createStoredFileverseReceipt({
+    archiveReceiptId,
+    archiveReceiptUrl,
+    input,
+    storageMode: 'worker',
+    message:
+      'Receipt archived on the Bitsend Worker. Fileverse encryption and sync continue in the background.',
+  });
+  await state.saveFileverseReceipt(queuedReceipt);
+  ctx.waitUntil(
+    finalizeFileverseReceiptUpload(
+      env,
+      state,
+      input,
+      queuedReceipt,
+    ),
+  );
+  return clientFileverseReceiptRecord(queuedReceipt);
+}
 
-  const persistReceipt = async ({
-    savedAt,
+function createStoredFileverseReceipt({
+  archiveReceiptId,
+  archiveReceiptUrl,
+  input,
+  storageMode,
+  message,
+  savedAt,
+  upstreamUrl,
+  upstreamReceiptId,
+}: {
+  archiveReceiptId: string;
+  archiveReceiptUrl: string;
+  input: FileverseReceiptInput;
+  storageMode: FileverseStorageMode;
+  message?: string;
+  savedAt?: string;
+  upstreamUrl?: string;
+  upstreamReceiptId?: string;
+}): StoredFileverseReceiptRecord {
+  return {
+    receiptId: archiveReceiptId,
+    receiptUrl: archiveReceiptUrl,
+    savedAt: savedAt ?? new Date().toISOString(),
     upstreamUrl,
-    responseReceiptId,
-    responseReceiptUrl,
+    upstreamReceiptId,
     storageMode,
     message,
-  }: {
-    savedAt?: string;
-    upstreamUrl?: string;
-    responseReceiptId?: string;
-    responseReceiptUrl?: string;
-    storageMode: FileverseStorageMode;
-    message?: string;
-  }): Promise<FileverseReceiptRecord> => {
-    const resolvedSavedAt = savedAt ?? new Date().toISOString();
-    const receipt: StoredFileverseReceiptRecord = {
-      receiptId: archiveReceiptId,
-      receiptUrl: archiveReceiptUrl,
-      savedAt: resolvedSavedAt,
-      upstreamUrl,
-      storageMode,
-      message,
-      transferId: input.transferId,
-      chain: input.chain,
-      network: input.network,
-      walletEngine: input.walletEngine,
-      direction: input.direction,
-      status: input.status,
-      amountBaseUnits: input.amountBaseUnits,
-      amountLabel: input.amountLabel,
-      senderAddress: input.senderAddress,
-      receiverAddress: input.receiverAddress,
-      transport: input.transport,
-      updatedAt: input.updatedAt,
-      createdAt: input.createdAt,
-      transactionSignature: input.transactionSignature,
-      explorerUrl: input.explorerUrl,
-      receiptPngBase64: input.receiptPngBase64,
-    };
-    await state.saveFileverseReceipt(receipt);
-    return {
-      receiptId: responseReceiptId ?? receipt.receiptId,
-      receiptUrl: responseReceiptUrl ?? receipt.receiptUrl,
-      savedAt: receipt.savedAt,
-      upstreamUrl: receipt.upstreamUrl,
-      storageMode: receipt.storageMode,
-      message: receipt.message,
-    };
+    transferId: input.transferId,
+    chain: input.chain,
+    network: input.network,
+    walletEngine: input.walletEngine,
+    direction: input.direction,
+    status: input.status,
+    amountBaseUnits: input.amountBaseUnits,
+    amountLabel: input.amountLabel,
+    senderAddress: input.senderAddress,
+    receiverAddress: input.receiverAddress,
+    transport: input.transport,
+    updatedAt: input.updatedAt,
+    createdAt: input.createdAt,
+    transactionSignature: input.transactionSignature,
+    explorerUrl: input.explorerUrl,
+    receiptPngBase64: input.receiptPngBase64,
   };
+}
 
+function clientFileverseReceiptRecord(
+  receipt: StoredFileverseReceiptRecord,
+): FileverseReceiptRecord {
+  const useUpstream = receipt.storageMode === 'fileverse' &&
+    pickString(receipt.upstreamUrl) != null;
+  return {
+    receiptId: useUpstream
+      ? pickString(receipt.upstreamReceiptId, receipt.receiptId) ?? receipt.receiptId
+      : receipt.receiptId,
+    receiptUrl: useUpstream
+      ? pickString(receipt.upstreamUrl, receipt.receiptUrl) ?? receipt.receiptUrl
+      : receipt.receiptUrl,
+    savedAt: receipt.savedAt,
+    upstreamUrl: receipt.upstreamUrl,
+    storageMode: receipt.storageMode,
+    message: receipt.message,
+  };
+}
+
+async function finalizeFileverseReceiptUpload(
+  env: Env,
+  state: DurableObjectStub<BitGoState>,
+  input: FileverseReceiptInput,
+  queuedReceipt: StoredFileverseReceiptRecord,
+): Promise<void> {
+  let ddocsFailureMessage: string | null = null;
   const apiKey = pickString(env.FILEVERSE_API_KEY);
   const ddocsEndpoint = resolveFileverseDdocsEndpoint(env);
   const upstream = pickString(env.FILEVERSE_RECEIPT_UPSTREAM);
 
-  console.log('Fileverse config', {
-    apiKeyPresent: apiKey != null,
-    ddocsEndpoint,
-    upstreamPresent: upstream != null,
-  });
-
   if (apiKey && ddocsEndpoint) {
     try {
       const endpoint = appendApiKey(ddocsEndpoint, apiKey);
-      console.log('Publishing Fileverse ddoc', {
-        endpoint,
-        transferId: input.transferId,
-      });
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -498,7 +559,7 @@ async function publishFileverseReceipt(
         },
         body: JSON.stringify({
           title: buildFileverseReceiptTitle(input),
-          content: buildFileverseReceiptMarkdown(input, archiveReceiptUrl),
+          content: buildFileverseReceiptMarkdown(input, queuedReceipt.receiptUrl),
         }),
       });
       const rawBody = await response.text();
@@ -520,15 +581,20 @@ async function publishFileverseReceipt(
         apiKey,
         payload,
       );
-      return persistReceipt({
-        savedAt: ddoc.savedAt,
-        upstreamUrl: ddoc.link,
-        responseReceiptId: ddoc.ddocId,
-        responseReceiptUrl: ddoc.link,
-        storageMode: 'fileverse',
-        message:
-          'Receipt details were saved to Fileverse. The Bitsend archive keeps the captured screenshot.',
-      });
+      await state.saveFileverseReceipt(
+        createStoredFileverseReceipt({
+          archiveReceiptId: queuedReceipt.receiptId,
+          archiveReceiptUrl: queuedReceipt.receiptUrl,
+          input,
+          storageMode: 'fileverse',
+          savedAt: ddoc.savedAt,
+          upstreamUrl: ddoc.link,
+          upstreamReceiptId: ddoc.ddocId,
+          message:
+            'Receipt details were saved to Fileverse as an encrypted ddoc. The Bitsend archive keeps the captured screenshot.',
+        }),
+      );
+      return;
     } catch (error) {
       ddocsFailureMessage = error instanceof Error ? error.message : String(error);
       console.error(
@@ -543,13 +609,19 @@ async function publishFileverseReceipt(
   }
 
   if (!apiKey || !upstream) {
-    const fallbackMessage = ddocsFailureMessage == null
-      ? 'Receipt archived on the Bitsend Worker because the Fileverse upstream is not configured yet.'
-      : `Receipt archived on the Bitsend Worker because Fileverse ddoc publish failed: ${ddocsFailureMessage}`;
-    return persistReceipt({
-      storageMode: 'worker',
-      message: fallbackMessage,
-    });
+    await state.saveFileverseReceipt(
+      createStoredFileverseReceipt({
+        archiveReceiptId: queuedReceipt.receiptId,
+        archiveReceiptUrl: queuedReceipt.receiptUrl,
+        input,
+        storageMode: 'worker',
+        savedAt: queuedReceipt.savedAt,
+        message: ddocsFailureMessage == null
+          ? 'Receipt archived on the Bitsend Worker because Fileverse background upload is not configured yet.'
+          : `Receipt archived on the Bitsend Worker because Fileverse ddoc publish failed: ${ddocsFailureMessage}`,
+      }),
+    );
+    return;
   }
 
   try {
@@ -581,25 +653,35 @@ async function publishFileverseReceipt(
       payload,
       input.transferId,
     );
-    return persistReceipt({
-      savedAt: upstreamReceipt.savedAt,
-      upstreamUrl: upstreamReceipt.upstreamUrl,
-      responseReceiptId: upstreamReceipt.receiptId,
-      responseReceiptUrl: upstreamReceipt.receiptUrl,
-      storageMode: upstreamReceipt.storageMode,
-      message:
-        'Receipt saved to Fileverse and mirrored to the Bitsend Worker link.',
-    });
+    await state.saveFileverseReceipt(
+      createStoredFileverseReceipt({
+        archiveReceiptId: queuedReceipt.receiptId,
+        archiveReceiptUrl: queuedReceipt.receiptUrl,
+        input,
+        storageMode: upstreamReceipt.storageMode,
+        savedAt: upstreamReceipt.savedAt,
+        upstreamUrl: upstreamReceipt.upstreamUrl,
+        upstreamReceiptId: upstreamReceipt.receiptId,
+        message:
+          'Receipt saved to Fileverse and mirrored to the Bitsend Worker link.',
+      }),
+    );
   } catch (error) {
     console.error(
       'Fileverse upstream publish failed, archiving on Worker.',
       error,
     );
-    return persistReceipt({
-      storageMode: 'worker',
-      message:
-        'Receipt archived on the Bitsend Worker because Fileverse was unavailable.',
-    });
+    await state.saveFileverseReceipt(
+      createStoredFileverseReceipt({
+        archiveReceiptId: queuedReceipt.receiptId,
+        archiveReceiptUrl: queuedReceipt.receiptUrl,
+        input,
+        storageMode: 'worker',
+        savedAt: queuedReceipt.savedAt,
+        message:
+          'Receipt archived on the Bitsend Worker because Fileverse was unavailable.',
+      }),
+    );
   }
 }
 

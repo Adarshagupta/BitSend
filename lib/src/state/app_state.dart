@@ -815,6 +815,14 @@ class BitsendAppState extends ChangeNotifier {
 
   Future<void> connectBitGoDemo() => connectBitGo();
 
+  Future<BitGoBackendHealth> fetchBackendHealth() async {
+    _bitGoClientService.endpoint = _bitgoEndpoint;
+    final BitGoBackendHealth health = await _bitGoClientService.fetchHealth();
+    _bitgoBackendMode = health.mode;
+    notifyListeners();
+    return health;
+  }
+
   void updateReceiver({
     required String receiverAddress,
     String receiverLabel = '',
@@ -921,17 +929,39 @@ class BitsendAppState extends ChangeNotifier {
     if (!_fileverseClientService.hasSession) {
       await _fileverseClientService.createSession();
     }
-    final FileverseReceiptSnapshot snapshot = await _fileverseClientService
-        .publishReceipt(
+    final FileverseReceiptSnapshot snapshot =
+        await _fileverseClientService.publishReceipt(
           transfer: transfer,
           receiptPngBase64: base64Encode(receiptPngBytes),
         );
-    if (snapshot.storageMode != 'fileverse') {
-      throw FormatException(
-        snapshot.message ??
-            'This backend did not save the receipt in Fileverse.',
-      );
+    final PendingTransfer updated = transfer.copyWith(
+      updatedAt: _clock(),
+      fileverseReceiptId: snapshot.receiptId,
+      fileverseReceiptUrl: snapshot.receiptUrl,
+      fileverseSavedAt: snapshot.savedAt,
+      fileverseStorageMode: snapshot.storageMode,
+      fileverseMessage: snapshot.message,
+    );
+    await _persistTransfer(updated);
+    return updated;
+  }
+
+  Future<PendingTransfer?> refreshReceiptArchive(String transferId) async {
+    final PendingTransfer? transfer = transferById(transferId);
+    if (transfer == null ||
+        transfer.fileverseReceiptId == null ||
+        transfer.fileverseReceiptId!.isEmpty) {
+      return transfer;
     }
+    await _refreshConnectivityState();
+    if (!_hasInternet) {
+      return transfer;
+    }
+    if (!_fileverseClientService.hasSession) {
+      await _fileverseClientService.createSession();
+    }
+    final FileverseReceiptSnapshot snapshot = await _fileverseClientService
+        .fetchReceipt(transfer.fileverseReceiptId!);
     final PendingTransfer updated = transfer.copyWith(
       updatedAt: _clock(),
       fileverseReceiptId: snapshot.receiptId,

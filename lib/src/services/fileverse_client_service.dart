@@ -6,12 +6,17 @@ import 'package:http/http.dart' as http;
 import '../models/app_models.dart';
 
 class FileverseClientService {
-  FileverseClientService({required this.endpoint});
+  FileverseClientService({
+    required this.endpoint,
+    Duration Function(String path)? timeoutForPath,
+  }) : _timeoutForPath = timeoutForPath;
 
   static const Duration _requestTimeout = Duration(seconds: 8);
+  static const Duration _publishTimeout = Duration(seconds: 20);
 
   String endpoint;
   String? _sessionToken;
+  final Duration Function(String path)? _timeoutForPath;
 
   bool get hasSession => _sessionToken != null && _sessionToken!.isNotEmpty;
 
@@ -30,6 +35,15 @@ class FileverseClientService {
   }
 
   Future<FileverseDemoSession> createDemoSession() => createSession();
+
+  Future<FileverseReceiptSnapshot> fetchReceipt(String receiptId) async {
+    final Map<String, dynamic> json = await _request(
+      method: 'GET',
+      path: '/v1/fileverse/receipts/${Uri.encodeComponent(receiptId)}',
+      requiresSession: true,
+    );
+    return FileverseReceiptSnapshot.fromJson(json);
+  }
 
   Future<FileverseReceiptSnapshot> publishReceipt({
     required PendingTransfer transfer,
@@ -69,6 +83,11 @@ class FileverseClientService {
   }) async {
     try {
       final Uri uri = _buildUri(path);
+      final Duration timeout =
+          _timeoutForPath?.call(path) ??
+          (path == '/v1/fileverse/receipts'
+              ? _publishTimeout
+              : _requestTimeout);
       final Map<String, String> headers = <String, String>{
         'Accept': 'application/json',
         if (body != null) 'Content-Type': 'application/json',
@@ -83,8 +102,8 @@ class FileverseClientService {
                 headers: headers,
                 body: body == null ? null : jsonEncode(body),
               )
-              .timeout(_requestTimeout),
-        'GET' => await http.get(uri, headers: headers).timeout(_requestTimeout),
+              .timeout(timeout),
+        'GET' => await http.get(uri, headers: headers).timeout(timeout),
         _ => throw UnsupportedError(
           'Unsupported Fileverse client method: $method',
         ),
@@ -103,7 +122,7 @@ class FileverseClientService {
       throw FormatException(_normalizeBackendMessage(message));
     } on TimeoutException {
       throw const FormatException(
-        'Fileverse backend request timed out. Check the backend endpoint and try again.',
+        'Fileverse request timed out. Receipt publishing can take a few extra seconds while Fileverse syncs, so try again if needed.',
       );
     }
   }

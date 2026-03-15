@@ -2738,6 +2738,8 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
   final GlobalKey _receiptKey = GlobalKey();
   bool _didCelebrate = false;
   bool _savingToFileverse = false;
+  String? _fileverseProgressText;
+  bool _queuedReceiptRefresh = false;
 
   void _celebrate(PendingTransfer? transfer) {
     if (_didCelebrate || transfer == null) {
@@ -2776,12 +2778,30 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
   ) async {
     setState(() {
       _savingToFileverse = true;
+      _fileverseProgressText = 'Checking backend...';
     });
     try {
+      BitGoBackendHealth? health;
+      try {
+        health = await state.fetchBackendHealth();
+      } catch (_) {}
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _fileverseProgressText =
+            '${health == null ? 'Backend' : _fileverseBackendLabel(health)} ready. Encrypting receipt...';
+      });
       final Uint8List bytes = await _captureReceiptPngBytesForFileverse(
         context,
         _receiptKey,
       );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _fileverseProgressText = 'Publishing encrypted receipt to Fileverse...';
+      });
       final PendingTransfer updated = await state.saveReceiptToFileverse(
         transferId: transfer.transferId,
         receiptPngBytes: bytes,
@@ -2811,9 +2831,34 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
       if (mounted) {
         setState(() {
           _savingToFileverse = false;
+          _fileverseProgressText = null;
         });
       }
     }
+  }
+
+  Future<void> _refreshReceiptArchive(
+    BitsendAppState state,
+    PendingTransfer transfer,
+  ) async {
+    try {
+      for (int attempt = 0; attempt < 6; attempt += 1) {
+        await Future<void>.delayed(
+          Duration(seconds: attempt == 0 ? 3 : 5),
+        );
+        if (!mounted) {
+          return;
+        }
+        final PendingTransfer? updated = await state.refreshReceiptArchive(
+          transfer.transferId,
+        );
+        if (updated == null ||
+            updated.isReceiptSavedInFileverse ||
+            !updated.hasReceiptArchive) {
+          return;
+        }
+      }
+    } catch (_) {}
   }
 
   @override
@@ -2821,6 +2866,15 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
     final BitsendAppState state = BitsendStateScope.of(context);
     final PendingTransfer? transfer = state.lastSentTransfer;
     _celebrate(transfer);
+    if (transfer != null &&
+        transfer.hasReceiptArchive &&
+        !transfer.isReceiptSavedInFileverse &&
+        !_queuedReceiptRefresh) {
+      _queuedReceiptRefresh = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_refreshReceiptArchive(state, transfer));
+      });
+    }
     final bool usingBitGo = transfer?.walletEngine == WalletEngine.bitgo;
     return BitsendPageScaffold(
       title: usingBitGo ? 'Submitted' : 'Delivered',
@@ -2886,7 +2940,7 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
                                 ),
                               )
                             : Icon(
-                                !transfer.isReceiptSavedInFileverse
+                                !transfer.hasReceiptLink
                                     ? Icons.cloud_upload_outlined
                                     : Icons.link_rounded,
                               ),
@@ -2899,6 +2953,20 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
                     ),
                   ],
                 ),
+                if (_savingToFileverse && _fileverseProgressText != null) ...<
+                  Widget
+                >[
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _fileverseProgressText!,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.slate,
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
@@ -3108,6 +3176,8 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
   final GlobalKey _receiptKey = GlobalKey();
   bool _didCelebrate = false;
   bool _savingToFileverse = false;
+  String? _fileverseProgressText;
+  bool _queuedReceiptRefresh = false;
 
   void _celebrate(PendingTransfer? transfer) {
     if (_didCelebrate || transfer == null) {
@@ -3146,12 +3216,30 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
   ) async {
     setState(() {
       _savingToFileverse = true;
+      _fileverseProgressText = 'Checking backend...';
     });
     try {
+      BitGoBackendHealth? health;
+      try {
+        health = await state.fetchBackendHealth();
+      } catch (_) {}
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _fileverseProgressText =
+            '${health == null ? 'Backend' : _fileverseBackendLabel(health)} ready. Encrypting receipt...';
+      });
       final Uint8List bytes = await _captureReceiptPngBytesForFileverse(
         context,
         _receiptKey,
       );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _fileverseProgressText = 'Publishing encrypted receipt to Fileverse...';
+      });
       final PendingTransfer updated = await state.saveReceiptToFileverse(
         transferId: transfer.transferId,
         receiptPngBytes: bytes,
@@ -3181,9 +3269,34 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
       if (mounted) {
         setState(() {
           _savingToFileverse = false;
+          _fileverseProgressText = null;
         });
       }
     }
+  }
+
+  Future<void> _refreshReceiptArchive(
+    BitsendAppState state,
+    PendingTransfer transfer,
+  ) async {
+    try {
+      for (int attempt = 0; attempt < 6; attempt += 1) {
+        await Future<void>.delayed(
+          Duration(seconds: attempt == 0 ? 3 : 5),
+        );
+        if (!mounted) {
+          return;
+        }
+        final PendingTransfer? updated = await state.refreshReceiptArchive(
+          transfer.transferId,
+        );
+        if (updated == null ||
+            updated.isReceiptSavedInFileverse ||
+            !updated.hasReceiptArchive) {
+          return;
+        }
+      }
+    } catch (_) {}
   }
 
   @override
@@ -3193,6 +3306,15 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
         ? state.lastReceivedTransfer
         : state.transferById(widget.transferId!);
     _celebrate(transfer);
+    if (transfer != null &&
+        transfer.hasReceiptArchive &&
+        !transfer.isReceiptSavedInFileverse &&
+        !_queuedReceiptRefresh) {
+      _queuedReceiptRefresh = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_refreshReceiptArchive(state, transfer));
+      });
+    }
     return BitsendPageScaffold(
       title: 'Transfer received',
       subtitle: 'Stored locally and ready for later settlement.',
@@ -3249,7 +3371,7 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
                                 ),
                               )
                             : Icon(
-                                !transfer.isReceiptSavedInFileverse
+                                !transfer.hasReceiptLink
                                     ? Icons.cloud_upload_outlined
                                     : Icons.link_rounded,
                               ),
@@ -3262,6 +3384,20 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
                     ),
                   ],
                 ),
+                if (_savingToFileverse && _fileverseProgressText != null) ...<
+                  Widget
+                >[
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _fileverseProgressText!,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.slate,
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
@@ -3360,10 +3496,12 @@ Future<String> _captureReceiptImage(
 }
 
 String _receiptOnlineButtonLabel(PendingTransfer transfer) {
-  if (!transfer.isReceiptSavedInFileverse) {
+  if (!transfer.hasReceiptLink) {
     return 'Save to Fileverse';
   }
-  return 'Copy Fileverse link';
+  return transfer.isReceiptSavedInFileverse
+      ? 'Copy Fileverse link'
+      : 'Copy receipt link';
 }
 
 String _receiptOnlineActionMessage({
@@ -3372,20 +3510,35 @@ String _receiptOnlineActionMessage({
 }) {
   if (previousTransfer.fileverseReceiptUrl ==
       updatedTransfer.fileverseReceiptUrl) {
-    return 'Fileverse link copied.';
+    return updatedTransfer.isReceiptSavedInFileverse
+        ? 'Fileverse link copied.'
+        : 'Receipt link copied.';
   }
-  return 'Receipt saved in Fileverse. Link copied.';
+  return switch (updatedTransfer.fileverseStorageMode) {
+    'fileverse' => 'Encrypted Fileverse receipt saved. Link copied.',
+    'worker' =>
+      'Receipt archived online. Link copied while Fileverse finishes syncing.',
+    _ => 'Receipt link copied.',
+  };
+}
+
+String _fileverseBackendLabel(BitGoBackendHealth health) {
+  if (health.version.isNotEmpty) {
+    return 'Backend v${health.version}';
+  }
+  return 'Backend ${health.mode.label}';
 }
 
 String _receiptIdLabel(PendingTransfer transfer) {
   return switch (transfer.fileverseStorageMode) {
     'fileverse' => 'Fileverse ID',
+    'worker' => 'Archive ID',
     _ => 'Receipt ID',
   };
 }
 
 String _receiptLinkLabel(PendingTransfer transfer) {
-  return 'Fileverse link';
+  return transfer.isReceiptSavedInFileverse ? 'Fileverse link' : 'Receipt link';
 }
 
 String? _receiptStorageCaption(PendingTransfer transfer) {
@@ -3395,6 +3548,8 @@ String? _receiptStorageCaption(PendingTransfer transfer) {
   }
   return switch (transfer.fileverseStorageMode) {
     'fileverse' => 'This link points to the Fileverse record for this receipt.',
+    'worker' =>
+      'This link points to the Bitsend archive while Fileverse sync continues in the background.',
     _ => null,
   };
 }
@@ -3531,7 +3686,7 @@ class _TransferReceiptSurface extends StatelessWidget {
                     .toList(growable: false),
               ),
               if (receiptStorageLabel != null &&
-                  transfer.fileverseSavedAt != null &&
+                  transfer.hasReceiptArchive &&
                   receiptStorageCaption != null) ...<Widget>[
                 const SizedBox(height: 18),
                 InlineBanner(
@@ -3589,7 +3744,7 @@ class _TransferReceiptSurface extends StatelessWidget {
                   label: 'Backend status',
                   value: transfer.backendStatus!,
                 ),
-              if (transfer.isReceiptSavedInFileverse &&
+              if (transfer.hasReceiptArchive &&
                   transfer.fileverseSavedAt != null)
                 DetailRow(
                   label: 'Receipt saved',
@@ -3600,13 +3755,13 @@ class _TransferReceiptSurface extends StatelessWidget {
                   label: 'Receipt provider',
                   value: receiptStorageLabel,
                 ),
-              if (transfer.isReceiptSavedInFileverse &&
+              if (transfer.hasReceiptArchive &&
                   transfer.fileverseReceiptId != null)
                 DetailRow(
                   label: _receiptIdLabel(transfer),
                   value: transfer.fileverseReceiptId!,
                 ),
-              if (transfer.isReceiptSavedInFileverse &&
+              if (transfer.hasReceiptArchive &&
                   transfer.fileverseMessage != null)
                 DetailRow(
                   label: 'Receipt note',
@@ -3637,7 +3792,7 @@ class _TransferReceiptSurface extends StatelessWidget {
                   ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
                 ),
               ],
-              if (transfer.isReceiptSavedInFileverse &&
+              if (transfer.hasReceiptLink &&
                   transfer.fileverseReceiptUrl != null) ...<Widget>[
                 const SizedBox(height: 18),
                 Text(
@@ -4274,7 +4429,7 @@ class TransferDetailScreen extends StatelessWidget {
                     label: 'Backend status',
                     value: transfer.backendStatus!,
                   ),
-                if (transfer.isReceiptSavedInFileverse &&
+                if (transfer.hasReceiptArchive &&
                     transfer.fileverseSavedAt != null)
                   DetailRow(
                     label: 'Receipt saved',
@@ -4285,13 +4440,13 @@ class TransferDetailScreen extends StatelessWidget {
                     label: 'Receipt provider',
                     value: transfer.receiptStorageLabel!,
                   ),
-                if (transfer.isReceiptSavedInFileverse &&
+                if (transfer.hasReceiptArchive &&
                     transfer.fileverseReceiptId != null)
                   DetailRow(
                     label: _receiptIdLabel(transfer),
                     value: transfer.fileverseReceiptId!,
                   ),
-                if (transfer.isReceiptSavedInFileverse &&
+                if (transfer.hasReceiptArchive &&
                     transfer.fileverseMessage != null)
                   DetailRow(
                     label: 'Receipt note',
@@ -4371,7 +4526,7 @@ class TransferDetailScreen extends StatelessWidget {
               ),
             ),
           ],
-          if (transfer.isReceiptSavedInFileverse &&
+          if (transfer.hasReceiptLink &&
               transfer.fileverseReceiptUrl != null) ...<Widget>[
             const SizedBox(height: 16),
             SectionCard(
@@ -4396,9 +4551,14 @@ class TransferDetailScreen extends StatelessWidget {
                       if (!context.mounted) {
                         return;
                       }
-                      _showSnack(context, 'Fileverse link copied.');
+                      _showSnack(
+                        context,
+                        transfer.isReceiptSavedInFileverse
+                            ? 'Fileverse link copied.'
+                            : 'Receipt link copied.',
+                      );
                     },
-                    child: const Text('Copy Fileverse link'),
+                    child: Text(_receiptOnlineButtonLabel(transfer)),
                   ),
                 ],
               ),
