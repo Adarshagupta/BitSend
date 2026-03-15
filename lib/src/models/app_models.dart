@@ -41,7 +41,7 @@ extension ChainKindX on ChainKind {
   String get shortLabel => switch (this) {
     ChainKind.solana => 'SOL',
     ChainKind.ethereum => 'ETH',
-    ChainKind.base => 'ETH',
+    ChainKind.base => 'Base ETH',
   };
 
   String get assetDisplayLabel => switch (this) {
@@ -129,9 +129,9 @@ extension ChainKindX on ChainKind {
       ChainKind.solana =>
         'Solana uses a separate address family from EVM networks.',
       ChainKind.ethereum =>
-        'Ethereum and Base share the same 0x address. Funds stay on ${network.labelFor(this)}.',
+        'Bitsend derives a dedicated Ethereum 0x address. Funds stay on ${network.labelFor(this)}.',
       ChainKind.base =>
-        'Base and Ethereum share the same 0x address. Funds stay on ${network.labelFor(this)}.',
+        'Bitsend derives a dedicated Base 0x address. Funds stay on ${network.labelFor(this)}.',
     };
   }
 
@@ -512,7 +512,7 @@ enum BitGoBackendMode { unknown, mock, live }
 extension BitGoBackendModeX on BitGoBackendMode {
   String get label => switch (this) {
     BitGoBackendMode.unknown => 'Unknown',
-    BitGoBackendMode.mock => 'Demo',
+    BitGoBackendMode.mock => 'Mock',
     BitGoBackendMode.live => 'Live',
   };
 
@@ -520,16 +520,14 @@ extension BitGoBackendModeX on BitGoBackendMode {
 }
 
 class BitGoBackendHealth {
-  const BitGoBackendHealth({
-    required this.ok,
-    required this.mode,
-  });
+  const BitGoBackendHealth({required this.ok, required this.mode});
 
   final bool ok;
   final BitGoBackendMode mode;
 
   factory BitGoBackendHealth.fromJson(Map<String, dynamic> json) {
-    final String rawMode = (json['mode'] as String?)?.trim().toLowerCase() ?? '';
+    final String rawMode =
+        (json['mode'] as String?)?.trim().toLowerCase() ?? '';
     return BitGoBackendHealth(
       ok: (json['ok'] as bool?) ?? false,
       mode: switch (rawMode) {
@@ -691,9 +689,7 @@ class FileverseDemoSession {
   final String sessionToken;
 
   factory FileverseDemoSession.fromJson(Map<String, dynamic> json) =>
-      FileverseDemoSession(
-        sessionToken: json['sessionToken'] as String,
-      );
+      FileverseDemoSession(sessionToken: json['sessionToken'] as String);
 }
 
 class FileverseReceiptSnapshot {
@@ -727,8 +723,7 @@ class FileverseReceiptSnapshot {
             ? DateTime.now()
             : DateTime.parse(json['savedAt'] as String),
         storageMode:
-            (json['storageMode'] as String?) ??
-            (json['provider'] as String?),
+            (json['storageMode'] as String?) ?? (json['provider'] as String?),
         message: json['message'] as String?,
       );
 }
@@ -1122,8 +1117,7 @@ class PendingTransfer {
       fileverseReceiptId: fileverseReceiptId ?? this.fileverseReceiptId,
       fileverseReceiptUrl: fileverseReceiptUrl ?? this.fileverseReceiptUrl,
       fileverseSavedAt: fileverseSavedAt ?? this.fileverseSavedAt,
-      fileverseStorageMode:
-          fileverseStorageMode ?? this.fileverseStorageMode,
+      fileverseStorageMode: fileverseStorageMode ?? this.fileverseStorageMode,
       fileverseMessage: fileverseMessage ?? this.fileverseMessage,
     );
   }

@@ -28,15 +28,17 @@ class BitGoClientService {
     return BitGoBackendHealth.fromJson(json);
   }
 
-  Future<BitGoDemoSession> createDemoSession() async {
+  Future<BitGoDemoSession> createSession() async {
     final Map<String, dynamic> json = await _request(
       method: 'POST',
-      path: '/v1/bitgo/session/demo',
+      path: '/v1/bitgo/session',
     );
     final BitGoDemoSession session = BitGoDemoSession.fromJson(json);
     _sessionToken = session.sessionToken;
     return session;
   }
+
+  Future<BitGoDemoSession> createDemoSession() => createSession();
 
   Future<List<BitGoWalletSummary>> fetchWallets() async {
     final Map<String, dynamic> json = await _request(

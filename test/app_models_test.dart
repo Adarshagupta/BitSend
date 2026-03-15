@@ -18,6 +18,41 @@ void main() {
     });
   });
 
+  group('ChainKind labels', () {
+    test('keeps Base copy distinct from Ethereum', () {
+      expect(ChainKind.base.shortLabel, 'Base ETH');
+      expect(
+        ChainKind.base.addressScopeNoteFor(ChainNetwork.testnet),
+        contains('dedicated Base 0x address'),
+      );
+      expect(
+        ChainKind.ethereum.addressScopeNoteFor(ChainNetwork.testnet),
+        contains('dedicated Ethereum 0x address'),
+      );
+    });
+  });
+
+  group('BitGoWalletSummary', () {
+    test('parses Base wallets from backend payloads', () {
+      final BitGoWalletSummary wallet =
+          BitGoWalletSummary.fromJson(const <String, dynamic>{
+            'chain': 'base',
+            'network': 'mainnet',
+            'walletId': 'demo-base-mainnet',
+            'address': '0x4444444444444444444444444444444444444444',
+            'displayLabel': 'Demo Base ETH Mainnet',
+            'balanceBaseUnits': '12000000000000000',
+            'connectivityStatus': 'demo',
+            'coin': 'baseeth',
+          });
+
+      expect(wallet.chain, ChainKind.base);
+      expect(wallet.network, ChainNetwork.mainnet);
+      expect(wallet.coin, 'baseeth');
+      expect(wallet.balanceBaseUnits, 12000000000000000);
+    });
+  });
+
   group('ReceiverInvitePayload', () {
     test('round-trips hotspot payloads through QR text', () {
       const ReceiverInvitePayload payload = ReceiverInvitePayload(
@@ -154,24 +189,22 @@ void main() {
 
     test('round-trips Fileverse metadata through the DB map', () {
       final DateTime savedAt = DateTime(2026, 3, 14, 13, 45);
-      final PendingTransfer original = _transfer(
-        direction: TransferDirection.inbound,
-        status: TransferStatus.receivedPendingBroadcast,
-      ).copyWith(
-        fileverseReceiptId: 'fv-receipt-1',
-        fileverseReceiptUrl: 'https://fileverse.example/receipt/1',
-        fileverseSavedAt: savedAt,
-      );
+      final PendingTransfer original =
+          _transfer(
+            direction: TransferDirection.inbound,
+            status: TransferStatus.receivedPendingBroadcast,
+          ).copyWith(
+            fileverseReceiptId: 'fv-receipt-1',
+            fileverseReceiptUrl: 'https://fileverse.example/receipt/1',
+            fileverseSavedAt: savedAt,
+          );
 
       final PendingTransfer parsed = PendingTransfer.fromDbMap(
         original.toDbMap(),
       );
 
       expect(parsed.fileverseReceiptId, 'fv-receipt-1');
-      expect(
-        parsed.fileverseReceiptUrl,
-        'https://fileverse.example/receipt/1',
-      );
+      expect(parsed.fileverseReceiptUrl, 'https://fileverse.example/receipt/1');
       expect(parsed.fileverseSavedAt, savedAt);
     });
   });

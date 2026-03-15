@@ -14,12 +14,18 @@ import '../models/app_models.dart';
 
 class WalletService {
   WalletService({FlutterSecureStorage? storage})
-      : _storage = storage ?? const FlutterSecureStorage();
+    : _storage = storage ?? const FlutterSecureStorage();
 
   static const String _walletMnemonicKey = 'wallet_mnemonic';
   static const String _walletModeKey = 'wallet_mode';
   static const String _legacySolanaRpcEndpointKey = 'rpc_endpoint_solana';
   static const String _legacyEthereumRpcEndpointKey = 'rpc_endpoint_ethereum';
+  static const int _solanaMainAccountIndex = 0;
+  static const int _solanaOfflineAccountIndex = 1;
+  static const int _ethereumMainAccountIndex = 0;
+  static const int _ethereumOfflineAccountIndex = 1;
+  static const int _baseMainAccountIndex = 2;
+  static const int _baseOfflineAccountIndex = 3;
 
   final FlutterSecureStorage _storage;
 
@@ -32,13 +38,14 @@ class WalletService {
     }
 
     final String? modeValue = await _storage.read(key: _walletModeKey);
-    final WalletSetupMode mode =
-        modeValue == WalletSetupMode.restored.name ? WalletSetupMode.restored : WalletSetupMode.created;
+    final WalletSetupMode mode = modeValue == WalletSetupMode.restored.name
+        ? WalletSetupMode.restored
+        : WalletSetupMode.created;
     return _profileFromMnemonic(
       mnemonic,
       mode,
       chain: chain,
-      account: 0,
+      account: _defaultAccountIndexFor(chain: chain, offline: false),
     );
   }
 
@@ -50,13 +57,14 @@ class WalletService {
       return null;
     }
     final String? modeValue = await _storage.read(key: _walletModeKey);
-    final WalletSetupMode mode =
-        modeValue == WalletSetupMode.restored.name ? WalletSetupMode.restored : WalletSetupMode.created;
+    final WalletSetupMode mode = modeValue == WalletSetupMode.restored.name
+        ? WalletSetupMode.restored
+        : WalletSetupMode.created;
     return _profileFromMnemonic(
       mnemonic,
       mode,
       chain: chain,
-      account: 1,
+      account: _defaultAccountIndexFor(chain: chain, offline: true),
     );
   }
 
@@ -73,7 +81,10 @@ class WalletService {
     return _persistWallet(normalized, WalletSetupMode.restored);
   }
 
-  Future<WalletProfile> _persistWallet(String mnemonic, WalletSetupMode mode) async {
+  Future<WalletProfile> _persistWallet(
+    String mnemonic,
+    WalletSetupMode mode,
+  ) async {
     await _storage.write(key: _walletMnemonicKey, value: mnemonic);
     await _storage.write(key: _walletModeKey, value: mode.name);
     return _profileFromMnemonic(
@@ -129,18 +140,49 @@ class WalletService {
     return Ed25519HDKeyPair.fromMnemonic(mnemonic, account: account);
   }
 
-  Future<Ed25519HDKeyPair> loadOfflineSigningKeyPair() => loadSigningKeyPair(account: 1);
+  Future<Ed25519HDKeyPair> loadOfflineSigningKeyPair() =>
+      loadSigningKeyPair(account: 1);
 
-  Future<EthPrivateKey> loadEthereumSigningCredentials({int account = 0}) async {
+  Future<EthPrivateKey> loadEvmSigningCredentials({
+    required ChainKind chain,
+    int? account,
+    bool offline = false,
+  }) async {
+    if (!chain.isEvm) {
+      throw FormatException(
+        '${chain.label} does not use EVM signing credentials.',
+      );
+    }
     final String? mnemonic = await _storage.read(key: _walletMnemonicKey);
     if (mnemonic == null || mnemonic.isEmpty) {
       throw const FormatException('Wallet not initialized yet.');
     }
-    return _ethereumCredentialsFromMnemonic(mnemonic, account: account);
+    return _ethereumCredentialsFromMnemonic(
+      mnemonic,
+      account:
+          account ?? _defaultAccountIndexFor(chain: chain, offline: offline),
+    );
+  }
+
+  Future<EthPrivateKey> loadEthereumSigningCredentials({
+    int account = 0,
+  }) async {
+    return loadEvmSigningCredentials(
+      chain: ChainKind.ethereum,
+      account: account,
+    );
   }
 
   Future<EthPrivateKey> loadEthereumOfflineSigningCredentials() {
     return loadEthereumSigningCredentials(account: 1);
+  }
+
+  Future<EthPrivateKey> loadBaseSigningCredentials({int? account}) {
+    return loadEvmSigningCredentials(chain: ChainKind.base, account: account);
+  }
+
+  Future<EthPrivateKey> loadBaseOfflineSigningCredentials() {
+    return loadEvmSigningCredentials(chain: ChainKind.base, offline: true);
   }
 
   Future<void> saveRpcEndpoint(
@@ -148,10 +190,7 @@ class WalletService {
     ChainKind chain = ChainKind.solana,
     ChainNetwork network = ChainNetwork.testnet,
   }) async {
-    await _storage.write(
-      key: _rpcEndpointKey(chain, network),
-      value: endpoint,
-    );
+    await _storage.write(key: _rpcEndpointKey(chain, network), value: endpoint);
   }
 
   Future<String?> loadRpcEndpoint({
@@ -203,37 +242,56 @@ class WalletService {
     final WalletBackupAccount solanaMainAccount = await _buildBackupAccount(
       chain: ChainKind.solana,
       role: 'main',
-      accountIndex: 0,
+      accountIndex: _defaultAccountIndexFor(
+        chain: ChainKind.solana,
+        offline: false,
+      ),
       address: solanaWallet.address,
     );
     final WalletBackupAccount solanaOfflineAccount = await _buildBackupAccount(
       chain: ChainKind.solana,
       role: 'offline',
-      accountIndex: 1,
+      accountIndex: _defaultAccountIndexFor(
+        chain: ChainKind.solana,
+        offline: true,
+      ),
       address: solanaOfflineWallet.address,
     );
     final WalletBackupAccount ethereumMainAccount = await _buildBackupAccount(
       chain: ChainKind.ethereum,
       role: 'main',
-      accountIndex: 0,
+      accountIndex: _defaultAccountIndexFor(
+        chain: ChainKind.ethereum,
+        offline: false,
+      ),
       address: ethereumWallet.address,
     );
-    final WalletBackupAccount ethereumOfflineAccount = await _buildBackupAccount(
-      chain: ChainKind.ethereum,
-      role: 'offline',
-      accountIndex: 1,
-      address: ethereumOfflineWallet.address,
-    );
+    final WalletBackupAccount ethereumOfflineAccount =
+        await _buildBackupAccount(
+          chain: ChainKind.ethereum,
+          role: 'offline',
+          accountIndex: _defaultAccountIndexFor(
+            chain: ChainKind.ethereum,
+            offline: true,
+          ),
+          address: ethereumOfflineWallet.address,
+        );
     final WalletBackupAccount baseMainAccount = await _buildBackupAccount(
       chain: ChainKind.base,
       role: 'main',
-      accountIndex: 0,
+      accountIndex: _defaultAccountIndexFor(
+        chain: ChainKind.base,
+        offline: false,
+      ),
       address: baseWallet.address,
     );
     final WalletBackupAccount baseOfflineAccount = await _buildBackupAccount(
       chain: ChainKind.base,
       role: 'offline',
-      accountIndex: 1,
+      accountIndex: _defaultAccountIndexFor(
+        chain: ChainKind.base,
+        offline: true,
+      ),
       address: baseOfflineWallet.address,
     );
 
@@ -329,6 +387,20 @@ class WalletService {
     }
   }
 
+  int _defaultAccountIndexFor({
+    required ChainKind chain,
+    required bool offline,
+  }) {
+    return switch ((chain, offline)) {
+      (ChainKind.solana, false) => _solanaMainAccountIndex,
+      (ChainKind.solana, true) => _solanaOfflineAccountIndex,
+      (ChainKind.ethereum, false) => _ethereumMainAccountIndex,
+      (ChainKind.ethereum, true) => _ethereumOfflineAccountIndex,
+      (ChainKind.base, false) => _baseMainAccountIndex,
+      (ChainKind.base, true) => _baseOfflineAccountIndex,
+    };
+  }
+
   EthPrivateKey _ethereumCredentialsFromMnemonic(
     String mnemonic, {
     required int account,
@@ -350,8 +422,8 @@ class WalletService {
         .where((String word) => word.isNotEmpty)
         .toList(growable: false);
     final Uint8List seed = hd_wallet.mnemonicToSeed(words);
-    final hd_wallet.ExtendedPrivateKey root = hd_wallet.ExtendedPrivateKey
-        .master(seed, hd_wallet.xprv);
+    final hd_wallet.ExtendedPrivateKey root =
+        hd_wallet.ExtendedPrivateKey.master(seed, hd_wallet.xprv);
     final hd_wallet.ExtendedKey derived = root.forPath(
       "m/44'/60'/0'/0/$account",
     );
@@ -399,9 +471,7 @@ class WalletService {
     return getApplicationDocumentsDirectory();
   }
 
-  Future<Directory?> _tryDirectory(
-    Future<Directory?> Function() loader,
-  ) async {
+  Future<Directory?> _tryDirectory(Future<Directory?> Function() loader) async {
     try {
       return await loader();
     } catch (_) {

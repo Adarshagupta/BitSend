@@ -583,13 +583,7 @@ class FundWalletScreen extends StatelessWidget {
       subtitle: canAirdrop
           ? 'Add a little test SOL now, or skip and fund it later from Home.'
           : 'Send ${chain.assetDisplayLabel} on ${network.shortLabelFor(chain)}, or skip and fund it later from Home.',
-      actions: <Widget>[
-        IconButton(
-          onPressed: () => _refresh(context, state),
-          tooltip: 'Refresh balances',
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-      ],
+      onRefresh: state.working ? null : () => _refresh(context, state),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -1000,6 +994,9 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
           ? _ScopeSwitchOverlay(label: _switchingLabel)
           : null,
       showBack: false,
+      onRefresh: state.working || _switchingScope
+          ? null
+          : () => _refreshHome(context, state),
       primaryTab: BitsendPrimaryTab.home,
       onPrimaryTabSelected: (BitsendPrimaryTab tab) {
         _navigatePrimaryTab(context, tab);
@@ -1273,22 +1270,18 @@ class _DepositScreenState extends State<DepositScreen>
       subtitle: usingBitGo
           ? 'Share the BitGo-backed ${network.shortLabelFor(chain)} ${chain.assetDisplayLabel} address.'
           : 'Pick a wallet and share the ${network.shortLabelFor(chain)} ${chain.assetDisplayLabel} address.',
-      actions: <Widget>[
-        IconButton(
-          onPressed: () async {
-            try {
-              await state.refreshWalletData();
-            } catch (error) {
-              if (!context.mounted) {
-                return;
+      onRefresh: state.working
+          ? null
+          : () async {
+              try {
+                await state.refreshWalletData();
+              } catch (error) {
+                if (!context.mounted) {
+                  return;
+                }
+                _showSnack(context, _messageFor(error));
               }
-              _showSnack(context, _messageFor(error));
-            }
-          },
-          tooltip: 'Refresh balances',
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-      ],
+            },
       showBack: false,
       primaryTab: BitsendPrimaryTab.deposit,
       onPrimaryTabSelected: (BitsendPrimaryTab tab) {
@@ -1485,13 +1478,7 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
       subtitle: usingBitGo
           ? 'BitGo mode is online-only. Manage the backend wallet here.'
           : 'Fund and refresh before handoff.',
-      actions: <Widget>[
-        IconButton(
-          onPressed: state.refreshStatus,
-          tooltip: 'Refresh balances',
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-      ],
+      onRefresh: state.working ? null : state.refreshStatus,
       bottom: usingBitGo
           ? null
           : _OfflineBottomActions(
@@ -2837,13 +2824,7 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
       subtitle: usingBitGo
           ? 'BitGo mode does not listen offline. Switch back to Local mode to receive over hotspot or BLE.'
           : 'Catch a signed handoff over local Wi-Fi or BLE.',
-      actions: <Widget>[
-        IconButton(
-          onPressed: state.refreshStatus,
-          tooltip: 'Refresh status',
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-      ],
+      onRefresh: state.working ? null : state.refreshStatus,
       showBack: false,
       showHeader: false,
       scrollController: _scrollController,
@@ -3899,22 +3880,18 @@ class _PendingScreenState extends State<PendingScreen> {
     return BitsendPageScaffold(
       title: 'Pending',
       subtitle: 'Track offline handoffs and broadcast status.',
-      actions: <Widget>[
-        IconButton(
-          onPressed: () async {
-            try {
-              await state.refreshStatus();
-            } catch (error) {
-              if (!context.mounted) {
-                return;
+      onRefresh: state.working
+          ? null
+          : () async {
+              try {
+                await state.refreshStatus();
+              } catch (error) {
+                if (!context.mounted) {
+                  return;
+                }
+                _showSnack(context, _messageFor(error));
               }
-              _showSnack(context, _messageFor(error));
-            }
-          },
-          tooltip: 'Refresh status',
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-      ],
+            },
       showBack: false,
       primaryTab: BitsendPrimaryTab.pending,
       onPrimaryTabSelected: (BitsendPrimaryTab tab) {

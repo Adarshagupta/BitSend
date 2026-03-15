@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 
-type AppChain = 'ethereum' | 'solana';
+type AppChain = 'base' | 'ethereum' | 'solana';
 type AppNetwork = 'testnet' | 'mainnet';
 type GatewayMode = 'mock' | 'live';
 type FileverseStorageMode = 'fileverse' | 'worker';
@@ -99,11 +99,17 @@ interface Env {
   BITGO_STATE: DurableObjectNamespace<BitGoState>;
   BITGO_ENV?: 'test' | 'prod';
   BITGO_ACCESS_TOKEN?: string;
+  BITGO_API_BASE_URL?: string;
+  BITGO_EXPRESS_BASE_URL?: string;
   BITGO_WALLET_PASSPHRASE?: string;
   BITGO_ETH_TESTNET_WALLET_ID?: string;
   BITGO_ETH_TESTNET_ADDRESS?: string;
   BITGO_ETH_MAINNET_WALLET_ID?: string;
   BITGO_ETH_MAINNET_ADDRESS?: string;
+  BITGO_BASE_TESTNET_WALLET_ID?: string;
+  BITGO_BASE_TESTNET_ADDRESS?: string;
+  BITGO_BASE_MAINNET_WALLET_ID?: string;
+  BITGO_BASE_MAINNET_ADDRESS?: string;
   BITGO_SOL_TESTNET_WALLET_ID?: string;
   BITGO_SOL_TESTNET_ADDRESS?: string;
   BITGO_SOL_MAINNET_WALLET_ID?: string;
@@ -116,6 +122,7 @@ interface Env {
 const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 const fileverseSyncPollAttempts = 45;
 const fileverseSyncPollDelayMs = 2000;
+const bitgoRequestTimeoutMs = 20000;
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type',
@@ -147,13 +154,14 @@ export default {
       if (request.method === 'GET' && url.pathname === '/health') {
         return jsonResponse({
           ok: true,
-          mode: 'mock',
+          mode: getGatewayMode(env),
         });
       }
 
       if (
         request.method === 'POST' &&
-        url.pathname === '/v1/bitgo/session/demo'
+        (url.pathname === '/v1/bitgo/session' ||
+          url.pathname === '/v1/bitgo/session/demo')
       ) {
         const sessionToken = await createSession(state);
         return jsonResponse({
@@ -164,7 +172,8 @@ export default {
 
       if (
         request.method === 'POST' &&
-        url.pathname === '/v1/fileverse/session/demo'
+        (url.pathname === '/v1/fileverse/session' ||
+          url.pathname === '/v1/fileverse/session/demo')
       ) {
         const sessionToken = await createSession(state);
         return jsonResponse({
@@ -176,7 +185,7 @@ export default {
         const authorized = await authorize(request, state);
         if (!authorized) {
           return jsonResponse(
-            { message: 'Missing or invalid BitGo demo session token.' },
+            { message: 'Missing or invalid BitGo session token.' },
             401,
           );
         }
@@ -355,13 +364,16 @@ async function authorize(
 }
 
 function getGatewayMode(env: Env): GatewayMode {
-  return 'mock';
+  return hasLiveBitGoConfig(env) ? 'live' : 'mock';
 }
 
 async function listWallets(
   env: Env,
   state: DurableObjectStub<BitGoState>,
 ): Promise<WalletRecord[]> {
+  if (getGatewayMode(env) === 'live') {
+    return listLiveWallets(env);
+  }
   return listMockWallets(env, state);
 }
 
@@ -390,6 +402,9 @@ async function submitTransfer(
   state: DurableObjectStub<BitGoState>,
   input: SubmitTransferInput,
 ): Promise<TransferRecord> {
+  if (getGatewayMode(env) === 'live') {
+    return submitLiveTransfer(env, state, input);
+  }
   return submitMockTransfer(env, state, input);
 }
 
@@ -634,6 +649,9 @@ async function getTransfer(
   if (!current) {
     return null;
   }
+  if (current.gatewayMode === 'live') {
+    return getLiveTransfer(env, state, current);
+  }
   const ageMs = Date.now() - Date.parse(current.updatedAt);
   if (current.status === 'submitted' && ageMs > 8000) {
     const confirmed = {
@@ -647,8 +665,300 @@ async function getTransfer(
   return current;
 }
 
+function hasLiveBitGoConfig(env: Env): boolean {
+  return (
+    sanitizeString(env.BITGO_ACCESS_TOKEN).length > 0 &&
+    sanitizeString(env.BITGO_WALLET_PASSPHRASE).length > 0 &&
+    sanitizeString(env.BITGO_EXPRESS_BASE_URL).length > 0 &&
+    configuredWalletsFromEnv(env).length > 0
+  );
+}
+
+function bitgoApiBaseUrl(env: Env): string {
+  const explicit = sanitizeString(env.BITGO_API_BASE_URL);
+  if (explicit.length > 0) {
+    return explicit;
+  }
+  return env.BITGO_ENV === 'prod'
+    ? 'https://app.bitgo.com'
+    : 'https://app.bitgo-test.com';
+}
+
+function bitgoExpressBaseUrl(env: Env): string {
+  const explicit = sanitizeString(env.BITGO_EXPRESS_BASE_URL);
+  if (explicit.length == 0) {
+    throw new HttpError(
+      500,
+      'BitGo Express base URL is missing. Set BITGO_EXPRESS_BASE_URL for live mode.',
+    );
+  }
+  return explicit;
+}
+
+async function listLiveWallets(env: Env): Promise<WalletRecord[]> {
+  const configuredWallets = configuredWalletsFromEnv(env);
+  if (configuredWallets.length === 0) {
+    throw new HttpError(
+      500,
+      'No BitGo wallets are configured for live mode.',
+    );
+  }
+  return Promise.all(
+    configuredWallets.map(async (wallet) => {
+      const payload = await requestBitGoApi(
+        env,
+        'GET',
+        `/api/v2/${wallet.coin}/wallet/${encodeURIComponent(wallet.walletId)}`,
+      );
+      return normalizeLiveWalletRecord(wallet, payload);
+    }),
+  );
+}
+
+async function submitLiveTransfer(
+  env: Env,
+  state: DurableObjectStub<BitGoState>,
+  input: SubmitTransferInput,
+): Promise<TransferRecord> {
+  const wallet = resolveConfiguredWalletForScope(
+    env,
+    input.chain,
+    input.network,
+    input.walletId,
+  );
+  const payload = await requestBitGoExpress(
+    env,
+    'POST',
+    `/api/v2/${wallet.coin}/wallet/${encodeURIComponent(wallet.walletId)}/sendcoins`,
+    {
+      address: input.receiverAddress,
+      amount: input.amountBaseUnits,
+      walletPassphrase: sanitizeString(env.BITGO_WALLET_PASSPHRASE),
+    },
+  );
+  const transferPayload = extractBitGoTransferPayload(payload);
+  const bitgoTransferId = pickString(
+    transferPayload.id,
+    transferPayload.transferId,
+    payload.id,
+    payload.transferId,
+  );
+  if (!bitgoTransferId) {
+    throw new HttpError(
+      502,
+      'BitGo live transfer response did not include a transfer id.',
+    );
+  }
+  const transactionSignature = pickString(
+    transferPayload.txid,
+    transferPayload.txHash,
+    transferPayload.transactionHash,
+    payload.txid,
+    payload.txHash,
+    payload.transactionHash,
+  );
+  const updatedAt =
+    pickString(
+      transferPayload.updatedAt,
+      transferPayload.date,
+      transferPayload.createdAt,
+    ) ?? new Date().toISOString();
+  const transfer: TransferRecord = {
+    clientTransferId: input.clientTransferId,
+    bitgoTransferId,
+    bitgoWalletId: wallet.walletId,
+    chain: input.chain,
+    network: input.network,
+    receiverAddress: input.receiverAddress,
+    amountBaseUnits: input.amountBaseUnits,
+    status:
+      pickString(
+        transferPayload.state,
+        transferPayload.status,
+        payload.state,
+        payload.status,
+      ) ?? 'submitted',
+    gatewayMode: 'live',
+    transactionSignature: transactionSignature ?? undefined,
+    explorerUrl: explorerUrlFor(
+      input.chain,
+      input.network,
+      transactionSignature ?? undefined,
+    ),
+    message: pickString(
+      transferPayload.message,
+      transferPayload.reason,
+      payload.message,
+      payload.reason,
+    ) ?? undefined,
+    updatedAt,
+  };
+  await state.saveTransfer(transfer);
+  return transfer;
+}
+
+async function getLiveTransfer(
+  env: Env,
+  state: DurableObjectStub<BitGoState>,
+  current: TransferRecord,
+): Promise<TransferRecord> {
+  const wallet = resolveConfiguredWalletForScope(
+    env,
+    current.chain,
+    current.network,
+    current.bitgoWalletId,
+  );
+  const payload = await requestBitGoApi(
+    env,
+    'GET',
+    `/api/v2/${wallet.coin}/wallet/${encodeURIComponent(wallet.walletId)}/transfer/${encodeURIComponent(current.bitgoTransferId)}`,
+  );
+  const transferPayload = extractBitGoTransferPayload(payload);
+  const transactionSignature = pickString(
+    transferPayload.txid,
+    transferPayload.txHash,
+    transferPayload.transactionHash,
+    current.transactionSignature,
+  );
+  const nextTransfer: TransferRecord = {
+    ...current,
+    status:
+      pickString(
+        transferPayload.state,
+        transferPayload.status,
+        current.status,
+      ) ?? current.status,
+    transactionSignature: transactionSignature ?? undefined,
+    explorerUrl: explorerUrlFor(
+      current.chain,
+      current.network,
+      transactionSignature ?? undefined,
+    ),
+    message: pickString(
+      transferPayload.message,
+      transferPayload.reason,
+      current.message,
+    ) ?? undefined,
+    updatedAt:
+      pickString(
+        transferPayload.updatedAt,
+        transferPayload.date,
+        transferPayload.createdAt,
+      ) ?? new Date().toISOString(),
+  };
+  await state.saveTransfer(nextTransfer);
+  return nextTransfer;
+}
+
+function resolveConfiguredWalletForScope(
+  env: Env,
+  chain: AppChain,
+  network: AppNetwork,
+  walletId: string,
+): WalletRecord {
+  const wallet = configuredWalletsFromEnv(env).find(
+    (item) =>
+      item.chain === chain &&
+      item.network === network &&
+      item.walletId === walletId,
+  );
+  if (!wallet) {
+    throw new HttpError(
+      404,
+      `BitGo wallet is not configured for ${chain}:${network}.`,
+    );
+  }
+  return wallet;
+}
+
+function normalizeLiveWalletRecord(
+  configuredWallet: WalletRecord,
+  payload: Record<string, unknown>,
+): WalletRecord {
+  const walletPayload = extractBitGoWalletPayload(payload);
+  return {
+    chain: configuredWallet.chain,
+    network: configuredWallet.network,
+    walletId:
+      pickString(walletPayload.id, walletPayload.walletId) ??
+      configuredWallet.walletId,
+    address: extractBitGoWalletAddress(walletPayload, configuredWallet.address),
+    displayLabel:
+      pickString(walletPayload.label, configuredWallet.displayLabel) ??
+      configuredWallet.displayLabel,
+    balanceBaseUnits: normalizeBitGoWalletBalance(walletPayload),
+    connectivityStatus: 'connected',
+    coin: configuredWallet.coin,
+    lastSyncedAt: new Date().toISOString(),
+  };
+}
+
+function extractBitGoWalletPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const data = extractPayloadData(payload);
+  return typeof data.wallet === 'object' && data.wallet != null
+    ? data.wallet as Record<string, unknown>
+    : data;
+}
+
+function extractBitGoTransferPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const data = extractPayloadData(payload);
+  if (typeof data.transfer === 'object' && data.transfer != null) {
+    return data.transfer as Record<string, unknown>;
+  }
+  if (Array.isArray(data.transfers) && data.transfers.length > 0) {
+    const first = data.transfers[0];
+    if (typeof first === 'object' && first != null) {
+      return first as Record<string, unknown>;
+    }
+  }
+  return data;
+}
+
+function extractBitGoWalletAddress(
+  walletPayload: Record<string, unknown>,
+  fallbackAddress: string,
+): string {
+  const receiveAddress = walletPayload.receiveAddress;
+  if (typeof receiveAddress === 'string' && receiveAddress.trim().length > 0) {
+    return receiveAddress.trim();
+  }
+  if (typeof receiveAddress === 'object' && receiveAddress != null) {
+    const nested = receiveAddress as Record<string, unknown>;
+    const nestedAddress = pickString(nested.address, nested.walletAddress);
+    if (nestedAddress) {
+      return nestedAddress;
+    }
+  }
+  const directAddress = pickString(walletPayload.address, walletPayload.walletAddress);
+  return directAddress ?? fallbackAddress;
+}
+
+function normalizeBitGoWalletBalance(
+  walletPayload: Record<string, unknown>,
+): string {
+  const stringBalance = pickString(
+    walletPayload.confirmedBalanceString,
+    walletPayload.spendableBalanceString,
+    walletPayload.balanceString,
+  );
+  if (stringBalance) {
+    return stringBalance;
+  }
+  return normalizeBaseUnits(
+    walletPayload.confirmedBalance ??
+      walletPayload.spendableBalance ??
+      walletPayload.balance,
+  );
+}
+
 function configuredWalletsFromEnv(env: Env): WalletRecord[] {
   return [
+    configuredWalletFromEnv(env, 'base', 'testnet'),
+    configuredWalletFromEnv(env, 'base', 'mainnet'),
     configuredWalletFromEnv(env, 'ethereum', 'testnet'),
     configuredWalletFromEnv(env, 'ethereum', 'mainnet'),
     configuredWalletFromEnv(env, 'solana', 'testnet'),
@@ -661,7 +971,7 @@ function configuredWalletFromEnv(
   chain: AppChain,
   network: AppNetwork,
 ): WalletRecord | null {
-  const suffix = `${chain === 'ethereum' ? 'ETH' : 'SOL'}_${
+  const suffix = `${walletEnvPrefixForChain(chain)}_${
     network === 'testnet' ? 'TESTNET' : 'MAINNET'
   }`;
   const walletId = env[`BITGO_${suffix}_WALLET_ID` as keyof Env] as string | undefined;
@@ -674,7 +984,7 @@ function configuredWalletFromEnv(
     network,
     walletId,
     address,
-    displayLabel: `${chain === 'ethereum' ? 'ETH' : 'SOL'} ${
+    displayLabel: `${walletDisplayAssetLabel(chain)} ${
       network === 'testnet' ? 'Testnet' : 'Mainnet'
     }`,
     balanceBaseUnits: '0',
@@ -685,6 +995,26 @@ function configuredWalletFromEnv(
 
 function defaultMockWallets(): WalletRecord[] {
   return [
+    {
+      chain: 'base',
+      network: 'testnet',
+      walletId: 'demo-base-testnet',
+      address: '0x3333333333333333333333333333333333333333',
+      displayLabel: 'Demo Base ETH Testnet',
+      balanceBaseUnits: '50000000000000000',
+      connectivityStatus: 'demo',
+      coin: 'tbaseeth',
+    },
+    {
+      chain: 'base',
+      network: 'mainnet',
+      walletId: 'demo-base-mainnet',
+      address: '0x4444444444444444444444444444444444444444',
+      displayLabel: 'Demo Base ETH Mainnet',
+      balanceBaseUnits: '12000000000000000',
+      connectivityStatus: 'demo',
+      coin: 'baseeth',
+    },
     {
       chain: 'ethereum',
       network: 'testnet',
@@ -763,7 +1093,7 @@ function validateSubmitTransferInput(body: unknown): SubmitTransferInput {
   const clientTransferId = sanitizeString(input.clientTransferId);
   const amountBaseUnits = normalizeBaseUnits(input.amountBaseUnits);
 
-  if (chain !== 'ethereum' && chain !== 'solana') {
+  if (chain !== 'base' && chain !== 'ethereum' && chain !== 'solana') {
     throw new HttpError(400, 'Missing chain.');
   }
   if (network !== 'testnet' && network !== 'mainnet') {
@@ -814,7 +1144,7 @@ function validateFileverseReceiptInput(body: unknown): FileverseReceiptInput {
   const explorerUrl = pickString(input.explorerUrl);
   const receiptPngBase64 = sanitizeString(input.receiptPngBase64);
 
-  if (chain !== 'ethereum' && chain !== 'solana') {
+  if (chain !== 'base' && chain !== 'ethereum' && chain !== 'solana') {
     throw new HttpError(400, 'Missing chain.');
   }
   if (network !== 'testnet' && network !== 'mainnet') {
@@ -893,6 +1223,9 @@ function coinForScope(chain: AppChain, network: AppNetwork): string {
   if (chain === 'solana') {
     return network === 'mainnet' ? 'sol' : 'tsol';
   }
+  if (chain === 'base') {
+    return network === 'mainnet' ? 'baseeth' : 'tbaseeth';
+  }
   return network === 'mainnet' ? 'eth' : 'hteth';
 }
 
@@ -908,8 +1241,112 @@ function explorerUrlFor(
     const cluster = network === 'mainnet' ? '' : '?cluster=devnet';
     return `https://explorer.solana.com/tx/${transactionSignature}${cluster}`;
   }
+  if (chain === 'base') {
+    const prefix = network === 'mainnet' ? '' : 'sepolia.';
+    return `https://${prefix}basescan.org/tx/${transactionSignature}`;
+  }
   const prefix = network === 'mainnet' ? '' : 'sepolia.';
   return `https://${prefix}etherscan.io/tx/${transactionSignature}`;
+}
+
+function walletEnvPrefixForChain(chain: AppChain): string {
+  switch (chain) {
+    case 'base':
+      return 'BASE';
+    case 'ethereum':
+      return 'ETH';
+    case 'solana':
+      return 'SOL';
+  }
+}
+
+function walletDisplayAssetLabel(chain: AppChain): string {
+  switch (chain) {
+    case 'base':
+      return 'Base ETH';
+    case 'ethereum':
+      return 'ETH';
+    case 'solana':
+      return 'SOL';
+  }
+}
+
+async function requestBitGoApi(
+  env: Env,
+  method: 'GET' | 'POST',
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return requestBitGoJson(env, bitgoApiBaseUrl(env), method, path, body);
+}
+
+async function requestBitGoExpress(
+  env: Env,
+  method: 'GET' | 'POST',
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return requestBitGoJson(env, bitgoExpressBaseUrl(env), method, path, body);
+}
+
+async function requestBitGoJson(
+  env: Env,
+  baseUrl: string,
+  method: 'GET' | 'POST',
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const accessToken = sanitizeString(env.BITGO_ACCESS_TOKEN);
+  if (accessToken.length === 0) {
+    throw new HttpError(
+      500,
+      'BitGo access token is missing. Set BITGO_ACCESS_TOKEN for live mode.',
+    );
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), bitgoRequestTimeoutMs);
+  try {
+    const url = new URL(path, ensureTrailingSlash(baseUrl));
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+        if (body != null) 'Content-Type': 'application/json',
+      },
+      body: body == null ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const rawBody = await response.text();
+    const payload = rawBody.trim().length === 0
+      ? {}
+      : tryParseJsonObject(rawBody);
+    if (!response.ok) {
+      throw new HttpError(
+        response.status,
+        pickString(
+          payload.error,
+          payload.message,
+          payload.reason,
+        ) ?? `BitGo request failed (${response.status}).`,
+      );
+    }
+    return payload;
+  } catch (error) {
+    if (error instanceof HttpError) {
+      throw error;
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new HttpError(504, 'BitGo request timed out.');
+    }
+    throw new HttpError(502, 'BitGo request failed.');
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`;
 }
 
 function normalizeBaseUnits(value: unknown): string {

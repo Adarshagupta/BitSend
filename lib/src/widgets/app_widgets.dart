@@ -21,6 +21,7 @@ class BitsendPageScaffold extends StatelessWidget {
     this.showHeader = true,
     this.scrollable = true,
     this.scrollController,
+    this.onRefresh,
     this.primaryTab,
     this.onPrimaryTabSelected,
   });
@@ -36,6 +37,7 @@ class BitsendPageScaffold extends StatelessWidget {
   final bool showHeader;
   final bool scrollable;
   final ScrollController? scrollController;
+  final RefreshCallback? onRefresh;
   final BitsendPrimaryTab? primaryTab;
   final ValueChanged<BitsendPrimaryTab>? onPrimaryTabSelected;
 
@@ -67,6 +69,35 @@ class BitsendPageScaffold extends StatelessWidget {
     final double scrollBottomPadding = keyboardVisible
         ? 40 + keyboardInset
         : baseScrollBottomPadding;
+    final ScrollPhysics? scrollPhysics = onRefresh == null
+        ? null
+        : const AlwaysScrollableScrollPhysics();
+
+    Widget buildScrollableContent() {
+      final Widget content = ListView(
+        controller: scrollController,
+        physics: scrollPhysics,
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: EdgeInsets.fromLTRB(20, 10, 20, scrollBottomPadding),
+        children: <Widget>[
+          if (hasChrome)
+            _PageChrome(
+              showBack: showBack,
+              showBrand: showBrandInChrome,
+              actions: actions,
+            ),
+          SizedBox(
+            height: effectiveHeader != null ? (hasChrome ? 18 : 8) : 8,
+          ),
+          if (effectiveHeader != null) effectiveHeader,
+          child,
+        ],
+      );
+      if (onRefresh == null) {
+        return content;
+      }
+      return RefreshIndicator(onRefresh: onRefresh!, child: content);
+    }
 
     return Scaffold(
       extendBody: true,
@@ -121,34 +152,7 @@ class BitsendPageScaffold extends StatelessWidget {
                             ? Stack(
                                 children: <Widget>[
                                   Positioned.fill(
-                                    child: ListView(
-                                      controller: scrollController,
-                                      keyboardDismissBehavior:
-                                          ScrollViewKeyboardDismissBehavior
-                                              .onDrag,
-                                      padding: EdgeInsets.fromLTRB(
-                                        20,
-                                        10,
-                                        20,
-                                        scrollBottomPadding,
-                                      ),
-                                      children: <Widget>[
-                                        if (hasChrome)
-                                          _PageChrome(
-                                            showBack: showBack,
-                                            showBrand: showBrandInChrome,
-                                            actions: actions,
-                                          ),
-                                        SizedBox(
-                                          height: effectiveHeader != null
-                                              ? (hasChrome ? 18 : 8)
-                                              : 8,
-                                        ),
-                                        if (effectiveHeader != null)
-                                          effectiveHeader,
-                                        child,
-                                      ],
-                                    ),
+                                    child: buildScrollableContent(),
                                   ),
                                   Align(
                                     alignment: Alignment.bottomCenter,
@@ -236,34 +240,7 @@ class BitsendPageScaffold extends StatelessWidget {
                             : Stack(
                                 children: <Widget>[
                                   Positioned.fill(
-                                    child: ListView(
-                                      controller: scrollController,
-                                      keyboardDismissBehavior:
-                                          ScrollViewKeyboardDismissBehavior
-                                              .onDrag,
-                                      padding: EdgeInsets.fromLTRB(
-                                        20,
-                                        10,
-                                        20,
-                                        scrollBottomPadding,
-                                      ),
-                                      children: <Widget>[
-                                        if (hasChrome)
-                                          _PageChrome(
-                                            showBack: showBack,
-                                            showBrand: showBrandInChrome,
-                                            actions: actions,
-                                          ),
-                                        SizedBox(
-                                          height: effectiveHeader != null
-                                              ? (hasChrome ? 18 : 8)
-                                              : 8,
-                                        ),
-                                        if (effectiveHeader != null)
-                                          effectiveHeader,
-                                        child,
-                                      ],
-                                    ),
+                                    child: buildScrollableContent(),
                                   ),
                                   if (showFloatingBottom)
                                     Align(

@@ -19,15 +19,17 @@ class FileverseClientService {
     _sessionToken = null;
   }
 
-  Future<FileverseDemoSession> createDemoSession() async {
+  Future<FileverseDemoSession> createSession() async {
     final Map<String, dynamic> json = await _request(
       method: 'POST',
-      path: '/v1/fileverse/session/demo',
+      path: '/v1/fileverse/session',
     );
     final FileverseDemoSession session = FileverseDemoSession.fromJson(json);
     _sessionToken = session.sessionToken;
     return session;
   }
+
+  Future<FileverseDemoSession> createDemoSession() => createSession();
 
   Future<FileverseReceiptSnapshot> publishReceipt({
     required PendingTransfer transfer,

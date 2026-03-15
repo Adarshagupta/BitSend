@@ -680,7 +680,7 @@ class BitsendAppState extends ChangeNotifier {
         await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
       } else {
         final EthPrivateKey sender = await _walletService
-            .loadEthereumSigningCredentials();
+            .loadEvmSigningCredentials(chain: _activeChain);
         final String signature = await _ethereumService.sendTransferNow(
           sender: sender,
           senderAddress: _wallet!.address,
@@ -760,21 +760,23 @@ class BitsendAppState extends ChangeNotifier {
     }
   }
 
-  Future<void> connectBitGoDemo() async {
-    await _runTask('Connecting BitGo demo session...', () async {
+  Future<void> connectBitGo() async {
+    await _runTask('Connecting wallet backend...', () async {
       await _refreshConnectivityState();
       if (!_hasInternet) {
         throw const SocketException(
-          'Internet is required to connect the BitGo demo wallet.',
+          'Internet is required to connect the BitGo wallet backend.',
         );
       }
       await _refreshBitGoBackendHealth();
       final BitGoDemoSession session = await _bitGoClientService
-          .createDemoSession();
+          .createSession();
       _syncBitGoWallets(session.wallets);
       await refreshWalletData();
     });
   }
+
+  Future<void> connectBitGoDemo() => connectBitGo();
 
   void updateReceiver({
     required String receiverAddress,
@@ -1082,7 +1084,7 @@ class BitsendAppState extends ChangeNotifier {
       details = _solanaService.validateEnvelope(envelope);
     } else {
       final EthPrivateKey sender = await _walletService
-          .loadEthereumOfflineSigningCredentials();
+          .loadEvmSigningCredentials(chain: _activeChain, offline: true);
       envelope = await _ethereumService.createSignedEnvelope(
         sender: sender,
         senderAddress: _offlineWallet!.address,
@@ -1652,7 +1654,8 @@ class BitsendAppState extends ChangeNotifier {
             'Receiver is listening on ${_activeChain.networkLabelFor(_activeNetwork)}, but this transfer is for ${envelope.chain.networkLabelFor(envelope.network)}.',
       );
     }
-    final ValidatedTransactionDetails details = envelope.chain == ChainKind.solana
+    final ValidatedTransactionDetails details =
+        envelope.chain == ChainKind.solana
         ? _solanaService.validateEnvelope(envelope)
         : _validateEvmEnvelope(
             envelope,
@@ -1994,7 +1997,11 @@ class BitsendAppState extends ChangeNotifier {
     }
     _realtimeSettlementSyncRunning = true;
     try {
-      for (int attempt = 0; attempt < realtimeSettlementPollAttempts; attempt++) {
+      for (
+        int attempt = 0;
+        attempt < realtimeSettlementPollAttempts;
+        attempt++
+      ) {
         if (!_hasRealtimeSettlementPendingForActiveScope()) {
           break;
         }
@@ -2224,7 +2231,8 @@ class BitsendAppState extends ChangeNotifier {
 
   bool _hasRealtimeSettlementPendingForActiveScope() {
     return _pendingTransfers.any((PendingTransfer transfer) {
-      if (transfer.chain != _activeChain || transfer.network != _activeNetwork) {
+      if (transfer.chain != _activeChain ||
+          transfer.network != _activeNetwork) {
         return false;
       }
       if (transfer.walletEngine == WalletEngine.local) {
@@ -2298,7 +2306,9 @@ class BitsendAppState extends ChangeNotifier {
   }) async {
     final WalletProfile? wallet = _wallets[ChainKind.ethereum] ?? _wallet;
     if (wallet == null) {
-      throw const FormatException('Create or restore an Ethereum wallet first.');
+      throw const FormatException(
+        'Create or restore an Ethereum wallet first.',
+      );
     }
     await _refreshConnectivityState();
     if (!_hasInternet) {
