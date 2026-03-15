@@ -104,6 +104,7 @@ class WalletService {
           mode: mode,
         );
       case ChainKind.ethereum:
+      case ChainKind.base:
         final EthPrivateKey credentials = _ethereumCredentialsFromMnemonic(
           mnemonic,
           account: account,
@@ -166,11 +167,11 @@ class WalletService {
     if (network != ChainNetwork.testnet) {
       return null;
     }
-    return _storage.read(
-      key: chain == ChainKind.solana
-          ? _legacySolanaRpcEndpointKey
-          : _legacyEthereumRpcEndpointKey,
-    );
+    return switch (chain) {
+      ChainKind.solana => _storage.read(key: _legacySolanaRpcEndpointKey),
+      ChainKind.ethereum => _storage.read(key: _legacyEthereumRpcEndpointKey),
+      ChainKind.base => null,
+    };
   }
 
   Future<WalletBackupExport> exportWalletBackup() async {
@@ -186,10 +187,16 @@ class WalletService {
     final WalletProfile? ethereumOfflineWallet = await loadOfflineWallet(
       chain: ChainKind.ethereum,
     );
+    final WalletProfile? baseWallet = await loadWallet(chain: ChainKind.base);
+    final WalletProfile? baseOfflineWallet = await loadOfflineWallet(
+      chain: ChainKind.base,
+    );
     if (solanaWallet == null ||
         solanaOfflineWallet == null ||
         ethereumWallet == null ||
-        ethereumOfflineWallet == null) {
+        ethereumOfflineWallet == null ||
+        baseWallet == null ||
+        baseOfflineWallet == null) {
       throw const FormatException('Create or restore a wallet first.');
     }
 
@@ -217,6 +224,18 @@ class WalletService {
       accountIndex: 1,
       address: ethereumOfflineWallet.address,
     );
+    final WalletBackupAccount baseMainAccount = await _buildBackupAccount(
+      chain: ChainKind.base,
+      role: 'main',
+      accountIndex: 0,
+      address: baseWallet.address,
+    );
+    final WalletBackupAccount baseOfflineAccount = await _buildBackupAccount(
+      chain: ChainKind.base,
+      role: 'offline',
+      accountIndex: 1,
+      address: baseOfflineWallet.address,
+    );
 
     final DateTime now = DateTime.now().toUtc();
     final String fileName = 'bitsend-wallet-backup-${_timestamp(now)}.json';
@@ -230,7 +249,11 @@ class WalletService {
     final JsonEncoder encoder = const JsonEncoder.withIndent('  ');
     final String payload = encoder.convert(<String, dynamic>{
       'version': 1,
-      'chains': <String>[ChainKind.solana.name, ChainKind.ethereum.name],
+      'chains': <String>[
+        ChainKind.solana.name,
+        ChainKind.ethereum.name,
+        ChainKind.base.name,
+      ],
       'exportedAtUtc': now.toIso8601String(),
       'walletMode': solanaWallet.mode.name,
       'recoveryPhrase': solanaWallet.seedPhrase,
@@ -239,6 +262,8 @@ class WalletService {
         solanaOfflineAccount.toJson(),
         ethereumMainAccount.toJson(),
         ethereumOfflineAccount.toJson(),
+        baseMainAccount.toJson(),
+        baseOfflineAccount.toJson(),
       ],
       'notes': <String>[
         'This file contains the recovery phrase and all derived private keys.',
@@ -287,6 +312,7 @@ class WalletService {
           keyData.destroy();
         }
       case ChainKind.ethereum:
+      case ChainKind.base:
         return WalletBackupAccount(
           chain: chain,
           role: role,

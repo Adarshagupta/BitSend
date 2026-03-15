@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 
-enum ChainKind { solana, ethereum }
+enum ChainKind { solana, ethereum, base }
 
 enum ChainNetwork { testnet, mainnet }
 
@@ -16,6 +16,11 @@ extension WalletEngineX on WalletEngine {
     WalletEngine.bitgo => 'BitGo',
   };
 
+  String get walletLabel => switch (this) {
+    WalletEngine.local => 'Local wallet',
+    WalletEngine.bitgo => 'BitGo wallet',
+  };
+
   String get shortLabel => switch (this) {
     WalletEngine.local => 'Offline',
     WalletEngine.bitgo => 'Online',
@@ -25,59 +30,78 @@ extension WalletEngineX on WalletEngine {
 }
 
 extension ChainKindX on ChainKind {
+  bool get isEvm => this == ChainKind.ethereum || this == ChainKind.base;
+
   String get label => switch (this) {
     ChainKind.solana => 'Solana',
     ChainKind.ethereum => 'Ethereum',
+    ChainKind.base => 'Base',
   };
 
   String get shortLabel => switch (this) {
     ChainKind.solana => 'SOL',
     ChainKind.ethereum => 'ETH',
+    ChainKind.base => 'ETH',
+  };
+
+  String get assetDisplayLabel => switch (this) {
+    ChainKind.solana => 'SOL',
+    ChainKind.ethereum => 'ETH',
+    ChainKind.base => 'Base ETH',
   };
 
   String get networkLabel => switch (this) {
     ChainKind.solana => 'Solana Devnet',
     ChainKind.ethereum => 'Ethereum Sepolia',
+    ChainKind.base => 'Base Sepolia',
   };
 
   String get networkKey => switch (this) {
     ChainKind.solana => 'solana-devnet',
     ChainKind.ethereum => 'ethereum-sepolia',
+    ChainKind.base => 'base-sepolia',
   };
 
   String get rpcLabel => switch (this) {
     ChainKind.solana => 'RPC',
     ChainKind.ethereum => 'RPC',
+    ChainKind.base => 'RPC',
   };
 
   String get baseUnitLabel => switch (this) {
     ChainKind.solana => 'lamports',
     ChainKind.ethereum => 'wei',
+    ChainKind.base => 'wei',
   };
 
   String get receiverHint => switch (this) {
     ChainKind.solana => 'Receiver devnet address',
     ChainKind.ethereum => 'Receiver Sepolia address',
+    ChainKind.base => 'Receiver Base Sepolia address',
   };
 
   IconData get icon => switch (this) {
     ChainKind.solana => Icons.blur_circular_rounded,
     ChainKind.ethereum => Icons.diamond_rounded,
+    ChainKind.base => Icons.layers_rounded,
   };
 
   int get decimals => switch (this) {
     ChainKind.solana => 9,
     ChainKind.ethereum => 18,
+    ChainKind.base => 18,
   };
 
   double get minimumFundingAmount => switch (this) {
     ChainKind.solana => 0.05,
     ChainKind.ethereum => 0.01,
+    ChainKind.base => 0.01,
   };
 
   int get fallbackFeeHeadroomBaseUnits => switch (this) {
     ChainKind.solana => 10000,
     ChainKind.ethereum => 3000000000000000,
+    ChainKind.base => 3000000000000000,
   };
 
   double amountFromBaseUnits(int value) {
@@ -100,12 +124,25 @@ extension ChainKindX on ChainKind {
     return network.receiverHintFor(this);
   }
 
+  String addressScopeNoteFor(ChainNetwork network) {
+    return switch (this) {
+      ChainKind.solana =>
+        'Solana uses a separate address family from EVM networks.',
+      ChainKind.ethereum =>
+        'Ethereum and Base share the same 0x address. Funds stay on ${network.labelFor(this)}.',
+      ChainKind.base =>
+        'Base and Ethereum share the same 0x address. Funds stay on ${network.labelFor(this)}.',
+    };
+  }
+
   double minimumFundingAmountFor(ChainNetwork network) {
     return switch ((this, network)) {
       (ChainKind.solana, ChainNetwork.testnet) => 0.05,
       (ChainKind.solana, ChainNetwork.mainnet) => 0.01,
       (ChainKind.ethereum, ChainNetwork.testnet) => 0.01,
       (ChainKind.ethereum, ChainNetwork.mainnet) => 0.001,
+      (ChainKind.base, ChainNetwork.testnet) => 0.01,
+      (ChainKind.base, ChainNetwork.mainnet) => 0.001,
     };
   }
 }
@@ -121,6 +158,8 @@ extension ChainNetworkX on ChainNetwork {
       (ChainKind.solana, ChainNetwork.mainnet) => 'Solana Mainnet',
       (ChainKind.ethereum, ChainNetwork.testnet) => 'Ethereum Sepolia',
       (ChainKind.ethereum, ChainNetwork.mainnet) => 'Ethereum Mainnet',
+      (ChainKind.base, ChainNetwork.testnet) => 'Base Sepolia',
+      (ChainKind.base, ChainNetwork.mainnet) => 'Base Mainnet',
     };
   }
 
@@ -130,6 +169,8 @@ extension ChainNetworkX on ChainNetwork {
       (ChainKind.solana, ChainNetwork.mainnet) => 'Mainnet',
       (ChainKind.ethereum, ChainNetwork.testnet) => 'Sepolia',
       (ChainKind.ethereum, ChainNetwork.mainnet) => 'Mainnet',
+      (ChainKind.base, ChainNetwork.testnet) => 'Sepolia',
+      (ChainKind.base, ChainNetwork.mainnet) => 'Mainnet',
     };
   }
 
@@ -139,6 +180,8 @@ extension ChainNetworkX on ChainNetwork {
       (ChainKind.solana, ChainNetwork.mainnet) => 'solana-mainnet',
       (ChainKind.ethereum, ChainNetwork.testnet) => 'ethereum-sepolia',
       (ChainKind.ethereum, ChainNetwork.mainnet) => 'ethereum-mainnet',
+      (ChainKind.base, ChainNetwork.testnet) => 'base-sepolia',
+      (ChainKind.base, ChainNetwork.mainnet) => 'base-mainnet',
     };
   }
 
@@ -148,6 +191,8 @@ extension ChainNetworkX on ChainNetwork {
       (ChainKind.solana, ChainNetwork.mainnet) => 'Receiver mainnet address',
       (ChainKind.ethereum, ChainNetwork.testnet) => 'Receiver Sepolia address',
       (ChainKind.ethereum, ChainNetwork.mainnet) => 'Receiver mainnet address',
+      (ChainKind.base, ChainNetwork.testnet) => 'Receiver Base Sepolia address',
+      (ChainKind.base, ChainNetwork.mainnet) => 'Receiver Base address',
     };
   }
 }
@@ -781,12 +826,17 @@ class ReceiverInvitePayload {
         ChainKind.ethereum,
         ChainNetwork.mainnet,
       ),
+      ('base', 'base-sepolia') => (ChainKind.base, ChainNetwork.testnet),
+      ('base', 'base-mainnet') => (ChainKind.base, ChainNetwork.mainnet),
       ('solana', _) => (ChainKind.solana, ChainNetwork.testnet),
       ('ethereum', _) => (ChainKind.ethereum, ChainNetwork.testnet),
+      ('base', _) => (ChainKind.base, ChainNetwork.testnet),
       (_, 'solana-devnet') => (ChainKind.solana, ChainNetwork.testnet),
       (_, 'solana-mainnet') => (ChainKind.solana, ChainNetwork.mainnet),
       (_, 'ethereum-sepolia') => (ChainKind.ethereum, ChainNetwork.testnet),
       (_, 'ethereum-mainnet') => (ChainKind.ethereum, ChainNetwork.mainnet),
+      (_, 'base-sepolia') => (ChainKind.base, ChainNetwork.testnet),
+      (_, 'base-mainnet') => (ChainKind.base, ChainNetwork.mainnet),
       _ => throw const FormatException(
         'This QR code is for a different network.',
       ),
@@ -1002,7 +1052,6 @@ class PendingTransfer {
   bool get isReceiptSavedInFileverse => fileverseStorageMode == 'fileverse';
   String? get receiptStorageLabel => switch (fileverseStorageMode) {
     'fileverse' => 'Saved in Fileverse',
-    'worker' => 'Archived by Bitsend',
     _ => null,
   };
   bool get reservesOfflineFunds =>
@@ -1273,6 +1322,7 @@ class Formatters {
     final String prefix = switch (chain) {
       ChainKind.solana => '◎',
       ChainKind.ethereum => 'Ξ',
+      ChainKind.base => 'Ξ',
     };
     return '$prefix${amount.toStringAsFixed(fractionDigits)}';
   }

@@ -582,7 +582,7 @@ class FundWalletScreen extends StatelessWidget {
       title: 'Fund this wallet',
       subtitle: canAirdrop
           ? 'Add a little test SOL now, or skip and fund it later from Home.'
-          : 'Send ${chain.shortLabel} on ${network.shortLabelFor(chain)}, or skip and fund it later from Home.',
+          : 'Send ${chain.assetDisplayLabel} on ${network.shortLabelFor(chain)}, or skip and fund it later from Home.',
       actions: <Widget>[
         IconButton(
           onPressed: () => _refresh(context, state),
@@ -658,6 +658,14 @@ class FundWalletScreen extends StatelessWidget {
                       state.wallet?.address ??
                       'Create or restore a wallet first.',
                 ),
+                if (chain.isEvm) ...<Widget>[
+                  const SizedBox(height: 14),
+                  InlineBanner(
+                    title: 'Shared EVM address',
+                    caption: chain.addressScopeNoteFor(network),
+                    icon: Icons.hub_rounded,
+                  ),
+                ],
               ],
             ),
           ),
@@ -865,7 +873,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
       return;
     }
     await _runScopeSwitch(
-      label: '${chain.label} ${state.activeNetwork.shortLabelFor(chain)}',
+      label: chain.networkLabelFor(state.activeNetwork),
       action: () => state.setActiveChain(chain),
     );
   }
@@ -891,7 +899,8 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
       return;
     }
     await _runScopeSwitch(
-      label: '${engine.label} · ${state.activeChain.label}',
+      label:
+          '${state.activeChain.networkLabelFor(state.activeNetwork)} · ${engine.walletLabel}',
       action: () => state.setActiveWalletEngine(engine),
     );
   }
@@ -1260,10 +1269,10 @@ class _DepositScreenState extends State<DepositScreen>
         : Formatters.asset(state.offlineBalanceSol, chain);
 
     return BitsendPageScaffold(
-      title: 'Deposit ${chain.shortLabel}',
+      title: 'Deposit ${chain.assetDisplayLabel}',
       subtitle: usingBitGo
-          ? 'Share the BitGo-backed ${network.shortLabelFor(chain)} ${chain.shortLabel} address.'
-          : 'Pick a wallet and share the ${network.shortLabelFor(chain)} ${chain.shortLabel} address.',
+          ? 'Share the BitGo-backed ${network.shortLabelFor(chain)} ${chain.assetDisplayLabel} address.'
+          : 'Pick a wallet and share the ${network.shortLabelFor(chain)} ${chain.assetDisplayLabel} address.',
       actions: <Widget>[
         IconButton(
           onPressed: () async {
@@ -1348,6 +1357,14 @@ class _DepositScreenState extends State<DepositScreen>
                     height: 1.6,
                   ),
                 ),
+                if (chain.isEvm) ...<Widget>[
+                  const SizedBox(height: 14),
+                  InlineBanner(
+                    title: 'Same address, different network',
+                    caption: chain.addressScopeNoteFor(network),
+                    icon: Icons.layers_rounded,
+                  ),
+                ],
                 const SizedBox(height: 16),
                 Row(
                   children: <Widget>[
@@ -1681,13 +1698,13 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
       _showSnack(context, 'Receiver address is required.');
       return;
     }
-    if (state.activeChain == ChainKind.ethereum &&
+    if (state.activeChain.isEvm &&
         !state.looksLikeEthereumEnsName(rawReceiver) &&
         !_isValidAddressForChain(rawReceiver, state.activeChain)) {
       _showSnack(context, 'Receiver address or ENS name is not valid.');
       return;
     }
-    if (state.activeChain == ChainKind.ethereum &&
+    if (state.activeChain.isEvm &&
         state.looksLikeEthereumEnsName(rawReceiver)) {
       setState(() {
         _resolvingEns = true;
@@ -1900,17 +1917,17 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                 TextField(
                   controller: _addressController,
                   decoration: InputDecoration(
-                    labelText: state.activeChain == ChainKind.ethereum
+                    labelText: state.activeChain.isEvm
                         ? 'Receiver address or ENS'
                         : 'Receiver address',
-                    hintText: state.activeChain == ChainKind.ethereum
+                    hintText: state.activeChain.isEvm
                         ? 'alice.eth or 0x...'
                         : state.activeChain.receiverHintFor(
                             state.activeNetwork,
                           ),
                   ),
                 ),
-                if (state.activeChain == ChainKind.ethereum) ...<Widget>[
+                if (state.activeChain.isEvm) ...<Widget>[
                   const SizedBox(height: 10),
                   InlineBanner(
                     title: _resolvedReceiverAddress == null
@@ -2664,7 +2681,7 @@ class _SendSuccessScreenState extends State<SendSuccessScreen> {
                                 ),
                               )
                             : Icon(
-                                transfer.fileverseReceiptUrl == null
+                                !transfer.isReceiptSavedInFileverse
                                     ? Icons.cloud_upload_outlined
                                     : Icons.link_rounded,
                               ),
@@ -3033,7 +3050,7 @@ class _ReceiveResultScreenState extends State<ReceiveResultScreen> {
                                 ),
                               )
                             : Icon(
-                                transfer.fileverseReceiptUrl == null
+                                !transfer.isReceiptSavedInFileverse
                                     ? Icons.cloud_upload_outlined
                                     : Icons.link_rounded,
                               ),
@@ -3144,12 +3161,10 @@ Future<String> _captureReceiptImage(
 }
 
 String _receiptOnlineButtonLabel(PendingTransfer transfer) {
-  if (transfer.fileverseReceiptUrl == null) {
-    return 'Save receipt online';
+  if (!transfer.isReceiptSavedInFileverse) {
+    return 'Save to Fileverse';
   }
-  return transfer.isReceiptSavedInFileverse
-      ? 'Copy Fileverse link'
-      : 'Copy receipt link';
+  return 'Copy Fileverse link';
 }
 
 String _receiptOnlineActionMessage({
@@ -3157,25 +3172,20 @@ String _receiptOnlineActionMessage({
   required PendingTransfer updatedTransfer,
 }) {
   if (previousTransfer.fileverseReceiptUrl == updatedTransfer.fileverseReceiptUrl) {
-    return updatedTransfer.isReceiptSavedInFileverse
-        ? 'Fileverse link copied.'
-        : 'Receipt link copied.';
+    return 'Fileverse link copied.';
   }
-  return updatedTransfer.isReceiptSavedInFileverse
-      ? 'Receipt saved in Fileverse. Link copied.'
-      : 'Receipt archived online. Link copied.';
+  return 'Receipt saved in Fileverse. Link copied.';
 }
 
 String _receiptIdLabel(PendingTransfer transfer) {
   return switch (transfer.fileverseStorageMode) {
     'fileverse' => 'Fileverse ID',
-    'worker' => 'Archive ID',
     _ => 'Receipt ID',
   };
 }
 
 String _receiptLinkLabel(PendingTransfer transfer) {
-  return transfer.isReceiptSavedInFileverse ? 'Fileverse link' : 'Receipt link';
+  return 'Fileverse link';
 }
 
 String? _receiptStorageCaption(PendingTransfer transfer) {
@@ -3185,8 +3195,6 @@ String? _receiptStorageCaption(PendingTransfer transfer) {
   return switch (transfer.fileverseStorageMode) {
     'fileverse' =>
       'This link points to the Fileverse record for this receipt.',
-    'worker' =>
-      'This link points to the Bitsend archive copy, not a Fileverse record.',
     _ => null,
   };
 }
@@ -3381,19 +3389,22 @@ class _TransferReceiptSurface extends StatelessWidget {
                   label: 'Backend status',
                   value: transfer.backendStatus!,
                 ),
-              if (transfer.fileverseSavedAt != null)
+              if (transfer.isReceiptSavedInFileverse &&
+                  transfer.fileverseSavedAt != null)
                 DetailRow(
                   label: 'Receipt saved',
                   value: Formatters.dateTime(transfer.fileverseSavedAt!),
                 ),
               if (receiptStorageLabel != null)
                 DetailRow(label: 'Receipt provider', value: receiptStorageLabel),
-              if (transfer.fileverseReceiptId != null)
+              if (transfer.isReceiptSavedInFileverse &&
+                  transfer.fileverseReceiptId != null)
                 DetailRow(
                   label: _receiptIdLabel(transfer),
                   value: transfer.fileverseReceiptId!,
                 ),
-              if (transfer.fileverseMessage != null)
+              if (transfer.isReceiptSavedInFileverse &&
+                  transfer.fileverseMessage != null)
                 DetailRow(label: 'Receipt note', value: transfer.fileverseMessage!),
               if (transfer.lastError != null) ...<Widget>[
                 const SizedBox(height: 10),
@@ -3420,7 +3431,8 @@ class _TransferReceiptSurface extends StatelessWidget {
                   ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
                 ),
               ],
-              if (transfer.fileverseReceiptUrl != null) ...<Widget>[
+              if (transfer.isReceiptSavedInFileverse &&
+                  transfer.fileverseReceiptUrl != null) ...<Widget>[
                 const SizedBox(height: 18),
                 Text(
                   _receiptLinkLabel(transfer),
@@ -4060,7 +4072,8 @@ class TransferDetailScreen extends StatelessWidget {
                     label: 'Backend status',
                     value: transfer.backendStatus!,
                   ),
-                if (transfer.fileverseSavedAt != null)
+                if (transfer.isReceiptSavedInFileverse &&
+                    transfer.fileverseSavedAt != null)
                   DetailRow(
                     label: 'Receipt saved',
                     value: Formatters.dateTime(transfer.fileverseSavedAt!),
@@ -4070,12 +4083,14 @@ class TransferDetailScreen extends StatelessWidget {
                     label: 'Receipt provider',
                     value: transfer.receiptStorageLabel!,
                   ),
-                if (transfer.fileverseReceiptId != null)
+                if (transfer.isReceiptSavedInFileverse &&
+                    transfer.fileverseReceiptId != null)
                   DetailRow(
                     label: _receiptIdLabel(transfer),
                     value: transfer.fileverseReceiptId!,
                   ),
-                if (transfer.fileverseMessage != null)
+                if (transfer.isReceiptSavedInFileverse &&
+                    transfer.fileverseMessage != null)
                   DetailRow(
                     label: 'Receipt note',
                     value: transfer.fileverseMessage!,
@@ -4154,7 +4169,8 @@ class TransferDetailScreen extends StatelessWidget {
               ),
             ),
           ],
-          if (transfer.fileverseReceiptUrl != null) ...<Widget>[
+          if (transfer.isReceiptSavedInFileverse &&
+              transfer.fileverseReceiptUrl != null) ...<Widget>[
             const SizedBox(height: 16),
             SectionCard(
               child: Column(
@@ -4178,18 +4194,9 @@ class TransferDetailScreen extends StatelessWidget {
                       if (!context.mounted) {
                         return;
                       }
-                      _showSnack(
-                        context,
-                        transfer.isReceiptSavedInFileverse
-                            ? 'Fileverse link copied.'
-                            : 'Receipt link copied.',
-                      );
+                      _showSnack(context, 'Fileverse link copied.');
                     },
-                    child: Text(
-                      transfer.isReceiptSavedInFileverse
-                          ? 'Copy Fileverse link'
-                          : 'Copy receipt link',
-                    ),
+                    child: const Text('Copy Fileverse link'),
                   ),
                 ],
               ),
@@ -4383,6 +4390,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         defaultEthereumTestnetRpcEndpoint,
       (ChainKind.ethereum, ChainNetwork.mainnet) =>
         defaultEthereumMainnetRpcEndpoint,
+      (ChainKind.base, ChainNetwork.testnet) => defaultBaseTestnetRpcEndpoint,
+      (ChainKind.base, ChainNetwork.mainnet) => defaultBaseMainnetRpcEndpoint,
     };
     return BitsendPageScaffold(
       title: 'Settings',
@@ -4834,86 +4843,101 @@ class _HomeScopeHeaderState extends State<_HomeScopeHeader> {
         children: <Widget>[
           Row(
             children: <Widget>[
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    'bitsend',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.titleLarge?.copyWith(letterSpacing: -0.4),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Scope',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
-                  ),
-                ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'bitsend',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.titleLarge?.copyWith(letterSpacing: -0.4),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Chain / mode / network',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: AppColors.slate),
+                    ),
+                  ],
+                ),
               ),
-              const Spacer(),
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: _toggleExpanded,
-                  borderRadius: BorderRadius.circular(999),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    curve: Curves.easeOutCubic,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: <Color>[
-                          Colors.white.withValues(alpha: 0.96),
-                          AppColors.emeraldTint.withValues(alpha: 0.88),
-                        ],
-                      ),
+              const SizedBox(width: 12),
+              Flexible(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: _toggleExpanded,
                       borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.9),
-                      ),
-                      boxShadow: <BoxShadow>[
-                        BoxShadow(
-                          color: AppColors.ink.withValues(alpha: 0.05),
-                          blurRadius: 22,
-                          offset: const Offset(0, 10),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOutCubic,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
                         ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Icon(chain.icon, size: 16, color: AppColors.ink),
-                        const SizedBox(width: 8),
-                        AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 220),
-                          child: Text(
-                            '${walletEngine.label} · ${chain.label} · ${network.shortLabelFor(chain)}',
-                            key: ValueKey<String>(
-                              '${walletEngine.name}:${chain.name}:${network.name}',
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: <Color>[
+                              Colors.white.withValues(alpha: 0.96),
+                              AppColors.emeraldTint.withValues(alpha: 0.88),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.9),
+                          ),
+                          boxShadow: <BoxShadow>[
+                            BoxShadow(
+                              color: AppColors.ink.withValues(alpha: 0.05),
+                              blurRadius: 22,
+                              offset: const Offset(0, 10),
                             ),
-                            style: Theme.of(context).textTheme.labelLarge,
-                          ),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        AnimatedRotation(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOutCubic,
-                          turns: _expanded ? 0.5 : 0,
-                          child: Icon(
-                            Icons.keyboard_arrow_down_rounded,
-                            color: switching
-                                ? AppColors.mutedInk
-                                : AppColors.ink,
-                          ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Icon(chain.icon, size: 16, color: AppColors.ink),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 220),
+                                child: Text(
+                                  '${chain.networkLabelFor(network)} · ${walletEngine.walletLabel}',
+                                  key: ValueKey<String>(
+                                    '${walletEngine.name}:${chain.name}:${network.name}',
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.labelLarge,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            AnimatedRotation(
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeOutCubic,
+                              turns: _expanded ? 0.5 : 0,
+                              child: Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                color: switching
+                                    ? AppColors.mutedInk
+                                    : AppColors.ink,
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -4971,12 +4995,17 @@ class _HomeScopeHeaderState extends State<_HomeScopeHeader> {
                               label: 'Ethereum',
                               icon: Icons.diamond_rounded,
                             ),
+                            _ScopeToggleItem<ChainKind>(
+                              value: ChainKind.base,
+                              label: 'Base',
+                              icon: Icons.layers_rounded,
+                            ),
                           ],
                           onChanged: _selectChain,
                         ),
                         const SizedBox(height: 12),
                         _ScopeToggleRow<WalletEngine>(
-                          label: 'Wallet',
+                          label: 'Wallet mode',
                           selected: walletEngine,
                           enabled: !switching,
                           items: const <_ScopeToggleItem<WalletEngine>>[
@@ -4995,7 +5024,7 @@ class _HomeScopeHeaderState extends State<_HomeScopeHeader> {
                         ),
                         const SizedBox(height: 12),
                         _ScopeToggleRow<ChainNetwork>(
-                          label: 'Network',
+                          label: 'Environment',
                           selected: network,
                           enabled: !switching,
                           items: <_ScopeToggleItem<ChainNetwork>>[

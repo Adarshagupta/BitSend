@@ -45,6 +45,49 @@ void main() {
       expect(details.transactionSignature, startsWith('0x'));
     });
 
+    test('round-trips a signed Base Sepolia transfer envelope', () async {
+      final EthereumService service = EthereumService(
+        rpcEndpoint: 'http://localhost:8545',
+      )
+        ..chain = ChainKind.base
+        ..network = ChainNetwork.testnet;
+      final EthPrivateKey sender = EthPrivateKey.fromInt(BigInt.from(6));
+      final String senderAddress = (await sender.extractAddress()).hexEip55;
+      final String receiverAddress =
+          (await EthPrivateKey.fromInt(BigInt.from(7)).extractAddress())
+              .hexEip55;
+
+      final OfflineEnvelope envelope = await service.createSignedEnvelope(
+        sender: sender,
+        senderAddress: senderAddress,
+        receiverAddress: receiverAddress,
+        amountBaseUnits: BigInt.from(7000000000000000).toInt(),
+        preparedContext: const EthereumPreparedContext(
+          nonce: 3,
+          gasPriceWei: 1500000000,
+          chainId: EthereumService.baseSepoliaChainId,
+          fetchedAt: DateTime(2026, 3, 14, 12),
+        ),
+        transferId: 'base-transfer-test',
+        createdAt: DateTime(2026, 3, 14, 12),
+        transportKind: TransportKind.hotspot,
+      );
+
+      final ValidatedTransactionDetails details = service.validateEnvelope(
+        envelope,
+      );
+
+      expect(details.chain, ChainKind.base);
+      expect(details.network, ChainNetwork.testnet);
+      expect(details.senderAddress, senderAddress);
+      expect(details.receiverAddress, receiverAddress);
+      expect(details.amountLamports, BigInt.from(7000000000000000).toInt());
+      expect(
+        service.explorerUrlFor(details.transactionSignature).host,
+        'sepolia.basescan.org',
+      );
+    });
+
     test('rejects a tampered receiver even when checksum is recomputed', () async {
       final EthereumService service = EthereumService(
         rpcEndpoint: 'http://localhost:8545',

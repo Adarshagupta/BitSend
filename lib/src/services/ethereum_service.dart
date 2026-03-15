@@ -13,6 +13,8 @@ class EthereumService {
 
   static const int sepoliaChainId = 11155111;
   static const int mainnetChainId = 1;
+  static const int baseSepoliaChainId = 84532;
+  static const int baseMainnetChainId = 8453;
   static const int transferGasLimit = 21000;
   static const Duration _defaultConfirmationTimeout = Duration(seconds: 75);
   static final EthereumAddress _ensRegistryAddress = EthereumAddress.fromHex(
@@ -83,6 +85,7 @@ class EthereumService {
   ).functions.single;
 
   String _rpcEndpoint;
+  ChainKind chain = ChainKind.ethereum;
   ChainNetwork network = ChainNetwork.testnet;
 
   String get rpcEndpoint => _rpcEndpoint;
@@ -225,10 +228,13 @@ class EthereumService {
       for (final MapEntry<String, String> entry in entries.entries) {
         final String txHash = await client.sendTransaction(
           signer,
-          Transaction.callContract(
-            contract: resolver,
-            function: _ensSetTextFunction,
-            parameters: <dynamic>[node, entry.key, entry.value],
+          Transaction(
+            to: resolver,
+            data: _ensSetTextFunction.encodeCall(<dynamic>[
+              node,
+              entry.key,
+              entry.value,
+            ]),
           ),
           chainId: _expectedChainId,
         );
@@ -268,9 +274,7 @@ class EthereumService {
       return EthereumPreparedContext(
         nonce: nonce,
         gasPriceWei: gasPrice.getInWei.toInt(),
-        chainId: network == ChainNetwork.mainnet
-            ? mainnetChainId
-            : sepoliaChainId,
+        chainId: _expectedChainId,
         fetchedAt: DateTime.now(),
       );
     });
@@ -303,7 +307,7 @@ class EthereumService {
     return OfflineEnvelope.create(
       transferId: transferId,
       createdAt: createdAt,
-      chain: ChainKind.ethereum,
+      chain: chain,
       network: network,
       senderAddress: senderAddress,
       receiverAddress: receiverAddress,
@@ -317,12 +321,12 @@ class EthereumService {
     if (envelope.version != 1) {
       throw const FormatException('Unsupported payload version.');
     }
-    if (envelope.chain != ChainKind.ethereum) {
-      throw const FormatException('Envelope is not an Ethereum transfer.');
+    if (envelope.chain != chain) {
+      throw FormatException('Envelope is not a ${chain.label} transfer.');
     }
     if (envelope.network != network) {
-      throw const FormatException(
-        'Envelope network does not match the active Ethereum network.',
+      throw FormatException(
+        'Envelope network does not match the active ${chain.label} network.',
       );
     }
     if (!envelope.isChecksumValid) {
@@ -336,8 +340,8 @@ class EthereumService {
     final _DecodedLegacyEthereumTransaction transaction =
         _decodeLegacySignedTransaction(signedBytes);
     if (transaction.chainId != _expectedChainId) {
-      throw const FormatException(
-        'Signed transaction network does not match the active Ethereum network.',
+      throw FormatException(
+        'Signed transaction network does not match the active ${chain.label} network.',
       );
     }
     if (transaction.to == null) {
@@ -346,30 +350,30 @@ class EthereumService {
       );
     }
     if (transaction.data.isNotEmpty) {
-      throw const FormatException(
-        'Only simple Ethereum value transfers are supported.',
+      throw FormatException(
+        'Only simple ${chain.label} value transfers are supported.',
       );
     }
     if (transaction.from.hexEip55 != envelope.senderAddress) {
-      throw const FormatException(
-        'Envelope sender does not match the signed Ethereum transaction.',
+      throw FormatException(
+        'Envelope sender does not match the signed ${chain.label} transaction.',
       );
     }
     if (transaction.to!.hexEip55 != envelope.receiverAddress) {
-      throw const FormatException(
-        'Envelope receiver does not match the signed Ethereum transaction.',
+      throw FormatException(
+        'Envelope receiver does not match the signed ${chain.label} transaction.',
       );
     }
     if (transaction.value != BigInt.from(envelope.amountLamports)) {
-      throw const FormatException(
-        'Envelope amount does not match the signed Ethereum transaction.',
+      throw FormatException(
+        'Envelope amount does not match the signed ${chain.label} transaction.',
       );
     }
     final String transactionHash = _hexFromBytes(
       web3_crypto.keccak256(signedBytes),
     );
     return ValidatedTransactionDetails(
-      chain: ChainKind.ethereum,
+      chain: chain,
       network: network,
       senderAddress: transaction.from.hexEip55,
       receiverAddress: transaction.to!.hexEip55,
@@ -437,8 +441,8 @@ class EthereumService {
       final TransactionReceipt? receipt = await getTransactionReceipt(hash);
       if (receipt != null) {
         if (receipt.status == false) {
-          throw const FormatException(
-            'Ethereum rejected the signed transfer during settlement.',
+          throw FormatException(
+            '${chain.label} rejected the signed transfer during settlement.',
           );
         }
         return;
@@ -446,15 +450,21 @@ class EthereumService {
       await Future<void>.delayed(pollInterval);
     }
     throw TimeoutException(
-      'Timed out waiting for Ethereum confirmation.',
+      'Timed out waiting for ${chain.label} confirmation.',
       timeout,
     );
   }
 
   Uri explorerUrlFor(String hash) {
-    final String host = network == ChainNetwork.mainnet
-        ? 'etherscan.io'
-        : 'sepolia.etherscan.io';
+    final String host = switch ((chain, network)) {
+      (ChainKind.ethereum, ChainNetwork.mainnet) => 'etherscan.io',
+      (ChainKind.ethereum, ChainNetwork.testnet) => 'sepolia.etherscan.io',
+      (ChainKind.base, ChainNetwork.mainnet) => 'basescan.org',
+      (ChainKind.base, ChainNetwork.testnet) => 'sepolia.basescan.org',
+      (ChainKind.solana, _) => throw StateError(
+        'EthereumService cannot build a Solana explorer URL.',
+      ),
+    };
     return Uri.parse('https://$host/tx/$hash');
   }
 
@@ -604,7 +614,15 @@ class EthereumService {
   }
 
   int get _expectedChainId =>
-      network == ChainNetwork.mainnet ? mainnetChainId : sepoliaChainId;
+      switch ((chain, network)) {
+        (ChainKind.ethereum, ChainNetwork.mainnet) => mainnetChainId,
+        (ChainKind.ethereum, ChainNetwork.testnet) => sepoliaChainId,
+        (ChainKind.base, ChainNetwork.mainnet) => baseMainnetChainId,
+        (ChainKind.base, ChainNetwork.testnet) => baseSepoliaChainId,
+        (ChainKind.solana, _) => throw StateError(
+          'EthereumService cannot prepare Solana chain IDs.',
+        ),
+      };
 
   Uint8List _ensNamehash(String name) {
     Uint8List node = Uint8List(32);
@@ -842,7 +860,7 @@ class EthereumService {
 
   int _bigIntToInt(BigInt value) {
     if (value > BigInt.from(0x7fffffff)) {
-      throw const FormatException('Signed Ethereum value is too large.');
+      throw FormatException('Signed ${chain.label} value is too large.');
     }
     return value.toInt();
   }
@@ -850,18 +868,18 @@ class EthereumService {
   String _messageForBroadcastError(Object error) {
     final String message = error.toString().toLowerCase();
     if (message.contains('nonce too low')) {
-      return 'The Ethereum nonce is stale. Refresh readiness and sign again.';
+      return 'The ${chain.label} nonce is stale. Refresh readiness and sign again.';
     }
     if (message.contains('replacement transaction underpriced')) {
-      return 'Ethereum rejected the transfer because gas pricing is stale. Refresh readiness and resend.';
+      return '${chain.label} rejected the transfer because gas pricing is stale. Refresh readiness and resend.';
     }
     if (message.contains('insufficient funds')) {
       return 'The offline wallet balance is too low for the amount plus gas.';
     }
     if (message.contains('intrinsic gas too low')) {
-      return 'Ethereum rejected the transfer because gas settings are too low.';
+      return '${chain.label} rejected the transfer because gas settings are too low.';
     }
-    return 'Ethereum rejected the signed transfer. Refresh readiness and resend.';
+    return '${chain.label} rejected the signed transfer. Refresh readiness and resend.';
   }
 
   String _hexFromBytes(List<int> bytes) {

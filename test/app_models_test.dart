@@ -38,6 +38,25 @@ void main() {
       expect(parsed.displayAddress, payload.displayAddress);
       expect(parsed.endpoint, payload.endpoint);
     });
+
+    test('parses Base Sepolia QR payloads', () {
+      const ReceiverInvitePayload payload = ReceiverInvitePayload(
+        chain: ChainKind.base,
+        network: ChainNetwork.testnet,
+        transport: TransportKind.ble,
+        address: '0x7f6fB8965F10E6F5463cd5C6c60008E64Ca07161',
+        displayAddress: '0x7f6f...7161',
+      );
+
+      final ReceiverInvitePayload parsed = ReceiverInvitePayload.fromQrData(
+        payload.toQrData(),
+      );
+
+      expect(parsed.chain, ChainKind.base);
+      expect(parsed.network, ChainNetwork.testnet);
+      expect(parsed.transport, TransportKind.ble);
+      expect(parsed.address, payload.address);
+    });
   });
 
   group('PendingTransfer helpers', () {

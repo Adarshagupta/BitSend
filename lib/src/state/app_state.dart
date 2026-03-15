@@ -36,6 +36,8 @@ const String defaultEthereumTestnetRpcEndpoint =
     'https://ethereum-sepolia-rpc.publicnode.com';
 const String defaultEthereumMainnetRpcEndpoint =
     'https://ethereum-rpc.publicnode.com';
+const String defaultBaseTestnetRpcEndpoint = 'https://sepolia.base.org';
+const String defaultBaseMainnetRpcEndpoint = 'https://mainnet.base.org';
 const String legacyLocalBitGoBackendEndpoint = 'http://127.0.0.1:8788';
 const String defaultBitGoBackendEndpoint =
     'https://bitsend-bitgo-backend.blueadarsh1.workers.dev';
@@ -125,6 +127,8 @@ class BitsendAppState extends ChangeNotifier {
     'solana:mainnet': defaultSolanaMainnetRpcEndpoint,
     'ethereum:testnet': defaultEthereumTestnetRpcEndpoint,
     'ethereum:mainnet': defaultEthereumMainnetRpcEndpoint,
+    'base:testnet': defaultBaseTestnetRpcEndpoint,
+    'base:mainnet': defaultBaseMainnetRpcEndpoint,
   };
   String _rpcEndpoint = defaultEthereumTestnetRpcEndpoint;
   String _bitgoEndpoint = defaultBitGoBackendEndpoint;
@@ -290,6 +294,8 @@ class BitsendAppState extends ChangeNotifier {
         defaultEthereumTestnetRpcEndpoint,
       (ChainKind.ethereum, ChainNetwork.mainnet) =>
         defaultEthereumMainnetRpcEndpoint,
+      (ChainKind.base, ChainNetwork.testnet) => defaultBaseTestnetRpcEndpoint,
+      (ChainKind.base, ChainNetwork.mainnet) => defaultBaseMainnetRpcEndpoint,
     };
   }
 
@@ -484,6 +490,7 @@ class BitsendAppState extends ChangeNotifier {
       _solanaService.rpcEndpoint = _rpcEndpoint;
       _solanaService.network = _activeNetwork;
     } else {
+      _ethereumService.chain = _activeChain;
       _ethereumService.rpcEndpoint = _rpcEndpoint;
       _ethereumService.network = _activeNetwork;
     }
@@ -561,8 +568,8 @@ class BitsendAppState extends ChangeNotifier {
       );
     }
     if (_activeChain != ChainKind.solana) {
-      throw const FormatException(
-        'Ethereum faucet support is not built into the app yet. Use a Sepolia faucet and then refresh the balance.',
+      throw FormatException(
+        '${_activeChain.label} faucet support is not built into the app yet. Use a ${_activeNetwork.labelFor(_activeChain)} faucet and then refresh the balance.',
       );
     }
     if (_activeNetwork == ChainNetwork.mainnet) {
@@ -615,7 +622,7 @@ class BitsendAppState extends ChangeNotifier {
         throw SocketException(
           _activeChain == ChainKind.solana
               ? 'Internet is required to fetch a fresh blockhash.'
-              : 'Internet is required to fetch a fresh Ethereum nonce and gas quote.',
+              : 'Internet is required to fetch a fresh ${_activeChain.label} nonce and gas quote.',
         );
       }
       if (_activeChain == ChainKind.solana) {
@@ -721,6 +728,7 @@ class BitsendAppState extends ChangeNotifier {
     if (_activeChain == ChainKind.solana) {
       _solanaService.rpcEndpoint = endpoint;
     } else {
+      _ethereumService.chain = _activeChain;
       _ethereumService.rpcEndpoint = endpoint;
     }
     await _walletService.saveRpcEndpoint(
@@ -861,6 +869,12 @@ class BitsendAppState extends ChangeNotifier {
           transfer: transfer,
           receiptPngBase64: base64Encode(receiptPngBytes),
         );
+    if (snapshot.storageMode != 'fileverse') {
+      throw FormatException(
+        snapshot.message ??
+            'This backend did not save the receipt in Fileverse.',
+      );
+    }
     final PendingTransfer updated = transfer.copyWith(
       updatedAt: _clock(),
       fileverseReceiptId: snapshot.receiptId,
@@ -905,11 +919,11 @@ class BitsendAppState extends ChangeNotifier {
         _sendDraft.receiverPeripheralId.isEmpty) {
       throw const FormatException('Select a BLE receiver before sending.');
     }
-    if (_activeChain == ChainKind.ethereum &&
+    if (_activeChain.isEvm &&
         !_ethereumService.isValidAddress(_sendDraft.receiverAddress) &&
         _ethereumService.isEnsName(_sendDraft.receiverLabel)) {
       _sendDraft = _sendDraft.copyWith(
-        receiverAddress: await _ethereumService.resolveEnsAddress(
+        receiverAddress: await _ethereumEnsService.resolveEnsAddress(
           _sendDraft.receiverLabel,
         ),
       );
@@ -1315,6 +1329,8 @@ class BitsendAppState extends ChangeNotifier {
         continue;
       }
 
+      _ethereumService.chain = transfer.chain;
+      _ethereumService.network = transfer.network;
       final TransactionReceipt? receipt = await _ethereumService
           .getTransactionReceipt(transfer.transactionSignature!);
       if (receipt == null) {
@@ -1326,7 +1342,7 @@ class BitsendAppState extends ChangeNotifier {
             status: TransferStatus.broadcastFailed,
             updatedAt: _clock(),
             lastError:
-                'Ethereum rejected the signed transfer during settlement.',
+                '${transfer.chain.label} rejected the signed transfer during settlement.',
           ),
         );
         continue;
@@ -1562,9 +1578,14 @@ class BitsendAppState extends ChangeNotifier {
         defaultEthereumTestnetRpcEndpoint;
     _rpcEndpoints[_scopeKey(ChainKind.ethereum, ChainNetwork.mainnet)] =
         defaultEthereumMainnetRpcEndpoint;
+    _rpcEndpoints[_scopeKey(ChainKind.base, ChainNetwork.testnet)] =
+        defaultBaseTestnetRpcEndpoint;
+    _rpcEndpoints[_scopeKey(ChainKind.base, ChainNetwork.mainnet)] =
+        defaultBaseMainnetRpcEndpoint;
     _rpcEndpoint = defaultEthereumTestnetRpcEndpoint;
     _solanaService.rpcEndpoint = defaultSolanaTestnetRpcEndpoint;
     _solanaService.network = ChainNetwork.testnet;
+    _ethereumService.chain = ChainKind.ethereum;
     _ethereumService.rpcEndpoint = defaultEthereumTestnetRpcEndpoint;
     _ethereumService.network = ChainNetwork.testnet;
     _activeChain = ChainKind.ethereum;
@@ -1618,11 +1639,6 @@ class BitsendAppState extends ChangeNotifier {
   Future<TransportReceiveResult> _handleIncomingEnvelope(
     OfflineEnvelope envelope,
   ) async {
-    final ValidatedTransactionDetails details =
-        envelope.chain == ChainKind.solana
-        ? _solanaService.validateEnvelope(envelope)
-        : _ethereumService.validateEnvelope(envelope);
-
     if (_wallet == null) {
       return const TransportReceiveResult(
         accepted: false,
@@ -1636,6 +1652,13 @@ class BitsendAppState extends ChangeNotifier {
             'Receiver is listening on ${_activeChain.networkLabelFor(_activeNetwork)}, but this transfer is for ${envelope.chain.networkLabelFor(envelope.network)}.',
       );
     }
+    final ValidatedTransactionDetails details = envelope.chain == ChainKind.solana
+        ? _solanaService.validateEnvelope(envelope)
+        : _validateEvmEnvelope(
+            envelope,
+            chain: envelope.chain,
+            network: envelope.network,
+          );
     if (details.receiverAddress != _wallet!.address) {
       return const TransportReceiveResult(
         accepted: false,
@@ -1738,6 +1761,10 @@ class BitsendAppState extends ChangeNotifier {
         );
         unawaited(_startRealtimeSettlementSync());
         return;
+      }
+      if (transfer.chain.isEvm) {
+        _ethereumService.chain = transfer.chain;
+        _ethereumService.network = transfer.network;
       }
       final String signature = transfer.chain == ChainKind.solana
           ? await _solanaService.broadcastSignedTransaction(
@@ -2031,7 +2058,9 @@ class BitsendAppState extends ChangeNotifier {
       return false;
     }
 
-    if (transfer.chain == ChainKind.ethereum) {
+    if (transfer.chain.isEvm) {
+      _ethereumService.chain = transfer.chain;
+      _ethereumService.network = transfer.network;
       final TransactionReceipt? receipt = await _ethereumService
           .getTransactionReceipt(signature);
       if (receipt == null) {
@@ -2043,7 +2072,7 @@ class BitsendAppState extends ChangeNotifier {
             status: TransferStatus.broadcastFailed,
             updatedAt: _clock(),
             lastError:
-                'Ethereum rejected the signed transfer during settlement.',
+                '${transfer.chain.label} rejected the signed transfer during settlement.',
           ),
         );
         return true;
@@ -2295,7 +2324,7 @@ class BitsendAppState extends ChangeNotifier {
   int _estimatedEthereumFeeHeadroom() {
     final EthereumPreparedContext? context = _cachedEthereumContext;
     if (context == null) {
-      return ChainKind.ethereum.fallbackFeeHeadroomBaseUnits;
+      return _activeChain.fallbackFeeHeadroomBaseUnits;
     }
     return context.gasPriceWei * EthereumService.transferGasLimit;
   }
@@ -2327,8 +2356,19 @@ class BitsendAppState extends ChangeNotifier {
           _rpcEndpoints[_scopeKey(ChainKind.ethereum, ChainNetwork.mainnet)] ??
           defaultEthereumMainnetRpcEndpoint,
     );
+    service.chain = ChainKind.ethereum;
     service.network = ChainNetwork.mainnet;
     return service;
+  }
+
+  ValidatedTransactionDetails _validateEvmEnvelope(
+    OfflineEnvelope envelope, {
+    required ChainKind chain,
+    required ChainNetwork network,
+  }) {
+    _ethereumService.chain = chain;
+    _ethereumService.network = network;
+    return _ethereumService.validateEnvelope(envelope);
   }
 
   Future<void> _runTask(

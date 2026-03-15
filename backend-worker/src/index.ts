@@ -114,6 +114,8 @@ interface Env {
 }
 
 const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000;
+const fileverseSyncPollAttempts = 45;
+const fileverseSyncPollDelayMs = 2000;
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type',
@@ -486,23 +488,16 @@ async function publishFileverseReceipt(
           ) ?? `Fileverse ddoc publish failed (${response.status}).`,
         );
       }
-      const ddocData = typeof payload.data === 'object' && payload.data != null
-        ? payload.data as Record<string, unknown>
-        : payload;
-      const ddocLink = pickString(
-        ddocData.link,
-        ddocData.url,
-        ddocData.shareUrl,
+      const ddoc = await waitForFileverseDdocLink(
+        ddocsEndpoint,
+        apiKey,
+        payload,
       );
-      if (!ddocLink) {
-        throw new HttpError(502, 'Fileverse ddoc response did not include a link.');
-      }
-      const ddocId = pickString(ddocData.ddocId, ddocData.id);
       return persistReceipt({
-        savedAt: pickString(ddocData.createdAt, ddocData.updatedAt),
-        upstreamUrl: ddocLink,
-        responseReceiptId: ddocId,
-        responseReceiptUrl: ddocLink,
+        savedAt: ddoc.savedAt,
+        upstreamUrl: ddoc.link,
+        responseReceiptId: ddoc.ddocId,
+        responseReceiptUrl: ddoc.link,
         storageMode: 'fileverse',
         message:
           'Receipt details were saved to Fileverse. The Bitsend archive keeps the captured screenshot.',
@@ -966,13 +961,52 @@ function tryParseJsonObject(raw: string): Record<string, unknown> {
   }
 }
 
+function extractPayloadData(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  return typeof payload.data === 'object' && payload.data != null
+    ? payload.data as Record<string, unknown>
+    : payload;
+}
+
+type FileverseDdocRecord = {
+  ddocId: string;
+  link: string | null;
+  syncStatus: string;
+  savedAt: string;
+};
+
+function normalizeFileverseDdocRecord(
+  payload: Record<string, unknown>,
+): FileverseDdocRecord {
+  const data = extractPayloadData(payload);
+  const ddocId = pickString(data.ddocId, data.id);
+  if (!ddocId) {
+    throw new HttpError(
+      502,
+      'Fileverse ddoc response did not include a document id.',
+    );
+  }
+  return {
+    ddocId,
+    link: pickString(
+      data.link,
+      data.url,
+      data.shareUrl,
+      data.publicUrl,
+      data.documentUrl,
+    ),
+    syncStatus: sanitizeString(data.syncStatus).toLowerCase() || 'pending',
+    savedAt:
+      pickString(data.updatedAt, data.createdAt) ?? new Date().toISOString(),
+  };
+}
+
 function normalizeFileverseReceiptRecord(
   payload: Record<string, unknown>,
   fallbackTransferId: string,
 ): FileverseReceiptRecord {
-  const data = typeof payload.data === 'object' && payload.data != null
-    ? payload.data as Record<string, unknown>
-    : payload;
+  const data = extractPayloadData(payload);
   const receiptId =
     pickString(data.receiptId, data.id, data.documentId, fallbackTransferId) ??
     fallbackTransferId;
@@ -1006,6 +1040,84 @@ function appendApiKey(endpoint: string, apiKey: string): string {
     url.searchParams.set('apiKey', apiKey);
   }
   return url.toString();
+}
+
+function buildFileverseDdocDetailsEndpoint(
+  ddocsEndpoint: string,
+  ddocId: string,
+): string {
+  const url = new URL(ddocsEndpoint);
+  const pathname = url.pathname.endsWith('/')
+    ? url.pathname.slice(0, -1)
+    : url.pathname;
+  url.pathname = `${pathname}/${encodeURIComponent(ddocId)}`;
+  return url.toString();
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForFileverseDdocLink(
+  ddocsEndpoint: string,
+  apiKey: string,
+  payload: Record<string, unknown>,
+): Promise<FileverseDdocRecord & { link: string }> {
+  let ddoc = normalizeFileverseDdocRecord(payload);
+  if (ddoc.link) {
+    return {
+      ...ddoc,
+      link: ddoc.link,
+    };
+  }
+  if (ddoc.syncStatus === 'failed') {
+    throw new HttpError(502, 'Fileverse ddoc sync failed.');
+  }
+
+  const detailsEndpoint = appendApiKey(
+    buildFileverseDdocDetailsEndpoint(ddocsEndpoint, ddoc.ddocId),
+    apiKey,
+  );
+
+  for (let attempt = 0; attempt < fileverseSyncPollAttempts; attempt += 1) {
+    await delay(fileverseSyncPollDelayMs);
+    const response = await fetch(detailsEndpoint, {
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+    const rawBody = await response.text();
+    const nextPayload = rawBody.trim().length === 0
+      ? {}
+      : tryParseJsonObject(rawBody);
+    if (!response.ok) {
+      throw new HttpError(
+        response.status,
+        pickString(
+          nextPayload.message,
+          nextPayload.error,
+          nextPayload.reason,
+        ) ?? `Fileverse ddoc sync check failed (${response.status}).`,
+      );
+    }
+    ddoc = normalizeFileverseDdocRecord(nextPayload);
+    if (ddoc.link && ddoc.syncStatus === 'synced') {
+      return {
+        ...ddoc,
+        link: ddoc.link,
+      };
+    }
+    if (ddoc.syncStatus === 'failed') {
+      throw new HttpError(502, 'Fileverse ddoc sync failed.');
+    }
+  }
+
+  throw new HttpError(
+    504,
+    'Fileverse ddoc did not finish syncing before timeout.',
+  );
 }
 
 function buildFileverseReceiptTitle(input: FileverseReceiptInput): string {
