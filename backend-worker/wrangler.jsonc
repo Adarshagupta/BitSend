@@ -26,6 +26,7 @@
     }
   ],
   "vars": {
-    "BITGO_ENV": "test"
+    "BITGO_ENV": "test",
+    "FILEVERSE_SERVER_URL": "https://quiet-island-41070-e71391e7dca9.herokuapp.com/"
   }
 }

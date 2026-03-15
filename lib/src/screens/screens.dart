@@ -924,6 +924,39 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     }
   }
 
+  Future<void> _scanAndStartSend(BitsendAppState state) async {
+    final ReceiverInvitePayload? invite = await _scanReceiverInvite(context);
+    if (!mounted || invite == null) {
+      return;
+    }
+
+    try {
+      final bool readyForAmount = await _prepareScannedReceiverDraft(
+        state,
+        invite,
+      );
+      if (!mounted) {
+        return;
+      }
+      if (readyForAmount) {
+        Navigator.of(context).pushNamed(AppRoutes.sendAmount);
+        return;
+      }
+      _showSnack(
+        context,
+        'Receiver QR scanned. Select the nearby BLE receiver to continue.',
+      );
+      Navigator.of(context).pushNamed(AppRoutes.sendTransport);
+    } catch (error) {
+      final String message = _messageFor(error);
+      if (_looksLikeBluetoothDisabled(message)) {
+        await _showBluetoothPrompt(context, message);
+        return;
+      }
+      _showSnack(context, message);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
@@ -942,6 +975,13 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         ? AppRoutes.sendTransport
         : AppRoutes.prepare;
     final bool usingBitGo = state.activeWalletEngine == WalletEngine.bitgo;
+    final bool mainWalletCanFundOffline =
+        !usingBitGo && state.hasEnoughFunding && !state.hasOfflineFunds;
+    final bool offlineFundsReserved =
+        !usingBitGo &&
+        !state.hasOfflineFunds &&
+        summary.offlineBalanceSol > 0 &&
+        summary.offlineAvailableSol <= 0;
     final String sendCaption = !state.hasWallet
         ? 'Set up wallet'
         : usingBitGo && !state.hasInternet
@@ -952,25 +992,37 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         ? 'Send online'
         : canSend
         ? 'Handoff'
+        : offlineFundsReserved
+        ? 'Funds reserved'
+        : mainWalletCanFundOffline && !state.hasOfflineReadyBlockhash
+        ? 'Move + refresh'
+        : mainWalletCanFundOffline
+        ? 'Move offline'
         : !state.hasOfflineFunds && !state.hasOfflineReadyBlockhash
         ? 'Fund + refresh'
         : !state.hasOfflineFunds
-        ? 'Fund offline wallet'
+        ? 'Fund main wallet'
         : 'Refresh readiness';
     final String supportStatus = !state.hasWallet
         ? 'Set up wallet to start.'
         : usingBitGo && !state.hasInternet
         ? 'BitGo mode needs internet before submit.'
         : usingBitGo && !state.bitgoBackendIsLive
-        ? 'BitGo backend is demo-only. Send will fall back to Local mode.'
+        ? 'BitGo backend is not live. Send will fall back to Local mode.'
         : usingBitGo
         ? 'BitGo wallet is ready for online submit.'
         : canSend
         ? 'Offline wallet is ready.'
+        : offlineFundsReserved
+        ? 'Offline wallet balance exists, but it is fully reserved by pending transfers on this chain and network.'
+        : mainWalletCanFundOffline && !state.hasOfflineReadyBlockhash
+        ? 'Main wallet is funded. Move funds to the offline wallet and refresh readiness before send.'
+        : mainWalletCanFundOffline
+        ? 'Main wallet is funded. Move funds to the offline wallet before send.'
         : !state.hasOfflineFunds && !state.hasOfflineReadyBlockhash
-        ? 'Fund and refresh before send.'
+        ? 'Fund the main wallet, then move some funds to the offline wallet and refresh readiness before send.'
         : !state.hasOfflineFunds
-        ? 'Fund the offline wallet before send.'
+        ? 'Fund the main wallet, then move some funds to the offline wallet before send.'
         : 'Refresh readiness before send.';
 
     return BitsendPageScaffold(
@@ -990,9 +1042,13 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
           _switchWalletEngine(state, next);
         },
       ),
-      overlay: _switchingScope
-          ? _ScopeSwitchOverlay(label: _switchingLabel)
-          : null,
+      overlay: _HomeDashboardOverlay(
+        switchingLabel: _switchingScope ? _switchingLabel : null,
+        onScan:
+            state.hasWallet && !_switchingScope && !state.working
+                ? () => _scanAndStartSend(state)
+                : null,
+      ),
       showBack: false,
       onRefresh: state.working || _switchingScope
           ? null
@@ -1146,6 +1202,101 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
                       .toList(growable: false),
                 ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeDashboardOverlay extends StatelessWidget {
+  const _HomeDashboardOverlay({this.switchingLabel, this.onScan});
+
+  final String? switchingLabel;
+  final VoidCallback? onScan;
+
+  @override
+  Widget build(BuildContext context) {
+    if (switchingLabel == null && onScan == null) {
+      return const SizedBox.shrink();
+    }
+    return Stack(
+      children: <Widget>[
+        if (switchingLabel != null)
+          _ScopeSwitchOverlay(label: switchingLabel!),
+        if (onScan != null)
+          Positioned(
+            right: 20,
+            bottom: 102,
+            child: SafeArea(
+              top: false,
+              child: _HomeScanShortcutButton(onPressed: onScan!),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _HomeScanShortcutButton extends StatelessWidget {
+  const _HomeScanShortcutButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Scan receiver QR and send',
+      child: Semantics(
+        button: true,
+        label: 'Scan receiver QR and send',
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onPressed,
+            customBorder: const CircleBorder(),
+            child: Ink(
+              width: 74,
+              height: 74,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: <Color>[AppColors.blue, AppColors.emerald],
+                ),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.92),
+                  width: 2,
+                ),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: AppColors.ink.withValues(alpha: 0.18),
+                    blurRadius: 28,
+                    spreadRadius: -6,
+                    offset: const Offset(0, 16),
+                  ),
+                ],
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: <Widget>[
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.14),
+                    ),
+                  ),
+                  const Icon(
+                    Icons.qr_code_scanner_rounded,
+                    color: Colors.white,
+                    size: 30,
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -1503,7 +1654,7 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
                   : 'BitGo fallback is ready',
               caption: state.bitgoBackendIsLive
                   ? 'Switch the header back to Local mode to top up the offline wallet or refresh offline readiness.'
-                  : 'If BitGo submit stays in demo mode or goes down, the app will switch to Local mode and use the offline wallet flow automatically.',
+                  : 'If the BitGo backend is not live or goes down, the app will switch to Local mode and use the offline wallet flow automatically.',
               icon: Icons.shield_outlined,
             ),
             const SizedBox(height: 16),
@@ -1522,7 +1673,8 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
                   ),
                   DetailRow(
                     label: 'Address',
-                    value: state.bitgoWallet?.address ?? 'Connect demo wallet',
+                    value:
+                        state.bitgoWallet?.address ?? 'Connect wallet backend',
                   ),
                   DetailRow(label: 'Balance', value: mainBalance),
                   DetailRow(
@@ -1531,7 +1683,7 @@ class _PrepareOfflineScreenState extends State<PrepareOfflineScreen> {
                   ),
                   const SizedBox(height: 16),
                   ElevatedButton(
-                    onPressed: state.working ? null : state.connectBitGoDemo,
+                    onPressed: state.working ? null : state.connectBitGo,
                     child: const Text('Refresh BitGo wallet'),
                   ),
                 ],
@@ -1611,9 +1763,12 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final BitsendAppState state = BitsendStateScope.of(context);
-    final String displayReceiver = state.sendDraft.receiverLabel.isEmpty
-        ? state.sendDraft.receiverAddress
-        : state.sendDraft.receiverLabel;
+    final bool showReceiverLabel =
+        state.sendDraft.receiverLabel.isNotEmpty &&
+        state.looksLikeEthereumEnsName(state.sendDraft.receiverLabel);
+    final String displayReceiver = showReceiverLabel
+        ? state.sendDraft.receiverLabel
+        : state.sendDraft.receiverAddress;
     if (_addressController.text != displayReceiver) {
       _syncingReceiverText = true;
       _addressController.text = displayReceiver;
@@ -1626,19 +1781,17 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
     _selectedBleReceiverName = state.sendDraft.receiverPeripheralName.isEmpty
         ? null
         : state.sendDraft.receiverPeripheralName;
-    _resolvedReceiverLabel = state.sendDraft.receiverLabel.isEmpty
-        ? null
-        : state.sendDraft.receiverLabel;
-    _resolvedReceiverAddress = state.sendDraft.receiverLabel.isEmpty
-        ? null
-        : state.sendDraft.receiverAddress;
-    _resolvedReceiverPreference = state.sendDraft.receiverLabel.isEmpty
-        ? null
-        : EnsPaymentPreference(
+    _resolvedReceiverLabel = showReceiverLabel ? state.sendDraft.receiverLabel : null;
+    _resolvedReceiverAddress = showReceiverLabel
+        ? state.sendDraft.receiverAddress
+        : null;
+    _resolvedReceiverPreference = showReceiverLabel
+        ? EnsPaymentPreference(
             ensName: state.sendDraft.receiverLabel,
             preferredChain: state.sendDraft.receiverPreferredChain,
             preferredToken: state.sendDraft.receiverPreferredToken,
-          );
+          )
+        : null;
     if (state.sendDraft.transport == TransportKind.ble &&
         !_autoScannedBle &&
         state.bleReceivers.isEmpty &&
@@ -1793,44 +1946,48 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
   }
 
   Future<void> _scanReceiverQr(BitsendAppState state) async {
-    final ReceiverInvitePayload? invite = await Navigator.of(context)
-        .push<ReceiverInvitePayload>(
-          MaterialPageRoute<ReceiverInvitePayload>(
-            builder: (_) => const _ReceiverQrScannerScreen(),
-          ),
-        );
+    final ReceiverInvitePayload? invite = await _scanReceiverInvite(context);
     if (!mounted || invite == null) {
       return;
     }
-    await _applyInvite(state, invite);
-  }
 
-  Future<void> _applyInvite(
-    BitsendAppState state,
-    ReceiverInvitePayload invite,
-  ) async {
-    await state.setActiveChain(invite.chain);
-    await state.setActiveNetwork(invite.network);
-    state.setSendTransport(invite.transport);
-    if (invite.transport == TransportKind.hotspot) {
-      state.updateReceiver(
-        receiverAddress: invite.address,
-        receiverEndpoint: invite.endpoint ?? '',
+    try {
+      final bool readyForAmount = await _prepareScannedReceiverDraft(
+        state,
+        invite,
       );
-    } else {
-      state.updateReceiver(receiverAddress: invite.address);
-    }
-    setState(() {
-      _addressController.text = invite.address;
-      _endpointController.text = invite.endpoint ?? '';
-      _selectedBleReceiverId = null;
-      _selectedBleReceiverName = null;
-      if (invite.transport == TransportKind.ble) {
-        _selectedBleReceiverName = invite.displayAddress;
+      if (!mounted) {
+        return;
       }
-    });
-    if (invite.transport == TransportKind.ble) {
-      await _scanBleReceivers(state, preferredAddress: invite.address);
+      final SendDraft draft = state.sendDraft;
+      setState(() {
+        _addressController.text = draft.receiverAddress;
+        _endpointController.text = draft.receiverEndpoint;
+        _selectedBleReceiverId = draft.receiverPeripheralId.isEmpty
+            ? null
+            : draft.receiverPeripheralId;
+        _selectedBleReceiverName = draft.receiverPeripheralName.isEmpty
+            ? null
+            : draft.receiverPeripheralName;
+        _resolvedReceiverLabel = null;
+        _resolvedReceiverAddress = null;
+        _resolvedReceiverPreference = null;
+      });
+      if (!readyForAmount &&
+          invite.transport == TransportKind.ble &&
+          state.activeWalletEngine == WalletEngine.local) {
+        _showSnack(
+          context,
+          'Receiver QR scanned. Select the nearby BLE receiver to continue.',
+        );
+      }
+    } catch (error) {
+      final String message = _messageFor(error);
+      if (_looksLikeBluetoothDisabled(message)) {
+        await _showBluetoothPrompt(context, message);
+        return;
+      }
+      _showSnack(context, message);
     }
   }
 
@@ -1849,9 +2006,9 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
         children: <Widget>[
           if (usingBitGo && !state.bitgoBackendIsLive) ...<Widget>[
             const InlineBanner(
-              title: 'Demo backend detected',
+              title: 'Backend not live',
               caption:
-                  'Send will switch to Local mode automatically and continue with the offline wallet flow if BitGo is still in demo mode.',
+                  'Send will switch to Local mode automatically and continue with the offline wallet flow until the BitGo backend is live.',
               icon: Icons.info_outline_rounded,
             ),
             const SizedBox(height: 16),
@@ -1927,7 +2084,8 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                         ? Icons.alternate_email_rounded
                         : Icons.verified_rounded,
                   ),
-                  if (_resolvedReceiverPreference?.hasPreference == true) ...<Widget>[
+                  if (_resolvedReceiverPreference?.hasPreference ==
+                      true) ...<Widget>[
                     const SizedBox(height: 10),
                     InlineBanner(
                       title: 'ENS payment preference',
@@ -2064,6 +2222,9 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
       return 'Set up the wallet first.';
     }
     if (!state.hasOfflineFunds) {
+      if (state.offlineBalanceSol > 0 && state.offlineSpendableBalanceSol <= 0) {
+        return 'Offline wallet funds are fully reserved by pending transfers on this chain and network.';
+      }
       return 'Top up the offline wallet first.';
     }
     if (!state.hasOfflineReadyBlockhash && !state.hasInternet) {
@@ -2093,14 +2254,22 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
 
   void _continue(BitsendAppState state) {
     final double amount = double.tryParse(_amountController.text.trim()) ?? 0;
-    state.updateAmount(amount);
-    if (!state.sendDraft.hasAmount) {
-      _showSnack(context, 'Enter an amount greater than zero.');
+    final String? amountMessage = amount <= 0
+        ? 'Enter an amount greater than zero.'
+        : null;
+    if (amountMessage != null) {
+      _showSnack(context, amountMessage);
       return;
     }
+    state.updateAmount(amount);
     final String? readinessMessage = _sendReadinessMessage(state);
     if (readinessMessage != null) {
       _showSnack(context, readinessMessage);
+      return;
+    }
+    final String? validationMessage = state.validateSendAmount(amount);
+    if (validationMessage != null) {
+      _showSnack(context, validationMessage);
       return;
     }
     Navigator.of(context).pushNamed(AppRoutes.sendReview);
@@ -2109,15 +2278,24 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
+    final WalletSummary summary = state.walletSummary;
     final ChainKind chain = state.activeChain;
     final double amount = double.tryParse(_amountController.text.trim()) ?? 0;
     final int baseUnits = chain.amountToBaseUnits(amount);
     final String? readinessMessage = _sendReadinessMessage(state);
+    final String? amountLimitMessage = amount > 0 && readinessMessage == null
+        ? state.validateSendAmount(amount)
+        : null;
     final bool autoRefreshOnSign =
         state.activeWalletEngine == WalletEngine.local &&
         state.hasOfflineFunds &&
         !state.hasOfflineReadyBlockhash &&
         state.hasInternet;
+    final bool usingBitGo = state.activeWalletEngine == WalletEngine.bitgo;
+    final double reservedOfflineBalance =
+        usingBitGo || summary.offlineBalanceSol <= summary.offlineAvailableSol
+        ? 0
+        : summary.offlineBalanceSol - summary.offlineAvailableSol;
     return BitsendPageScaffold(
       title: 'Amount',
       subtitle: 'Enter the amount in ${chain.shortLabel}.',
@@ -2146,6 +2324,14 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
             ),
           if (readinessMessage != null || autoRefreshOnSign)
             const SizedBox(height: 16),
+          if (amountLimitMessage != null) ...<Widget>[
+            InlineBanner(
+              title: 'Amount too high',
+              caption: amountLimitMessage,
+              icon: Icons.account_balance_wallet_outlined,
+            ),
+            const SizedBox(height: 16),
+          ],
           SectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -2172,21 +2358,42 @@ class _SendAmountScreenState extends State<SendAmountScreen> {
                   value: Formatters.baseUnits(baseUnits, chain),
                 ),
                 DetailRow(
-                  label: state.activeWalletEngine == WalletEngine.bitgo
+                  label: usingBitGo
                       ? 'BitGo wallet available'
-                      : 'Offline wallet available',
+                      : 'Spendable now',
                   value: Formatters.asset(
-                    state.activeWalletEngine == WalletEngine.bitgo
+                    usingBitGo
                         ? state.mainBalanceSol
-                        : state.offlineSpendableBalanceSol,
+                        : summary.offlineAvailableSol,
                     chain,
                   ),
                 ),
+                if (!usingBitGo)
+                  DetailRow(
+                    label: 'Offline wallet total',
+                    value: Formatters.asset(summary.offlineBalanceSol, chain),
+                  ),
+                if (!usingBitGo)
+                  DetailRow(
+                    label: 'Reserved by pending',
+                    value: Formatters.asset(reservedOfflineBalance, chain),
+                  ),
+                if (!usingBitGo)
+                  DetailRow(
+                    label: 'Fee buffer',
+                    value: Formatters.asset(
+                      state.estimatedSendFeeHeadroomSol,
+                      chain,
+                    ),
+                  ),
+                if (!usingBitGo)
+                  DetailRow(
+                    label: 'Max send now',
+                    value: Formatters.asset(state.maxSendAmountSol, chain),
+                  ),
                 DetailRow(
-                  label: state.activeWalletEngine == WalletEngine.bitgo
-                      ? 'Source wallet'
-                      : 'Offline wallet',
-                  value: state.activeWalletEngine == WalletEngine.bitgo
+                  label: usingBitGo ? 'Source wallet' : 'Offline wallet',
+                  value: usingBitGo
                       ? (state.bitgoWallet?.displayLabel ??
                             state.bitgoWallet?.address ??
                             'Unavailable')
@@ -2215,6 +2422,7 @@ class SendReviewScreen extends StatelessWidget {
     final WalletSummary summary = state.walletSummary;
     final ChainKind chain = draft.chain;
     final bool usingBitGo = draft.walletEngine == WalletEngine.bitgo;
+    final String? amountLimitMessage = state.validateSendAmount(draft.amountSol);
     if (!draft.hasReceiver || !draft.hasAmount) {
       return BitsendPageScaffold(
         title: 'Review transfer',
@@ -2244,6 +2452,14 @@ class SendReviewScreen extends StatelessWidget {
                 ? Icons.shield_outlined
                 : Icons.info_outline_rounded,
           ),
+          if (amountLimitMessage != null) ...<Widget>[
+            const SizedBox(height: 16),
+            InlineBanner(
+              title: 'Amount too high',
+              caption: amountLimitMessage,
+              icon: Icons.account_balance_wallet_outlined,
+            ),
+          ],
           const SizedBox(height: 16),
           SectionCard(
             child: Column(
@@ -2330,9 +2546,11 @@ class SendReviewScreen extends StatelessWidget {
         ],
       ),
       bottom: ElevatedButton(
-        onPressed: () {
-          Navigator.of(context).pushNamed(AppRoutes.sendProgress);
-        },
+        onPressed: amountLimitMessage != null
+            ? null
+            : () {
+                Navigator.of(context).pushNamed(AppRoutes.sendProgress);
+              },
         child: Text(usingBitGo ? 'Submit with BitGo' : 'Sign and send'),
       ),
     );
@@ -3152,7 +3370,8 @@ String _receiptOnlineActionMessage({
   required PendingTransfer previousTransfer,
   required PendingTransfer updatedTransfer,
 }) {
-  if (previousTransfer.fileverseReceiptUrl == updatedTransfer.fileverseReceiptUrl) {
+  if (previousTransfer.fileverseReceiptUrl ==
+      updatedTransfer.fileverseReceiptUrl) {
     return 'Fileverse link copied.';
   }
   return 'Receipt saved in Fileverse. Link copied.';
@@ -3170,12 +3389,12 @@ String _receiptLinkLabel(PendingTransfer transfer) {
 }
 
 String? _receiptStorageCaption(PendingTransfer transfer) {
-  if (transfer.fileverseMessage != null && transfer.fileverseMessage!.isNotEmpty) {
+  if (transfer.fileverseMessage != null &&
+      transfer.fileverseMessage!.isNotEmpty) {
     return transfer.fileverseMessage!;
   }
   return switch (transfer.fileverseStorageMode) {
-    'fileverse' =>
-      'This link points to the Fileverse record for this receipt.',
+    'fileverse' => 'This link points to the Fileverse record for this receipt.',
     _ => null,
   };
 }
@@ -3377,7 +3596,10 @@ class _TransferReceiptSurface extends StatelessWidget {
                   value: Formatters.dateTime(transfer.fileverseSavedAt!),
                 ),
               if (receiptStorageLabel != null)
-                DetailRow(label: 'Receipt provider', value: receiptStorageLabel),
+                DetailRow(
+                  label: 'Receipt provider',
+                  value: receiptStorageLabel,
+                ),
               if (transfer.isReceiptSavedInFileverse &&
                   transfer.fileverseReceiptId != null)
                 DetailRow(
@@ -3386,7 +3608,10 @@ class _TransferReceiptSurface extends StatelessWidget {
                 ),
               if (transfer.isReceiptSavedInFileverse &&
                   transfer.fileverseMessage != null)
-                DetailRow(label: 'Receipt note', value: transfer.fileverseMessage!),
+                DetailRow(
+                  label: 'Receipt note',
+                  value: transfer.fileverseMessage!,
+                ),
               if (transfer.lastError != null) ...<Widget>[
                 const SizedBox(height: 10),
                 Text(
@@ -4275,7 +4500,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _connectBitGo(BitsendAppState state) async {
     try {
-      await state.connectBitGoDemo();
+      await state.connectBitGo();
       if (!mounted) {
         return;
       }
@@ -4553,7 +4778,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onPressed: state.working
                           ? null
                           : () => _connectBitGo(state),
-                      child: const Text('Connect BitGo demo'),
+                      child: const Text('Connect BitGo'),
                     ),
                   ],
                 ),
@@ -6589,7 +6814,8 @@ class _DashboardHero extends StatelessWidget {
                           child: _HeroMetric(
                             label: usingBitGo ? 'Wallet' : 'Offline',
                             value: usingBitGo
-                                ? (summary.bitgoWallet?.displayLabel ?? 'Demo')
+                                ? (summary.bitgoWallet?.displayLabel ??
+                                      'Unavailable')
                                 : Formatters.asset(
                                     summary.offlineBalanceSol,
                                     summary.chain,
@@ -8297,6 +8523,78 @@ class _ReceiveSectionDivider extends StatelessWidget {
       ),
     );
   }
+}
+
+Future<ReceiverInvitePayload?> _scanReceiverInvite(BuildContext context) {
+  return Navigator.of(context).push<ReceiverInvitePayload>(
+    MaterialPageRoute<ReceiverInvitePayload>(
+      builder: (_) => const _ReceiverQrScannerScreen(),
+    ),
+  );
+}
+
+Future<bool> _prepareScannedReceiverDraft(
+  BitsendAppState state,
+  ReceiverInvitePayload invite,
+) async {
+  await state.setActiveChain(invite.chain);
+  await state.setActiveNetwork(invite.network);
+  state.clearDraft();
+  state.setSendTransport(invite.transport);
+
+  if (invite.transport == TransportKind.hotspot) {
+    state.updateReceiver(
+      receiverAddress: invite.address,
+      receiverEndpoint: state.activeWalletEngine == WalletEngine.local
+          ? invite.endpoint ?? ''
+          : '',
+    );
+    return true;
+  }
+
+  if (state.activeWalletEngine != WalletEngine.local) {
+    state.updateReceiver(
+      receiverAddress: invite.address,
+      receiverPeripheralName: invite.displayAddress,
+    );
+    return true;
+  }
+
+  await state.scanBleReceivers();
+  final ReceiverDiscoveryItem? matched = _findMatchingBleReceiver(
+    state.bleReceivers,
+    invite.address,
+  );
+  state.updateReceiver(
+    receiverAddress: invite.address,
+    receiverPeripheralId: matched?.id ?? '',
+    receiverPeripheralName: matched?.label ?? invite.displayAddress,
+  );
+  return matched != null;
+}
+
+ReceiverDiscoveryItem? _findMatchingBleReceiver(
+  List<ReceiverDiscoveryItem> receivers,
+  String address,
+) {
+  for (final ReceiverDiscoveryItem item in receivers) {
+    if (_addressesMatch(item.resolvedAddress, address)) {
+      return item;
+    }
+  }
+  return null;
+}
+
+bool _addressesMatch(String left, String right) {
+  final String normalizedLeft = left.trim();
+  final String normalizedRight = right.trim();
+  if (normalizedLeft == normalizedRight) {
+    return true;
+  }
+  if (normalizedLeft.startsWith('0x') && normalizedRight.startsWith('0x')) {
+    return normalizedLeft.toLowerCase() == normalizedRight.toLowerCase();
+  }
+  return false;
 }
 
 Color _transportTone(TransportKind transport) => switch (transport) {

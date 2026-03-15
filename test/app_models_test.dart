@@ -14,7 +14,7 @@ void main() {
       expect(live.mode, BitGoBackendMode.live);
       expect(live.mode.isLive, isTrue);
       expect(mock.mode, BitGoBackendMode.mock);
-      expect(mock.mode.label, 'Demo');
+      expect(mock.mode.label, 'Mock');
     });
   });
 

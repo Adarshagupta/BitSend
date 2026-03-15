@@ -116,6 +116,7 @@ interface Env {
   BITGO_SOL_MAINNET_ADDRESS?: string;
   FILEVERSE_API_KEY?: string;
   FILEVERSE_RECEIPT_UPSTREAM?: string;
+  FILEVERSE_SERVER_URL?: string;
   FILEVERSE_DDOCS_ENDPOINT?: string;
 }
 
@@ -419,6 +420,7 @@ async function publishFileverseReceipt(
     `/fileverse/receipts/${encodeURIComponent(archiveReceiptId)}`,
     origin,
   ).toString();
+  let ddocsFailureMessage: string | null = null;
 
   const persistReceipt = async ({
     savedAt,
@@ -472,12 +474,22 @@ async function publishFileverseReceipt(
   };
 
   const apiKey = pickString(env.FILEVERSE_API_KEY);
-  const ddocsEndpoint = pickString(env.FILEVERSE_DDOCS_ENDPOINT);
+  const ddocsEndpoint = resolveFileverseDdocsEndpoint(env);
   const upstream = pickString(env.FILEVERSE_RECEIPT_UPSTREAM);
+
+  console.log('Fileverse config', {
+    apiKeyPresent: apiKey != null,
+    ddocsEndpoint,
+    upstreamPresent: upstream != null,
+  });
 
   if (apiKey && ddocsEndpoint) {
     try {
       const endpoint = appendApiKey(ddocsEndpoint, apiKey);
+      console.log('Publishing Fileverse ddoc', {
+        endpoint,
+        transferId: input.transferId,
+      });
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -518,18 +530,25 @@ async function publishFileverseReceipt(
           'Receipt details were saved to Fileverse. The Bitsend archive keeps the captured screenshot.',
       });
     } catch (error) {
+      ddocsFailureMessage = error instanceof Error ? error.message : String(error);
       console.error(
         'Fileverse ddoc publish failed, trying legacy upload path.',
-        error,
+        {
+          error: ddocsFailureMessage,
+          transferId: input.transferId,
+          endpoint: ddocsEndpoint,
+        },
       );
     }
   }
 
   if (!apiKey || !upstream) {
+    const fallbackMessage = ddocsFailureMessage == null
+      ? 'Receipt archived on the Bitsend Worker because the Fileverse upstream is not configured yet.'
+      : `Receipt archived on the Bitsend Worker because Fileverse ddoc publish failed: ${ddocsFailureMessage}`;
     return persistReceipt({
       storageMode: 'worker',
-      message:
-        'Receipt archived on the Bitsend Worker because the Fileverse upstream is not configured yet.',
+      message: fallbackMessage,
     });
   }
 
@@ -1312,7 +1331,7 @@ async function requestBitGoJson(
       headers: {
         'Accept': 'application/json',
         'Authorization': `Bearer ${accessToken}`,
-        if (body != null) 'Content-Type': 'application/json',
+        ...(body == null ? {} : { 'Content-Type': 'application/json' }),
       },
       body: body == null ? undefined : JSON.stringify(body),
       signal: controller.signal,
@@ -1475,6 +1494,28 @@ function appendApiKey(endpoint: string, apiKey: string): string {
   const url = new URL(endpoint);
   if (!url.searchParams.has('apiKey')) {
     url.searchParams.set('apiKey', apiKey);
+  }
+  return url.toString();
+}
+
+function resolveFileverseDdocsEndpoint(env: Env): string | null {
+  const configured = pickString(
+    env.FILEVERSE_DDOCS_ENDPOINT,
+    env.FILEVERSE_SERVER_URL,
+  );
+  if (!configured) {
+    return null;
+  }
+  const url = new URL(configured);
+  const normalizedPath = url.pathname.endsWith('/')
+    ? url.pathname.slice(0, -1)
+    : url.pathname;
+  if (
+    normalizedPath === '' ||
+    normalizedPath === '/' ||
+    normalizedPath === '/api'
+  ) {
+    url.pathname = '/api/ddocs';
   }
   return url.toString();
 }

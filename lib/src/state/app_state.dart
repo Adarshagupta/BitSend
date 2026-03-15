@@ -178,6 +178,26 @@ class BitsendAppState extends ChangeNotifier {
       _activeWalletEngine == WalletEngine.bitgo
       ? 0
       : _activeChain.amountFromBaseUnits(offlineSpendableLamports);
+  int get estimatedSendFeeHeadroomBaseUnits =>
+      _activeWalletEngine == WalletEngine.bitgo
+      ? 0
+      : _activeChain == ChainKind.solana
+      ? solFeeHeadroomLamports
+      : _estimatedEthereumFeeHeadroom();
+  double get estimatedSendFeeHeadroomSol =>
+      _activeChain.amountFromBaseUnits(estimatedSendFeeHeadroomBaseUnits);
+  double get maxSendAmountSol {
+    if (_activeWalletEngine == WalletEngine.bitgo) {
+      return mainBalanceSol;
+    }
+    final int maximumBaseUnits =
+        offlineSpendableLamports - estimatedSendFeeHeadroomBaseUnits;
+    if (maximumBaseUnits <= 0) {
+      return 0;
+    }
+    return _activeChain.amountFromBaseUnits(maximumBaseUnits);
+  }
+
   String get rpcEndpoint => _rpcEndpoint;
   String get bitgoEndpoint => _bitgoEndpoint;
   String? get localIp => _localIp;
@@ -659,12 +679,29 @@ class BitsendAppState extends ChangeNotifier {
       if (lamports <= 0) {
         throw const FormatException('Enter an amount greater than zero.');
       }
-      final int feeHeadroom = _activeChain == ChainKind.solana
-          ? solFeeHeadroomLamports
-          : _estimatedEthereumFeeHeadroom();
-      if (lamports + feeHeadroom > _mainBalanceLamports) {
-        throw const FormatException(
-          'Main wallet balance is too low for that top up amount plus network fees.',
+      late final int feeHeadroom;
+      if (_activeChain == ChainKind.solana) {
+        _mainBalanceLamports = await _solanaService.getBalanceLamports(
+          _wallet!.address,
+        );
+        feeHeadroom = solFeeHeadroomLamports;
+      } else {
+        _mainBalanceLamports = await _ethereumService.getBalanceBaseUnits(
+          _wallet!.address,
+        );
+        final EthereumPreparedContext senderContext = await _ethereumService
+            .prepareTransferContext(_wallet!.address);
+        feeHeadroom =
+            senderContext.gasPriceWei * EthereumService.transferGasLimit;
+      }
+      _mainBalances[_activeScopeKey] = _mainBalanceLamports;
+      final int availableAfterFees = _mainBalanceLamports - feeHeadroom;
+      if (availableAfterFees <= 0 || lamports > availableAfterFees) {
+        final int safeAvailable = availableAfterFees > 0
+            ? availableAfterFees
+            : 0;
+        throw FormatException(
+          'Main wallet balance is too low after network fees. Available to move: ${Formatters.asset(_activeChain.amountFromBaseUnits(safeAvailable), _activeChain)}.',
         );
       }
 
@@ -819,6 +856,24 @@ class BitsendAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  String? validateSendAmount(double amountSol) {
+    final int amountBaseUnits = _activeChain.amountToBaseUnits(amountSol);
+    if (amountBaseUnits <= 0) {
+      return 'Enter an amount greater than zero.';
+    }
+    if (_activeWalletEngine == WalletEngine.bitgo) {
+      if (amountBaseUnits > _mainBalanceLamports) {
+        return 'Amount exceeds the available BitGo wallet balance.';
+      }
+      return null;
+    }
+    if (amountBaseUnits + estimatedSendFeeHeadroomBaseUnits >
+        offlineSpendableLamports) {
+      return 'Amount exceeds the available offline wallet balance after network fees.';
+    }
+    return null;
+  }
+
   void clearDraft() {
     _sendDraft = SendDraft(
       chain: _activeChain,
@@ -864,7 +919,7 @@ class BitsendAppState extends ChangeNotifier {
       );
     }
     if (!_fileverseClientService.hasSession) {
-      await _fileverseClientService.createDemoSession();
+      await _fileverseClientService.createSession();
     }
     final FileverseReceiptSnapshot snapshot = await _fileverseClientService
         .publishReceipt(
@@ -961,14 +1016,14 @@ class BitsendAppState extends ChangeNotifier {
       }
       if (!_bitgoBackendMode.isLive) {
         return _fallbackBitGoDraftToLocalAndSend(
-          'BitGo backend is in demo mode. Switched to Local mode and retrying with the offline wallet.',
+          'BitGo backend is not live. Switched to Local mode and retrying with the offline wallet.',
         );
       }
       await _ensureBitGoSession();
       final BitGoWalletSummary? wallet = _bitgoWallet;
       if (wallet == null) {
         throw FormatException(
-          'BitGo demo wallet is not configured for ${_activeNetwork.labelFor(_activeChain)}.',
+          'BitGo wallet is not configured for ${_activeNetwork.labelFor(_activeChain)}.',
         );
       }
       if (lamports > _mainBalanceLamports) {
@@ -2168,7 +2223,7 @@ class BitsendAppState extends ChangeNotifier {
       final BitGoWalletSummary? wallet = _bitgoWallets[_activeScopeKey];
       if (wallet == null) {
         throw FormatException(
-          'BitGo demo wallet is not configured for ${_activeNetwork.labelFor(_activeChain)}.',
+          'BitGo wallet is not configured for ${_activeNetwork.labelFor(_activeChain)}.',
         );
       }
       _bitgoWallet = wallet;
@@ -2194,8 +2249,7 @@ class BitsendAppState extends ChangeNotifier {
     if (_bitGoClientService.hasSession) {
       return;
     }
-    final BitGoDemoSession session = await _bitGoClientService
-        .createDemoSession();
+    final BitGoDemoSession session = await _bitGoClientService.createSession();
     _syncBitGoWallets(session.wallets);
   }
 

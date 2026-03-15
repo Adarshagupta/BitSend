@@ -102,13 +102,14 @@ class BitGoClientService {
           'Authorization': 'Bearer $_sessionToken',
       };
       final http.Response response = switch (method) {
-        'POST' => await http
-            .post(
-              uri,
-              headers: headers,
-              body: body == null ? null : jsonEncode(body),
-            )
-            .timeout(_requestTimeout),
+        'POST' =>
+          await http
+              .post(
+                uri,
+                headers: headers,
+                body: body == null ? null : jsonEncode(body),
+              )
+              .timeout(_requestTimeout),
         'GET' => await http.get(uri, headers: headers).timeout(_requestTimeout),
         _ => throw UnsupportedError('Unsupported BitGo client method: $method'),
       };

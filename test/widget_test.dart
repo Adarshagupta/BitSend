@@ -65,6 +65,45 @@ void main() {
     expect(find.text('Refresh'), findsAtLeastNWidgets(1));
     expect(find.text('Send'), findsOneWidget);
     expect(find.text('Offline Wallet'), findsAtLeastNWidgets(1));
+    expect(
+      find.textContaining('Move funds to the offline wallet'),
+      findsOneWidget,
+    );
+    expect(find.byTooltip('Scan receiver QR and send'), findsOneWidget);
+  });
+
+  testWidgets('home explains offline balance is reserved instead of asking for top up', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      hasEnoughFundingValue: false,
+      hasOfflineFundsValue: false,
+      hasOfflineReadyBlockhashValue: false,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        balanceSol: 0.2,
+        offlineBalanceSol: 0.8,
+        offlineAvailableSol: 0,
+        offlineWalletAddress: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+        readyForOffline: false,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const HomeDashboardScreen(),
+    );
+
+    expect(find.text('Funds reserved'), findsOneWidget);
+    expect(
+      find.textContaining('fully reserved by pending transfers'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('wallet setup shows backup actions after a wallet exists', (
@@ -85,7 +124,9 @@ void main() {
   testWidgets('settings screen shows ENS payment preference controls', (
     WidgetTester tester,
   ) async {
-    final _TestBitsendAppState state = _TestBitsendAppState(walletValue: _wallet);
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+    );
 
     await pumpWithState(tester, state: state, child: const SettingsScreen());
 
@@ -140,7 +181,10 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Moving funds into the offline wallet...'), findsOneWidget);
+    expect(
+      find.text('Moving funds into the offline wallet...'),
+      findsOneWidget,
+    );
     expect(find.text('Moving funds...'), findsOneWidget);
   });
 
@@ -209,11 +253,7 @@ void main() {
       lastSentTransferValue: outbound,
     );
 
-    await pumpWithState(
-      tester,
-      state: state,
-      child: const SendSuccessScreen(),
-    );
+    await pumpWithState(tester, state: state, child: const SendSuccessScreen());
 
     expect(find.text('Save image'), findsOneWidget);
     expect(find.text('Save receipt online'), findsOneWidget);
@@ -223,20 +263,21 @@ void main() {
   testWidgets('transfer detail shows Fileverse link when present', (
     WidgetTester tester,
   ) async {
-    final PendingTransfer inbound = _transfer(
-      transferId: 'with-fileverse',
-      direction: TransferDirection.inbound,
-      status: TransferStatus.broadcastSubmitted,
-      senderAddress: 'Sender1111111111111111111111111111111111',
-      receiverAddress: _wallet.address,
-      amountLamports: 250000000,
-    ).copyWith(
-      fileverseReceiptId: 'fv-123',
-      fileverseReceiptUrl: 'https://fileverse.example/receipt/123',
-      fileverseSavedAt: DateTime(2026, 3, 14, 13, 0),
-      fileverseStorageMode: 'fileverse',
-      fileverseMessage: 'Receipt details were saved to Fileverse.',
-    );
+    final PendingTransfer inbound =
+        _transfer(
+          transferId: 'with-fileverse',
+          direction: TransferDirection.inbound,
+          status: TransferStatus.broadcastSubmitted,
+          senderAddress: 'Sender1111111111111111111111111111111111',
+          receiverAddress: _wallet.address,
+          amountLamports: 250000000,
+        ).copyWith(
+          fileverseReceiptId: 'fv-123',
+          fileverseReceiptUrl: 'https://fileverse.example/receipt/123',
+          fileverseSavedAt: DateTime(2026, 3, 14, 13, 0),
+          fileverseStorageMode: 'fileverse',
+          fileverseMessage: 'Receipt details were saved to Fileverse.',
+        );
     final _TestBitsendAppState state = _TestBitsendAppState(
       transferMap: <String, PendingTransfer>{inbound.transferId: inbound},
     );
@@ -456,10 +497,144 @@ void main() {
 
     expect(find.text('Endpoint not needed'), findsOneWidget);
     expect(find.text('Receiver endpoint'), findsNothing);
-    expect(find.textContaining('Send will switch to Local mode automatically'), findsOneWidget);
+    expect(
+      find.textContaining('Send will switch to Local mode automatically'),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('home explains BitGo demo mode falls back to Local send', (
+  testWidgets('send transport shows full scanned address instead of short label', (
+    WidgetTester tester,
+  ) async {
+    const String receiverAddress =
+        '0x38Ff8bE6A9C12D0f5D3f90E9cD7bE1A24546aBcd';
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      sendDraftValue: const SendDraft(
+        chain: ChainKind.ethereum,
+        network: ChainNetwork.testnet,
+        receiverAddress: receiverAddress,
+        receiverLabel: '0x38...aBcd',
+      ),
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const SendTransportScreen(),
+    );
+
+    final TextField addressField = tester.widget<TextField>(
+      find.byType(TextField).first,
+    );
+    expect(addressField.controller?.text, receiverAddress);
+  });
+
+  testWidgets('send amount blocks oversized local transfer before review', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      offlineWalletValue: _offlineWallet,
+      hasOfflineFundsValue: true,
+      hasOfflineReadyBlockhashValue: true,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.ethereum,
+        network: ChainNetwork.testnet,
+        balanceSol: 0.2,
+        offlineBalanceSol: 9.27,
+        offlineAvailableSol: 0.04,
+        offlineWalletAddress: '0x1111111111111111111111111111111111111111',
+        readyForOffline: true,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+      estimatedSendFeeHeadroomSolValue: 0.001,
+      maxSendAmountSolValue: 0.039,
+      validateSendAmountHandler: (double amountSol) {
+        if (amountSol > 0.039) {
+          return 'Amount exceeds the available offline wallet balance after network fees.';
+        }
+        return null;
+      },
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const SendAmountScreen(),
+    );
+
+    expect(find.text('Spendable now'), findsOneWidget);
+    expect(find.text('Reserved by pending'), findsOneWidget);
+    expect(find.text('Max send now'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), '9.23');
+    await tester.tap(find.text('Review transfer'));
+    await tester.pump();
+
+    expect(
+      find.text(
+        'Amount exceeds the available offline wallet balance after network fees.',
+      ),
+      findsAtLeastNWidgets(1),
+    );
+  });
+
+  testWidgets('send review disables signing when amount exceeds spendable balance', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      offlineWalletValue: _offlineWallet,
+      hasOfflineFundsValue: true,
+      hasOfflineReadyBlockhashValue: true,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.ethereum,
+        network: ChainNetwork.testnet,
+        balanceSol: 0.2,
+        offlineBalanceSol: 9.27,
+        offlineAvailableSol: 0.04,
+        offlineWalletAddress: '0x1111111111111111111111111111111111111111',
+        readyForOffline: true,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+      sendDraftValue: const SendDraft(
+        chain: ChainKind.ethereum,
+        network: ChainNetwork.testnet,
+        transport: TransportKind.hotspot,
+        receiverAddress: '0x2222222222222222222222222222222222222222',
+        amountSol: 9.23,
+      ),
+      validateSendAmountHandler: (double amountSol) {
+        if (amountSol > 0.039) {
+          return 'Amount exceeds the available offline wallet balance after network fees.';
+        }
+        return null;
+      },
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const SendReviewScreen(),
+    );
+
+    expect(find.text('Amount too high'), findsOneWidget);
+    expect(
+      find.text(
+        'Amount exceeds the available offline wallet balance after network fees.',
+      ),
+      findsOneWidget,
+    );
+
+    final ElevatedButton button = tester.widget<ElevatedButton>(
+      find.widgetWithText(ElevatedButton, 'Sign and send'),
+    );
+    expect(button.onPressed, isNull);
+  });
+
+  testWidgets('home explains non-live BitGo backend falls back to Local send', (
     WidgetTester tester,
   ) async {
     final _TestBitsendAppState state = _TestBitsendAppState(
@@ -488,7 +663,9 @@ void main() {
 
     expect(find.text('Auto-fallback'), findsOneWidget);
     expect(
-      find.text('BitGo backend is demo-only. Send will fall back to Local mode.'),
+      find.text(
+        'BitGo backend is not live. Send will fall back to Local mode.',
+      ),
       findsOneWidget,
     );
   });
@@ -612,6 +789,9 @@ class _TestBitsendAppState extends BitsendAppState {
     this.lastReceivedTransferIdValue,
     this.announcementMessageValue,
     this.announcementSerialValue = 0,
+    this.estimatedSendFeeHeadroomSolValue = 0,
+    this.maxSendAmountSolValue = 0,
+    this.validateSendAmountHandler,
   }) : super(clock: () => DateTime(2026, 3, 13, 12));
 
   final String bootRouteValue;
@@ -643,6 +823,9 @@ class _TestBitsendAppState extends BitsendAppState {
   final String? lastReceivedTransferIdValue;
   final String? announcementMessageValue;
   final int announcementSerialValue;
+  final double estimatedSendFeeHeadroomSolValue;
+  final double maxSendAmountSolValue;
+  final String? Function(double amountSol)? validateSendAmountHandler;
 
   @override
   Future<void> initialize() async {}
@@ -663,6 +846,9 @@ class _TestBitsendAppState extends BitsendAppState {
   bool get hasWallet => walletValue != null;
 
   @override
+  bool get hasOfflineWallet => offlineWalletValue != null;
+
+  @override
   bool get hasInternet => hasInternetValue;
 
   @override
@@ -681,7 +867,22 @@ class _TestBitsendAppState extends BitsendAppState {
   bool get hasOfflineReadyBlockhash => hasOfflineReadyBlockhashValue;
 
   @override
+  double get mainBalanceSol => walletSummaryValue.balanceSol;
+
+  @override
+  double get offlineBalanceSol => walletSummaryValue.offlineBalanceSol;
+
+  @override
+  double get offlineSpendableBalanceSol => walletSummaryValue.offlineAvailableSol;
+
+  @override
   WalletSummary get walletSummary => walletSummaryValue;
+
+  @override
+  double get estimatedSendFeeHeadroomSol => estimatedSendFeeHeadroomSolValue;
+
+  @override
+  double get maxSendAmountSol => maxSendAmountSolValue;
 
   @override
   HomeStatus get homeStatus => HomeStatus(
@@ -765,4 +966,8 @@ class _TestBitsendAppState extends BitsendAppState {
   @override
   List<TransferTimelineState> timelineFor(PendingTransfer transfer) =>
       timelineValue;
+
+  @override
+  String? validateSendAmount(double amountSol) =>
+      validateSendAmountHandler?.call(amountSol);
 }

@@ -84,6 +84,31 @@ npm run deploy
 
 The deployed worker uses a Durable Object for demo sessions and transfer state.
 
+### Fileverse upstream
+
+Receipt publishing to Fileverse is handled by the Worker, not directly by the
+Flutter app. This repo is configured to use the Fileverse server root:
+
+```text
+https://quiet-island-41070-e71391e7dca9.herokuapp.com/
+```
+
+The Worker derives the ddocs endpoint automatically as:
+
+```text
+https://quiet-island-41070-e71391e7dca9.herokuapp.com/api/ddocs
+```
+
+Before deploying, set the Fileverse API key as a Worker secret:
+
+```powershell
+cd backend-worker
+npx wrangler secret put FILEVERSE_API_KEY
+```
+
+If you need to override the ddocs path explicitly, set
+`FILEVERSE_DDOCS_ENDPOINT`. Otherwise `FILEVERSE_SERVER_URL` is enough.
+
 Important:
 
 - The Worker is the default app backend for BitGo demo mode.
