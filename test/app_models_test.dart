@@ -61,7 +61,7 @@ void main() {
   });
 
   group('ReceiverInvitePayload', () {
-    test('round-trips hotspot payloads through QR text', () {
+    test('round-trips hotspot payloads through pair code text', () {
       const ReceiverInvitePayload payload = ReceiverInvitePayload(
         chain: ChainKind.solana,
         network: ChainNetwork.testnet,
@@ -71,17 +71,19 @@ void main() {
         endpoint: 'http://192.168.1.22:8787',
       );
 
-      final ReceiverInvitePayload parsed = ReceiverInvitePayload.fromQrData(
-        payload.toQrData(),
+      final ReceiverInvitePayload parsed = ReceiverInvitePayload
+          .fromPairCodeData(
+        payload.toPairCodeData(),
       );
 
+      expect(payload.toJson()['type'], ReceiverInvitePayload.type);
       expect(parsed.transport, TransportKind.hotspot);
       expect(parsed.address, payload.address);
       expect(parsed.displayAddress, payload.displayAddress);
       expect(parsed.endpoint, payload.endpoint);
     });
 
-    test('parses Base Sepolia QR payloads', () {
+    test('parses Base Sepolia pair code payloads', () {
       const ReceiverInvitePayload payload = ReceiverInvitePayload(
         chain: ChainKind.base,
         network: ChainNetwork.testnet,
@@ -90,8 +92,9 @@ void main() {
         displayAddress: '0x7f6f...7161',
       );
 
-      final ReceiverInvitePayload parsed = ReceiverInvitePayload.fromQrData(
-        payload.toQrData(),
+      final ReceiverInvitePayload parsed = ReceiverInvitePayload
+          .fromPairCodeData(
+        payload.toPairCodeData(),
       );
 
       expect(parsed.chain, ChainKind.base);
@@ -111,8 +114,9 @@ void main() {
         relayId: 'relay-session-1',
       );
 
-      final ReceiverInvitePayload parsed = ReceiverInvitePayload.fromQrData(
-        payload.toQrData(),
+      final ReceiverInvitePayload parsed = ReceiverInvitePayload
+          .fromPairCodeData(
+        payload.toPairCodeData(),
       );
 
       expect(parsed.transport, TransportKind.ultrasonic);
@@ -120,8 +124,31 @@ void main() {
       expect(parsed.relayId, payload.relayId);
     });
 
-    test('accepts version 1 receiver QR payloads', () {
-      final ReceiverInvitePayload parsed = ReceiverInvitePayload.fromQrData(
+    test('round-trips custom pair mark bytes', () {
+      const ReceiverInvitePayload payload = ReceiverInvitePayload(
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        transport: TransportKind.ultrasonic,
+        address: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+        displayAddress: '5g7h...Qk1Z',
+        sessionToken: '00112233445566778899aabbccddeeff',
+        relayId: '123e4567-e89b-12d3-a456-426614174000',
+      );
+
+      final ReceiverInvitePayload parsed = ReceiverInvitePayload
+          .fromPairMarkBytes(payload.toPairMarkBytes());
+
+      expect(parsed.chain, payload.chain);
+      expect(parsed.network, payload.network);
+      expect(parsed.transport, payload.transport);
+      expect(parsed.address, payload.address);
+      expect(parsed.sessionToken, payload.sessionToken);
+      expect(parsed.relayId, payload.relayId);
+    });
+
+    test('accepts legacy version 1 receiver payloads', () {
+      final ReceiverInvitePayload parsed = ReceiverInvitePayload
+          .fromPairCodeData(
         '{"type":"bitsend.receiver","version":1,"chain":"solana","network":"solana-devnet","transport":"hotspot","address":"5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z","displayAddress":"5g7h...Qk1Z","endpoint":"http://192.168.1.22:8787"}',
       );
 

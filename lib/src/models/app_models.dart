@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
+import 'package:solana/solana.dart' show Ed25519HDPublicKey;
+import 'package:web3dart/web3dart.dart' show EthereumAddress;
 
 enum ChainKind { solana, ethereum, base }
 
@@ -211,19 +213,19 @@ extension TransportKindX on TransportKind {
   String get label => switch (this) {
     TransportKind.hotspot => 'Hotspot / Local Wi-Fi',
     TransportKind.ble => 'Bluetooth Low Energy',
-    TransportKind.ultrasonic => 'Ultrasonic',
+    TransportKind.ultrasonic => 'Bitsend Pair',
   };
 
   String get shortLabel => switch (this) {
     TransportKind.hotspot => 'Hotspot',
     TransportKind.ble => 'BLE',
-    TransportKind.ultrasonic => 'Ultrasonic',
+    TransportKind.ultrasonic => 'Pair',
   };
 
   IconData get icon => switch (this) {
     TransportKind.hotspot => Icons.wifi_tethering_rounded,
     TransportKind.ble => Icons.bluetooth_rounded,
-    TransportKind.ultrasonic => Icons.graphic_eq_rounded,
+    TransportKind.ultrasonic => Icons.phonelink_lock_rounded,
   };
 }
 
@@ -789,7 +791,8 @@ class ReceiverInvitePayload {
     this.relayId,
   });
 
-  static const String type = 'bitsend.receiver';
+  static const String type = 'bitsend.pairing';
+  static const String legacyType = 'bitsend.receiver';
   static const int currentVersion = 2;
 
   final ChainKind chain;
@@ -816,25 +819,30 @@ class ReceiverInvitePayload {
     if (relayId != null && relayId!.isNotEmpty) 'relayId': relayId,
   };
 
-  String toQrData() => jsonEncode(toJson());
+  String toPairCodeData() => jsonEncode(toJson());
 
-  factory ReceiverInvitePayload.fromQrData(String raw) {
+  String toQrData() => toPairCodeData();
+
+  Uint8List toPairMarkBytes() => BitsendPairInvitePacket.fromInvite(this).toBytes();
+
+  factory ReceiverInvitePayload.fromPairCodeData(String raw) {
     final String trimmed = raw.trim();
     if (trimmed.isEmpty) {
-      throw const FormatException('QR code is empty.');
+      throw const FormatException('Pair code is empty.');
     }
     final Map<String, dynamic> json;
     try {
       json = jsonDecode(trimmed) as Map<String, dynamic>;
     } catch (_) {
       throw const FormatException(
-        'This QR code is not a Bitsend receiver code.',
+        'This code is not a Bitsend Pair invite.',
       );
     }
 
-    if ((json['type'] as String?) != type) {
+    final String? payloadType = json['type'] as String?;
+    if (payloadType != type && payloadType != legacyType) {
       throw const FormatException(
-        'This QR code is not a Bitsend receiver code.',
+        'This code is not a Bitsend Pair invite.',
       );
     }
     final String? chainName = json['chain'] as String?;
@@ -862,12 +870,12 @@ class ReceiverInvitePayload {
       (_, 'base-sepolia') => (ChainKind.base, ChainNetwork.testnet),
       (_, 'base-mainnet') => (ChainKind.base, ChainNetwork.mainnet),
       _ => throw const FormatException(
-        'This QR code is for a different network.',
+        'This pair code is for a different network.',
       ),
     };
     final int version = (json['version'] as int?) ?? 1;
     if (version != 1 && version != currentVersion) {
-      throw const FormatException('This QR code version is not supported.');
+      throw const FormatException('This pair code version is not supported.');
     }
 
     final TransportKind transport = TransportKind.values.byName(
@@ -879,13 +887,13 @@ class ReceiverInvitePayload {
     final String? endpoint = (json['endpoint'] as String?)?.trim();
     if (address.isEmpty) {
       throw const FormatException(
-        'Receiver address is missing from the QR code.',
+        'Receiver address is missing from the pair code.',
       );
     }
     if (transport == TransportKind.hotspot &&
         (endpoint == null || endpoint.isEmpty)) {
       throw const FormatException(
-        'Receiver hotspot endpoint is missing from the QR code.',
+        'Receiver hotspot endpoint is missing from the pair code.',
       );
     }
     final String? sessionToken = (json['sessionToken'] as String?)?.trim();
@@ -893,13 +901,13 @@ class ReceiverInvitePayload {
     if (transport == TransportKind.ultrasonic &&
         (sessionToken == null || sessionToken.isEmpty)) {
       throw const FormatException(
-        'Receiver ultrasonic session token is missing from the QR code.',
+        'Receiver Bitsend Pair session token is missing from the pair code.',
       );
     }
     if (transport == TransportKind.ultrasonic &&
         (relayId == null || relayId.isEmpty)) {
       throw const FormatException(
-        'Receiver relay id is missing from the QR code.',
+        'Receiver relay id is missing from the pair code.',
       );
     }
 
@@ -914,6 +922,243 @@ class ReceiverInvitePayload {
           ? null
           : sessionToken,
       relayId: relayId == null || relayId.isEmpty ? null : relayId,
+    );
+  }
+
+  factory ReceiverInvitePayload.fromQrData(String raw) {
+    return ReceiverInvitePayload.fromPairCodeData(raw);
+  }
+
+  factory ReceiverInvitePayload.fromPairMarkBytes(Uint8List bytes) {
+    return BitsendPairInvitePacket.fromBytes(bytes).toInvite();
+  }
+}
+
+class BitsendPairInvitePacket {
+  const BitsendPairInvitePacket({
+    required this.version,
+    required this.chain,
+    required this.network,
+    required this.transport,
+    required this.addressBytes,
+    this.endpointBytes,
+    this.sessionTokenBytes,
+    this.relayIdBytes,
+    required this.checksum,
+  });
+
+  static const int currentVersion = 1;
+  static const int checksumLength = 4;
+  static const int _flagEndpoint = 1 << 0;
+  static const int _flagSessionToken = 1 << 1;
+  static const int _flagRelayId = 1 << 2;
+
+  final int version;
+  final ChainKind chain;
+  final ChainNetwork network;
+  final TransportKind transport;
+  final Uint8List addressBytes;
+  final Uint8List? endpointBytes;
+  final Uint8List? sessionTokenBytes;
+  final Uint8List? relayIdBytes;
+  final Uint8List checksum;
+
+  factory BitsendPairInvitePacket.fromInvite(ReceiverInvitePayload invite) {
+    final Uint8List addressBytes = _inviteAddressToBytes(
+      invite.chain,
+      invite.address,
+    );
+    final Uint8List? endpointBytes = invite.transport == TransportKind.hotspot
+        ? _hotspotEndpointToBytes(invite.endpoint)
+        : null;
+    final Uint8List? sessionTokenBytes =
+        invite.transport == TransportKind.ultrasonic &&
+            invite.sessionToken != null &&
+            invite.sessionToken!.isNotEmpty
+        ? _sessionTokenToBytes(invite.sessionToken!)
+        : null;
+    final Uint8List? relayIdBytes = invite.transport == TransportKind.ultrasonic &&
+            invite.relayId != null &&
+            invite.relayId!.isNotEmpty
+        ? _uuidStringToBytes(invite.relayId!)
+        : null;
+    final BitsendPairInvitePacket unsigned = BitsendPairInvitePacket(
+      version: currentVersion,
+      chain: invite.chain,
+      network: invite.network,
+      transport: invite.transport,
+      addressBytes: addressBytes,
+      endpointBytes: endpointBytes,
+      sessionTokenBytes: sessionTokenBytes,
+      relayIdBytes: relayIdBytes,
+      checksum: Uint8List(checksumLength),
+    );
+    return BitsendPairInvitePacket(
+      version: unsigned.version,
+      chain: unsigned.chain,
+      network: unsigned.network,
+      transport: unsigned.transport,
+      addressBytes: unsigned.addressBytes,
+      endpointBytes: unsigned.endpointBytes,
+      sessionTokenBytes: unsigned.sessionTokenBytes,
+      relayIdBytes: unsigned.relayIdBytes,
+      checksum: unsigned._computeChecksum(),
+    );
+  }
+
+  factory BitsendPairInvitePacket.fromBytes(Uint8List bytes) {
+    if (bytes.length < 1 + 1 + 1 + 1 + checksumLength) {
+      throw const FormatException('Bitsend Pair packet is too short.');
+    }
+    int offset = 0;
+    final int version = bytes[offset++];
+    if (version != currentVersion) {
+      throw const FormatException('Unsupported Bitsend Pair packet version.');
+    }
+    final (ChainKind, ChainNetwork) scope = _scopeFromPairCode(bytes[offset++]);
+    final TransportKind transport = switch (bytes[offset++]) {
+      0 => TransportKind.hotspot,
+      1 => TransportKind.ble,
+      2 => TransportKind.ultrasonic,
+      _ => throw const FormatException('Unknown Bitsend Pair transport.'),
+    };
+    final int flags = bytes[offset++];
+    final int addressLength = scope.$1 == ChainKind.solana
+        ? 32
+        : EthereumAddress.addressByteLength;
+    final int requiredLength = 1 +
+        1 +
+        1 +
+        1 +
+        addressLength +
+        ((flags & _flagEndpoint) != 0 ? 6 : 0) +
+        ((flags & _flagSessionToken) != 0 ? 16 : 0) +
+        ((flags & _flagRelayId) != 0 ? 16 : 0) +
+        checksumLength;
+    if (bytes.length != requiredLength) {
+      throw const FormatException('Bitsend Pair packet length is invalid.');
+    }
+
+    final Uint8List addressBytes = Uint8List.sublistView(
+      bytes,
+      offset,
+      offset + addressLength,
+    );
+    offset += addressLength;
+
+    Uint8List? endpointBytes;
+    if ((flags & _flagEndpoint) != 0) {
+      endpointBytes = Uint8List.sublistView(bytes, offset, offset + 6);
+      offset += 6;
+    }
+
+    Uint8List? sessionTokenBytes;
+    if ((flags & _flagSessionToken) != 0) {
+      sessionTokenBytes = Uint8List.sublistView(bytes, offset, offset + 16);
+      offset += 16;
+    }
+
+    Uint8List? relayIdBytes;
+    if ((flags & _flagRelayId) != 0) {
+      relayIdBytes = Uint8List.sublistView(bytes, offset, offset + 16);
+      offset += 16;
+    }
+
+    final Uint8List checksum = Uint8List.sublistView(
+      bytes,
+      offset,
+      offset + checksumLength,
+    );
+    final BitsendPairInvitePacket packet = BitsendPairInvitePacket(
+      version: version,
+      chain: scope.$1,
+      network: scope.$2,
+      transport: transport,
+      addressBytes: Uint8List.fromList(addressBytes),
+      endpointBytes:
+          endpointBytes == null ? null : Uint8List.fromList(endpointBytes),
+      sessionTokenBytes: sessionTokenBytes == null
+          ? null
+          : Uint8List.fromList(sessionTokenBytes),
+      relayIdBytes:
+          relayIdBytes == null ? null : Uint8List.fromList(relayIdBytes),
+      checksum: Uint8List.fromList(checksum),
+    );
+    if (!packet.isChecksumValid) {
+      throw const FormatException('Bitsend Pair packet checksum mismatch.');
+    }
+    return packet;
+  }
+
+  bool get isChecksumValid => _listEquals(checksum, _computeChecksum());
+
+  Uint8List toBytes() {
+    final int flags = (endpointBytes != null ? _flagEndpoint : 0) |
+        (sessionTokenBytes != null ? _flagSessionToken : 0) |
+        (relayIdBytes != null ? _flagRelayId : 0);
+    return Uint8List.fromList(<int>[
+      version,
+      _scopeCodeForPairCode(chain, network),
+      switch (transport) {
+        TransportKind.hotspot => 0,
+        TransportKind.ble => 1,
+        TransportKind.ultrasonic => 2,
+      },
+      flags,
+      ...addressBytes,
+      ...?endpointBytes,
+      ...?sessionTokenBytes,
+      ...?relayIdBytes,
+      ...checksum,
+    ]);
+  }
+
+  ReceiverInvitePayload toInvite() {
+    final String address = _inviteAddressFromBytes(chain, addressBytes);
+    return ReceiverInvitePayload(
+      chain: chain,
+      network: network,
+      transport: transport,
+      address: address,
+      displayAddress: address,
+      endpoint: endpointBytes == null
+          ? null
+          : _hotspotEndpointFromBytes(endpointBytes!),
+      sessionToken: sessionTokenBytes == null
+          ? null
+          : _sessionTokenBytesToString(sessionTokenBytes!),
+      relayId: relayIdBytes == null
+          ? null
+          : _uuidBytesToString(relayIdBytes!),
+    );
+  }
+
+  Uint8List _payloadBytesWithoutChecksum() {
+    final int flags = (endpointBytes != null ? _flagEndpoint : 0) |
+        (sessionTokenBytes != null ? _flagSessionToken : 0) |
+        (relayIdBytes != null ? _flagRelayId : 0);
+    return Uint8List.fromList(<int>[
+      version,
+      _scopeCodeForPairCode(chain, network),
+      switch (transport) {
+        TransportKind.hotspot => 0,
+        TransportKind.ble => 1,
+        TransportKind.ultrasonic => 2,
+      },
+      flags,
+      ...addressBytes,
+      ...?endpointBytes,
+      ...?sessionTokenBytes,
+      ...?relayIdBytes,
+    ]);
+  }
+
+  Uint8List _computeChecksum() {
+    return Uint8List.fromList(
+      sha256.convert(_payloadBytesWithoutChecksum()).bytes.sublist(
+            0,
+            checksumLength,
+          ),
     );
   }
 }
@@ -1723,6 +1968,87 @@ String _bytesToHex(List<int> bytes) {
     buffer.write(value.toRadixString(16).padLeft(2, '0'));
   }
   return buffer.toString();
+}
+
+bool _listEquals(List<int> left, List<int> right) {
+  if (left.length != right.length) {
+    return false;
+  }
+  for (int index = 0; index < left.length; index += 1) {
+    if (left[index] != right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+int _scopeCodeForPairCode(ChainKind chain, ChainNetwork network) =>
+    switch ((chain, network)) {
+      (ChainKind.solana, ChainNetwork.testnet) => 0,
+      (ChainKind.solana, ChainNetwork.mainnet) => 1,
+      (ChainKind.ethereum, ChainNetwork.testnet) => 2,
+      (ChainKind.ethereum, ChainNetwork.mainnet) => 3,
+      (ChainKind.base, ChainNetwork.testnet) => 4,
+      (ChainKind.base, ChainNetwork.mainnet) => 5,
+    };
+
+(ChainKind, ChainNetwork) _scopeFromPairCode(int code) => switch (code) {
+  0 => (ChainKind.solana, ChainNetwork.testnet),
+  1 => (ChainKind.solana, ChainNetwork.mainnet),
+  2 => (ChainKind.ethereum, ChainNetwork.testnet),
+  3 => (ChainKind.ethereum, ChainNetwork.mainnet),
+  4 => (ChainKind.base, ChainNetwork.testnet),
+  5 => (ChainKind.base, ChainNetwork.mainnet),
+  _ => throw const FormatException('Unknown Bitsend Pair network scope.'),
+};
+
+Uint8List _inviteAddressToBytes(ChainKind chain, String address) {
+  if (chain == ChainKind.solana) {
+    return Uint8List.fromList(Ed25519HDPublicKey.fromBase58(address).bytes);
+  }
+  return Uint8List.fromList(EthereumAddress.fromHex(address).addressBytes);
+}
+
+String _inviteAddressFromBytes(ChainKind chain, Uint8List bytes) {
+  if (chain == ChainKind.solana) {
+    return Ed25519HDPublicKey(bytes).toBase58();
+  }
+  return EthereumAddress(bytes).hexEip55;
+}
+
+Uint8List _hotspotEndpointToBytes(String? endpoint) {
+  final String normalized = (endpoint ?? '').trim();
+  if (normalized.isEmpty) {
+    throw const FormatException('Hotspot pair code needs a receiver endpoint.');
+  }
+  final Uri uri = Uri.parse(normalized);
+  if (uri.host.isEmpty || !RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(uri.host)) {
+    throw const FormatException(
+      'Only IPv4 hotspot endpoints are supported in the custom pair code.',
+    );
+  }
+  final List<String> octets = uri.host.split('.');
+  if (octets.length != 4) {
+    throw const FormatException('Hotspot endpoint host must be IPv4.');
+  }
+  final int port = uri.hasPort ? uri.port : 80;
+  if (port <= 0 || port > 65535) {
+    throw const FormatException('Hotspot endpoint port is invalid.');
+  }
+  return Uint8List.fromList(<int>[
+    for (final String octet in octets) int.parse(octet),
+    (port >> 8) & 0xff,
+    port & 0xff,
+  ]);
+}
+
+String _hotspotEndpointFromBytes(Uint8List bytes) {
+  if (bytes.length != 6) {
+    throw const FormatException('Hotspot endpoint bytes must be 6 bytes long.');
+  }
+  final String host = '${bytes[0]}.${bytes[1]}.${bytes[2]}.${bytes[3]}';
+  final int port = (bytes[4] << 8) | bytes[5];
+  return 'http://$host:$port';
 }
 
 class Formatters {

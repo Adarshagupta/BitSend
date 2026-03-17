@@ -1,21 +1,25 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart' as path_provider;
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:solana/solana.dart' show isValidAddress;
 
 import '../app/app.dart';
 import '../app/theme.dart';
 import '../models/app_models.dart';
+import '../services/bitsend_pair_camera_service.dart';
+import '../services/bitsend_pair_mark_service.dart';
+import '../services/transport_contract.dart';
 import '../state/app_state.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/bitsend_pair_code.dart';
 
 class BootScreen extends StatefulWidget {
   const BootScreen({super.key});
@@ -1133,7 +1137,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
       }
       _showSnack(
         context,
-        'Receiver QR scanned. Select the nearby BLE receiver to continue.',
+        'Pair code scanned. Select the nearby BLE receiver to continue.',
       );
       Navigator.of(context).pushNamed(AppRoutes.sendTransport);
     } catch (error) {
@@ -1435,10 +1439,10 @@ class _HomeScanShortcutButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: 'Scan receiver QR and send',
+      message: 'Scan pair code and send',
       child: Semantics(
         button: true,
-        label: 'Scan receiver QR and send',
+        label: 'Scan pair code and send',
         child: Material(
           color: Colors.transparent,
           child: InkWell(
@@ -2105,7 +2109,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
         state.sendDraft.receiverRelayId.isEmpty) {
       _showSnack(
         context,
-        'Scan the receiver ultrasonic QR before continuing.',
+        'Scan the receiver pair code before continuing.',
       );
       return;
     }
@@ -2118,7 +2122,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
             ? 'Receiver address and endpoint are required.'
             : state.sendDraft.transport == TransportKind.ble
             ? 'Receiver address and a discovered BLE device are required.'
-            : 'Scan the receiver ultrasonic QR before continuing.',
+            : 'Scan the receiver pair code before continuing.',
       );
       return;
     }
@@ -2187,10 +2191,10 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
       if (!readyForAmount &&
           invite.transport == TransportKind.ble &&
           state.activeWalletEngine == WalletEngine.local) {
-        _showSnack(
-          context,
-          'Receiver QR scanned. Select the nearby BLE receiver to continue.',
-        );
+      _showSnack(
+        context,
+        'Pair code scanned. Select the nearby BLE receiver to continue.',
+      );
       }
     } catch (error) {
       final String message = _messageFor(error);
@@ -2240,8 +2244,8 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
               if (showUltrasonic)
                 const ButtonSegment<TransportKind>(
                   value: TransportKind.ultrasonic,
-                  label: Text('Ultrasonic'),
-                  icon: Icon(Icons.graphic_eq_rounded),
+                  label: Text('Bitsend Pair'),
+                  icon: Icon(Icons.phonelink_lock_rounded),
                 ),
             ],
             selected: <TransportKind>{transport},
@@ -2264,7 +2268,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
           OutlinedButton.icon(
             onPressed: () => _scanReceiverQr(state),
             icon: const Icon(Icons.qr_code_scanner_rounded),
-            label: const Text('Scan receiver QR'),
+            label: const Text('Scan pair code'),
           ),
           const SizedBox(height: 16),
           SectionCard(
@@ -2317,10 +2321,10 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                 if (transport == TransportKind.ultrasonic) ...<Widget>[
                   const SizedBox(height: 18),
                   const InlineBanner(
-                    title: 'QR pairing required',
+                    title: 'Pair code required',
                     caption:
-                        'Ultrasonic handoff is paired through the receiver QR. Scan the receiver QR to fill the address, session token, and relay id before continuing.',
-                    icon: Icons.qr_code_rounded,
+                        'Bitsend Pair is bootstrapped through the receiver pair code. Scan the pair code to fill the address, session token, and relay id before continuing.',
+                    icon: Icons.phonelink_lock_rounded,
                   ),
                 ] else if (usingBitGo &&
                     transport == TransportKind.hotspot) ...<Widget>[
@@ -2328,7 +2332,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                   const InlineBanner(
                     title: 'Endpoint not needed',
                     caption:
-                        'In BitGo mode, hotspot QR is only used to prefill the receiver address. Submission happens online through the backend.',
+                        'In BitGo mode, the hotspot pair code only prefills the receiver address. Submission happens online through the backend.',
                     icon: Icons.cloud_sync_rounded,
                   ),
                 ] else if (transport == TransportKind.hotspot) ...<Widget>[
@@ -2780,6 +2784,13 @@ class SendReviewScreen extends StatelessWidget {
           ? Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
+                const InlineBanner(
+                  title: 'Courier relay available',
+                  caption:
+                      'Open the relay screen to copy a browser courier link for a phone without Bitsend. No QR is shown in this flow.',
+                  icon: Icons.link_rounded,
+                ),
+                const SizedBox(height: 10),
                 ElevatedButton(
                   onPressed: amountLimitMessage != null
                       ? null
@@ -2795,7 +2806,7 @@ class SendReviewScreen extends StatelessWidget {
                       : () {
                           Navigator.of(context).pushNamed(AppRoutes.sendRelay);
                         },
-                  child: const Text('Relay via browser courier'),
+                  child: const Text('Open courier relay'),
                 ),
               ],
             )
@@ -2861,7 +2872,8 @@ class _SendRelayScreenState extends State<SendRelayScreen> {
     final PreparedRelayCapsule? prepared = _prepared;
     return BitsendPageScaffold(
       title: 'Browser relay',
-      subtitle: 'Show this QR or copy the link on a browser courier device.',
+      subtitle:
+          'Copy or share a courier link for a phone without Bitsend. The browser stores the encrypted capsule and uploads it later when internet is available.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -2886,12 +2898,18 @@ class _SendRelayScreenState extends State<SendRelayScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Center(
-                    child: QrImageView(
+                    child: BitsendPairCodeView(
                       data: prepared.relayUrl.toString(),
-                      version: QrVersions.auto,
                       size: 220,
-                      backgroundColor: Colors.white,
+                      semanticsLabel: 'Browser courier link',
                     ),
+                  ),
+                  const SizedBox(height: 16),
+                  const InlineBanner(
+                    title: 'Courier link ready',
+                    caption:
+                        'Copy this encrypted courier link to any browser-capable phone. The relay path is link-only in this build, with no QR shown.',
+                    icon: Icons.public_rounded,
                   ),
                   const SizedBox(height: 16),
                   DetailRow(
@@ -3064,7 +3082,7 @@ class _SendProgressScreenState extends State<SendProgressScreen> {
                   ? 'The signed envelope is sent to the receiver over the local network.'
                   : transport == TransportKind.ble
                   ? 'The signed envelope is sent to the receiver over BLE.'
-                  : 'The signed envelope is sent over the ultrasonic session.',
+                  : 'The signed envelope is sent over the Bitsend Pair session.',
               complete: _stage > 1,
               current: _stage == 1,
             ),
@@ -3527,8 +3545,8 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
     return BitsendPageScaffold(
       title: 'Receive',
       subtitle: usingBitGo
-          ? 'BitGo mode does not listen offline. Switch back to Local mode to receive over hotspot, BLE, or ultrasonic.'
-          : 'Catch a signed handoff over hotspot, BLE, or ultrasonic.',
+          ? 'BitGo mode does not listen offline. Switch back to Local mode to receive over hotspot, BLE, or Bitsend Pair.'
+          : 'Catch a signed handoff over hotspot, BLE, or Bitsend Pair.',
       onRefresh: state.working ? null : state.refreshStatus,
       showBack: false,
       showHeader: false,
@@ -3544,7 +3562,7 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
             const InlineBanner(
               title: 'BitGo mode does not listen offline',
               caption:
-                  'Switch back to Local mode from the header to receive over hotspot, BLE, or ultrasonic.',
+                  'Switch back to Local mode from the header to receive over hotspot, BLE, or Bitsend Pair.',
               icon: Icons.shield_outlined,
             ),
             const SizedBox(height: 16),
@@ -8593,26 +8611,27 @@ class _ReceiveStudioCard extends StatelessWidget {
         : switch (transport) {
             TransportKind.hotspot => 'Open same-network receive',
             TransportKind.ble => 'Open Bluetooth receive',
-            TransportKind.ultrasonic => 'Open ultrasonic receive',
+            TransportKind.ultrasonic => 'Open Bitsend Pair receive',
           };
     final String caption = !hasWallet
         ? 'Create or restore a wallet first.'
         : switch (transport) {
             TransportKind.hotspot => activeListener
-                ? 'Share the QR on the same Wi-Fi or hotspot. The sender fills your address and endpoint in one scan.'
+                ? 'Share the pair code on the same Wi-Fi or hotspot. The sender fills your address and endpoint in one scan.'
                 : 'Start when both phones share the same Wi-Fi or hotspot.',
             TransportKind.ble => activeListener
                 ? 'Keep Bluetooth on and leave this screen open so nearby senders can discover this receiver.'
                 : 'Start when Bluetooth is on and both phones are nearby.',
             TransportKind.ultrasonic => activeListener
-                ? 'Share the QR to pair an ultrasonic or browser relay session. The sender gets your address, session token, and relay id in one scan.'
-                : 'Start to mint a fresh ultrasonic session token and relay id.',
+                ? 'Share the pair code to start a direct or browser relay session. The sender gets your address, session token, and relay id in one scan.'
+                : 'Start to mint a fresh Bitsend Pair session token and relay id.',
           };
     final String helper = switch (transport) {
       TransportKind.hotspot => endpoint ?? 'Join a local Wi-Fi or hotspot first.',
       TransportKind.ble => 'bitsend BLE receiver',
       TransportKind.ultrasonic =>
-        invite?.relayId ?? 'A fresh relay id appears after ultrasonic receive starts.',
+        invite?.relayId ??
+            'A fresh relay id appears after Bitsend Pair receive starts.',
     };
     final String helperLabel = switch (transport) {
       TransportKind.hotspot => 'Endpoint',
@@ -8643,8 +8662,8 @@ class _ReceiveStudioCard extends StatelessWidget {
               if (showUltrasonic)
                 const ButtonSegment<TransportKind>(
                   value: TransportKind.ultrasonic,
-                  label: Text('Ultrasonic'),
-                  icon: Icon(Icons.graphic_eq_rounded),
+                  label: Text('Bitsend Pair'),
+                  icon: Icon(Icons.phonelink_lock_rounded),
                 ),
             ],
             selected: <TransportKind>{transport},
@@ -8883,18 +8902,20 @@ class _ReceiveStudioCard extends StatelessWidget {
                               TextButton.icon(
                                 onPressed: () async {
                                   await Clipboard.setData(
-                                    ClipboardData(text: invite!.toQrData()),
+                                    ClipboardData(
+                                      text: invite!.toPairCodeData(),
+                                    ),
                                   );
                                   if (!context.mounted) {
                                     return;
                                   }
                                   _showSnack(
                                     context,
-                                    'Receiver QR payload copied.',
+                                    'Pair code payload copied.',
                                   );
                                 },
                                 icon: const Icon(Icons.copy_all_rounded),
-                                label: const Text('Copy QR'),
+                                label: const Text('Copy pair code'),
                               ),
                           ],
                         ),
@@ -8932,13 +8953,13 @@ class _ReceiveHeroQr extends StatelessWidget {
         ? switch (transport) {
             TransportKind.hotspot => activeListener
                 ? 'Waiting for the local endpoint.'
-                : 'Start hotspot receive to show the live QR.',
+                : 'Start hotspot receive to show the live pair code.',
             TransportKind.ble => activeListener
                 ? 'BLE is live. Nearby senders can detect this receiver.'
-                : 'Start BLE receive to show the live QR.',
+                : 'Start BLE receive to show the live pair code.',
             TransportKind.ultrasonic => activeListener
-                ? 'Ultrasonic pairing is live. Senders can scan this QR for direct handoff or browser relay.'
-                : 'Start ultrasonic receive to show the live pairing QR.',
+                ? 'Bitsend Pair is live. Senders can scan this pair code for direct handoff or browser relay.'
+                : 'Start Bitsend Pair receive to show the live pair code.',
           }
         : switch (transport) {
             TransportKind.hotspot => 'Scan to fill address and endpoint.',
@@ -8961,24 +8982,14 @@ class _ReceiveHeroQr extends StatelessWidget {
           ),
         ],
       ),
-      child: Column(
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           if (invite != null)
-            QrImageView(
-              data: invite!.toQrData(),
-              version: QrVersions.auto,
+            BitsendPairMarkView(
+              payloadBytes: invite!.toPairMarkBytes(),
               size: 184,
-              backgroundColor: Colors.white,
-              eyeStyle: const QrEyeStyle(
-                eyeShape: QrEyeShape.square,
-                color: AppColors.ink,
-              ),
-              dataModuleStyle: const QrDataModuleStyle(
-                dataModuleShape: QrDataModuleShape.square,
-                color: AppColors.ink,
-              ),
-              semanticsLabel: 'Receiver QR code',
+              semanticsLabel: 'Bitsend Pair code',
             )
           else
             Container(
@@ -8995,7 +9006,8 @@ class _ReceiveHeroQr extends StatelessWidget {
                           Icons.wifi_tethering_rounded,
                         TransportKind.ble =>
                           Icons.bluetooth_searching_rounded,
-                        TransportKind.ultrasonic => Icons.graphic_eq_rounded,
+                        TransportKind.ultrasonic =>
+                          Icons.phonelink_lock_rounded,
                       }
                     : Icons.account_balance_wallet_outlined,
                 size: 44,
@@ -9004,7 +9016,7 @@ class _ReceiveHeroQr extends StatelessWidget {
             ),
           const SizedBox(height: 14),
           Text(
-            activeListener ? 'Share QR' : 'Ready QR',
+            activeListener ? 'Share pair code' : 'Ready pair code',
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 6),
@@ -9236,7 +9248,7 @@ Future<bool> _prepareScannedReceiverDraft(
   if (state.activeWalletEngine == WalletEngine.bitgo &&
       invite.transport == TransportKind.ultrasonic) {
     throw const FormatException(
-      'Ultrasonic pairing is only available in Local wallet mode.',
+      'Bitsend Pair is only available in Local wallet mode.',
     );
   }
   state.clearDraft();
@@ -9321,27 +9333,43 @@ class _ReceiverQrScannerScreen extends StatefulWidget {
 }
 
 class _ReceiverQrScannerScreenState extends State<_ReceiverQrScannerScreen> {
-  final MobileScannerController _controller = MobileScannerController(
-    formats: const <BarcodeFormat>[BarcodeFormat.qrCode],
-  );
-  bool _handled = false;
+  final BitsendPairCameraService _cameraService = BitsendPairCameraService();
+  final BitsendPairMarkService _markService = const BitsendPairMarkService();
+  bool _capturing = false;
+  bool _started = false;
   String? _error;
 
-  Future<void> _handleCapture(BarcodeCapture capture) async {
-    if (_handled || capture.barcodes.isEmpty) {
-      return;
-    }
-    final String? raw = capture.barcodes.first.rawValue;
-    if (raw == null || raw.trim().isEmpty) {
-      return;
-    }
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startCapture();
+    });
+  }
 
+  Future<void> _startCapture() async {
+    if (_capturing || _started) {
+      return;
+    }
+    _started = true;
+    await _capture();
+  }
+
+  Future<void> _capture() async {
+    if (_capturing) {
+      return;
+    }
     try {
-      final ReceiverInvitePayload invite = ReceiverInvitePayload.fromQrData(
-        raw,
-      );
-      _handled = true;
-      await _controller.stop();
+      if (mounted) {
+        setState(() {
+          _capturing = true;
+          _error = null;
+        });
+      }
+      final Uint8List captureBytes = await _cameraService.capturePreview();
+      final Uint8List payloadBytes = _markService.decodeImageBytes(captureBytes);
+      final ReceiverInvitePayload invite = ReceiverInvitePayload
+          .fromPairMarkBytes(payloadBytes);
       if (!mounted) {
         return;
       }
@@ -9352,35 +9380,24 @@ class _ReceiverQrScannerScreenState extends State<_ReceiverQrScannerScreen> {
       }
       setState(() {
         _error = _messageFor(error);
+        _capturing = false;
       });
     }
   }
 
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final bool supported = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: <Widget>[
-          MobileScanner(
-            controller: _controller,
-            onDetect: (BarcodeCapture capture) {
-              _handleCapture(capture);
-            },
-            onDetectError: (Object error, StackTrace stackTrace) {
-              if (!mounted) {
-                return;
-              }
-              setState(() {
-                _error = _messageFor(error);
-              });
-            },
+          const IgnorePointer(
+            child: Center(
+              child: _PairScannerReticle(
+                label: 'Frame the full Bitsend Pair mark',
+              ),
+            ),
           ),
           SafeArea(
             child: Padding(
@@ -9408,14 +9425,16 @@ class _ReceiverQrScannerScreenState extends State<_ReceiverQrScannerScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
                         Text(
-                          'Scan receiver QR',
+                          'Capture pair code',
                           style: Theme.of(
                             context,
                           ).textTheme.titleLarge?.copyWith(color: Colors.white),
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Point the camera at the receiver QR to fill the address and transport.',
+                          supported
+                              ? 'Take a photo of the Bitsend Pair mark to fill the address and transport.'
+                              : 'Custom pair capture is only available on Android in this build.',
                           style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(color: Colors.white70),
                         ),
@@ -9427,6 +9446,21 @@ class _ReceiverQrScannerScreenState extends State<_ReceiverQrScannerScreen> {
                                 ?.copyWith(color: AppColors.amberTint),
                           ),
                         ],
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: supported && !_capturing ? _capture : null,
+                            icon: Icon(
+                              _capturing
+                                  ? Icons.hourglass_top_rounded
+                                  : Icons.camera_alt_rounded,
+                            ),
+                            label: Text(
+                              _capturing ? 'Opening camera...' : 'Open camera',
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -9436,6 +9470,96 @@ class _ReceiverQrScannerScreenState extends State<_ReceiverQrScannerScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _PairScannerReticle extends StatelessWidget {
+  const _PairScannerReticle({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Container(
+          width: 246,
+          height: 246,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.92),
+              width: 1.6,
+            ),
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            children: <Widget>[
+              Container(
+                width: 190,
+                height: 190,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: AppColors.amberTint.withValues(alpha: 0.82),
+                    width: 1.4,
+                  ),
+                ),
+              ),
+              Container(
+                width: 136,
+                height: 136,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(36),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.88),
+                    width: 1.2,
+                  ),
+                ),
+              ),
+              for (final Alignment alignment in <Alignment>[
+                Alignment.topCenter,
+                Alignment.centerRight,
+                Alignment.bottomCenter,
+                Alignment.centerLeft,
+              ])
+                Align(
+                  alignment: alignment,
+                  child: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: AppColors.amber,
+                      shape: BoxShape.circle,
+                      boxShadow: <BoxShadow>[
+                        BoxShadow(
+                          color: AppColors.amber.withValues(alpha: 0.4),
+                          blurRadius: 10,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.42),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(
+            label,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: Colors.white),
+          ),
+        ),
+      ],
     );
   }
 }

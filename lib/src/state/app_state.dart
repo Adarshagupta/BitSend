@@ -1135,14 +1135,14 @@ class BitsendAppState extends ChangeNotifier {
         _sendDraft.transport == TransportKind.ultrasonic &&
         _sendDraft.receiverSessionToken.isEmpty) {
       throw const FormatException(
-        'Scan the receiver ultrasonic QR before sending.',
+        'Scan the receiver pair code before sending.',
       );
     }
     if (_activeWalletEngine == WalletEngine.local &&
         _sendDraft.transport == TransportKind.ultrasonic &&
         _sendDraft.receiverRelayId.isEmpty) {
       throw const FormatException(
-        'Receiver relay details are missing. Scan the receiver QR again.',
+        'Receiver relay details are missing. Scan the pair code again.',
       );
     }
     if (_activeChain.isEvm &&
@@ -1244,7 +1244,7 @@ class BitsendAppState extends ChangeNotifier {
               ? 'BLE discovery'
               : _sendDraft.receiverPeripheralName,
           TransportKind.ultrasonic => _sendDraft.receiverRelayId.isEmpty
-              ? 'Ultrasonic pairing'
+              ? 'Bitsend Pair session'
               : _sendDraft.receiverRelayId,
         },
         transactionSignature: snapshot.transactionSignature,
@@ -1307,7 +1307,7 @@ class BitsendAppState extends ChangeNotifier {
       remoteEndpoint: switch (_sendDraft.transport) {
         TransportKind.hotspot => _sendDraft.receiverEndpoint,
         TransportKind.ble => _sendDraft.receiverPeripheralName,
-        TransportKind.ultrasonic => 'Ultrasonic direct',
+        TransportKind.ultrasonic => 'Bitsend Pair direct',
       },
       transactionSignature: details.transactionSignature,
     );
@@ -1330,14 +1330,14 @@ class BitsendAppState extends ChangeNotifier {
     }
     if (_sendDraft.transport != TransportKind.ultrasonic) {
       throw const FormatException(
-        'Browser relay is only available for ultrasonic receiver sessions.',
+        'Browser relay is only available for Bitsend Pair sessions.',
       );
     }
     if (_sendDraft.receiverAddress.isEmpty ||
         _sendDraft.receiverSessionToken.isEmpty ||
         _sendDraft.receiverRelayId.isEmpty) {
       throw const FormatException(
-        'Scan the receiver ultrasonic QR before creating a relay capsule.',
+        'Scan the receiver pair code before creating a relay capsule.',
       );
     }
     final int lamports = _activeChain.amountToBaseUnits(_sendDraft.amountSol);
@@ -1382,6 +1382,29 @@ class BitsendAppState extends ChangeNotifier {
     );
     clearDraft();
     return prepared;
+  }
+
+  Future<TransportReceiveResult> importRelayCapsule(
+    RelayCapsule capsule,
+  ) async {
+    final PendingRelaySession? session = _pendingRelaySessions[capsule.relayId];
+    if (session == null) {
+      throw const FormatException(
+        'This relay capsule does not match an active receive session on this device.',
+      );
+    }
+    if (session.isExpired) {
+      await _removePendingRelaySession(session.relayId);
+      throw const FormatException(
+        'This relay capsule expired. Start receive again to mint a fresh session.',
+      );
+    }
+    final UltrasonicTransferPacket packet = await _relayCryptoService
+        .decryptCapsule(
+          capsule: capsule,
+          sessionToken: session.sessionToken,
+        );
+    return _handleIncomingUltrasonicPacket(packet);
   }
 
   Future<(
@@ -1465,7 +1488,7 @@ class BitsendAppState extends ChangeNotifier {
     );
     if (packet.toBytes().length > UltrasonicTransferPacket.maximumEncodedLength) {
       throw const FormatException(
-        'Signed payload is too large for ultrasonic delivery. Use Relay via browser courier or BLE.',
+        'Signed payload is too large for Bitsend Pair delivery. Use Relay via browser courier or BLE.',
       );
     }
     return packet;
@@ -1477,14 +1500,14 @@ class BitsendAppState extends ChangeNotifier {
     if (!packet.isChecksumValid) {
       return const TransportReceiveResult(
         accepted: false,
-        message: 'Ultrasonic packet checksum mismatch.',
+        message: 'Bitsend Pair packet checksum mismatch.',
       );
     }
     final PendingRelaySession? session = _relaySessionForPacket(packet);
     if (session == null) {
       return const TransportReceiveResult(
         accepted: false,
-        message: 'Receiver session token does not match this ultrasonic packet.',
+        message: 'Receiver session token does not match this Bitsend Pair packet.',
       );
     }
     final OfflineEnvelope envelope = _buildEnvelopeFromUltrasonicPacket(packet);
@@ -1554,7 +1577,7 @@ class BitsendAppState extends ChangeNotifier {
   Future<void> startReceiver() async {
     if (_activeWalletEngine == WalletEngine.bitgo) {
       throw const FormatException(
-        'BitGo mode does not use offline receive. Switch to Local mode to listen over hotspot, BLE, or ultrasonic.',
+        'BitGo mode does not use offline receive. Switch to Local mode to listen over hotspot, BLE, or Bitsend Pair.',
       );
     }
     if (_wallet == null) {
@@ -1566,7 +1589,7 @@ class BitsendAppState extends ChangeNotifier {
       await requestUltrasonicPermissions();
       if (!_ultrasonicPermissionsGranted) {
         throw const FormatException(
-          'Microphone access is required for ultrasonic receive.',
+          'Microphone access is required for Bitsend Pair receive.',
         );
       }
     }
@@ -1603,7 +1626,7 @@ class BitsendAppState extends ChangeNotifier {
         );
       } catch (_) {
         _announce(
-          'Ultrasonic relay session is ready. Direct ultrasonic delivery is unavailable on this build, but the QR can still be used for browser relay.',
+          'Bitsend Pair is ready. Direct audio delivery is unavailable on this build, but the pair code can still be used for browser relay.',
         );
       }
       _ultrasonicListenerRunning = true;

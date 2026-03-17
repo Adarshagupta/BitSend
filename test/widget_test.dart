@@ -88,7 +88,7 @@ void main() {
       find.textContaining('Move funds to the offline wallet'),
       findsOneWidget,
     );
-    expect(find.byTooltip('Scan receiver QR and send'), findsOneWidget);
+    expect(find.byTooltip('Scan pair code and send'), findsOneWidget);
   });
 
   testWidgets('home explains offline balance is reserved instead of asking for top up', (
@@ -244,11 +244,11 @@ void main() {
     );
 
     expect(find.text('Ready to catch a handoff'), findsOneWidget);
-    expect(find.text('Share QR'), findsOneWidget);
+    expect(find.text('Share pair code'), findsOneWidget);
     expect(find.text('Stop listener'), findsOneWidget);
   });
 
-  testWidgets('receive screen shows ultrasonic relay details when supported', (
+  testWidgets('receive screen shows Bitsend Pair relay details when supported', (
     WidgetTester tester,
   ) async {
     final _TestBitsendAppState state = _TestBitsendAppState(
@@ -272,9 +272,10 @@ void main() {
       child: const ReceiveListenScreen(),
     );
 
-    expect(find.text('Ultrasonic'), findsAtLeastNWidgets(1));
+    expect(find.text('Bitsend Pair'), findsAtLeastNWidgets(1));
     expect(find.text('Relay ID:'), findsOneWidget);
     expect(find.text('relay-session-1'), findsOneWidget);
+    expect(find.text('Copy pair code'), findsOneWidget);
   });
 
   testWidgets('receive result screen shows the stored transfer details', (
@@ -362,7 +363,7 @@ void main() {
     expect(find.text('Copy Fileverse link'), findsOneWidget);
   });
 
-  testWidgets('receive screen hides hotspot QR until listener is live', (
+  testWidgets('receive screen hides hotspot pair code until listener is live', (
     WidgetTester tester,
   ) async {
     final _TestBitsendAppState state = _TestBitsendAppState(
@@ -379,10 +380,10 @@ void main() {
     );
 
     expect(
-      find.text('Start hotspot receive to show the live QR.'),
+      find.text('Start hotspot receive to show the live pair code.'),
       findsOneWidget,
     );
-    expect(find.text('Copy QR'), findsNothing);
+    expect(find.text('Copy pair code'), findsNothing);
   });
 
   testWidgets(
