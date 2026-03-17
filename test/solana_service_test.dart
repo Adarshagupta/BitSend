@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:bitsend/src/models/app_models.dart';
 import 'package:bitsend/src/services/solana_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:solana/dto.dart';
@@ -129,6 +133,38 @@ void main() {
       expect(details.senderAddress, sender.address);
       expect(details.receiverAddress, receiver.address);
       expect(details.amountLamports, 250000000);
+      expect(details.transactionSignature, isNotEmpty);
+    });
+
+    test('validates raw signed transaction bytes', () async {
+      final SolanaService service = SolanaService(
+        rpcEndpoint: 'https://api.devnet.solana.com',
+      );
+      final Ed25519HDKeyPair sender = await Ed25519HDKeyPair.random();
+      final Ed25519HDKeyPair receiver = await Ed25519HDKeyPair.random();
+
+      final envelope = await service.createSignedEnvelope(
+        sender: sender,
+        receiverAddress: receiver.address,
+        lamports: 150000000,
+        cachedBlockhash: CachedBlockhash(
+          blockhash: '11111111111111111111111111111111',
+          lastValidBlockHeight: 1,
+          fetchedAt: DateTime(2026, 3, 14, 12),
+        ),
+        transferId: 'tx-validate-bytes',
+        createdAt: DateTime(2026, 3, 14, 12),
+        transportKind: TransportKind.ultrasonic,
+      );
+
+      final ValidatedTransactionDetails details =
+          service.validateSignedTransactionBytes(
+            base64Decode(envelope.signedTransactionBase64),
+          );
+
+      expect(details.senderAddress, sender.address);
+      expect(details.receiverAddress, receiver.address);
+      expect(details.amountLamports, 150000000);
       expect(details.transactionSignature, isNotEmpty);
     });
   });

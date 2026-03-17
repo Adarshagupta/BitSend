@@ -88,6 +88,43 @@ void main() {
       );
     });
 
+    test('validates raw signed transaction bytes', () async {
+      final EthereumService service = EthereumService(
+        rpcEndpoint: 'http://localhost:8545',
+      )..network = ChainNetwork.testnet;
+      final EthPrivateKey sender = EthPrivateKey.fromInt(BigInt.from(8));
+      final String senderAddress = (await sender.extractAddress()).hexEip55;
+      final String receiverAddress =
+          (await EthPrivateKey.fromInt(BigInt.from(9)).extractAddress())
+              .hexEip55;
+
+      final OfflineEnvelope envelope = await service.createSignedEnvelope(
+        sender: sender,
+        senderAddress: senderAddress,
+        receiverAddress: receiverAddress,
+        amountBaseUnits: BigInt.from(3100000000000000).toInt(),
+        preparedContext: const EthereumPreparedContext(
+          nonce: 2,
+          gasPriceWei: 2000000000,
+          chainId: EthereumService.sepoliaChainId,
+          fetchedAt: DateTime(2026, 3, 14, 12),
+        ),
+        transferId: 'eth-bytes-test',
+        createdAt: DateTime(2026, 3, 14, 12),
+        transportKind: TransportKind.ultrasonic,
+      );
+
+      final ValidatedTransactionDetails details =
+          service.validateSignedTransactionBytes(
+            base64Decode(envelope.signedTransactionBase64),
+          );
+
+      expect(details.senderAddress, senderAddress);
+      expect(details.receiverAddress, receiverAddress);
+      expect(details.amountLamports, BigInt.from(3100000000000000).toInt());
+      expect(details.transactionSignature, startsWith('0x'));
+    });
+
     test('rejects a tampered receiver even when checksum is recomputed', () async {
       final EthereumService service = EthereumService(
         rpcEndpoint: 'http://localhost:8545',

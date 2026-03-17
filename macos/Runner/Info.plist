@@ -26,6 +26,8 @@
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Bitsend uses microphone access for ultrasonic pairing on supported platforms.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

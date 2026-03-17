@@ -39,6 +39,19 @@ type SessionRecord = {
   expiresAt: string;
 };
 
+type RelayCapsuleInput = {
+  version: number;
+  relayId: string;
+  createdAt: string;
+  nonceBase64: string;
+  encryptedPacketBase64: string;
+};
+
+type RelayCapsuleRecord = RelayCapsuleInput & {
+  storedAt: string;
+  expiresAt: string;
+};
+
 type SubmitTransferInput = {
   chain: AppChain;
   network: AppNetwork;
@@ -59,7 +72,7 @@ type FileverseReceiptInput = {
   amountLabel: string;
   senderAddress: string;
   receiverAddress: string;
-  transport: 'hotspot' | 'ble';
+  transport: 'hotspot' | 'ble' | 'ultrasonic';
   updatedAt: string;
   createdAt: string;
   transactionSignature?: string;
@@ -88,7 +101,7 @@ type StoredFileverseReceiptRecord = FileverseReceiptRecord & {
   amountLabel: string;
   senderAddress: string;
   receiverAddress: string;
-  transport: 'hotspot' | 'ble';
+  transport: 'hotspot' | 'ble' | 'ultrasonic';
   updatedAt: string;
   createdAt: string;
   transactionSignature?: string;
@@ -122,6 +135,7 @@ interface Env {
 }
 
 const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000;
+const relayCapsuleLifetimeMs = 24 * 60 * 60 * 1000;
 const fileverseSyncPollAttempts = 45;
 const fileverseSyncPollDelayMs = 2000;
 const bitgoRequestTimeoutMs = 20000;
@@ -280,6 +294,37 @@ export default {
         return jsonResponse(clientFileverseReceiptRecord(receipt));
       }
 
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/v1/relay/capsules'
+      ) {
+        const body = await parseJsonBody(request);
+        const input = validateRelayCapsuleInput(body);
+        const capsule = await storeRelayCapsule(state, input);
+        return jsonResponse(clientRelayCapsuleRecord(capsule));
+      }
+
+      if (
+        request.method === 'GET' &&
+        url.pathname.startsWith('/v1/relay/capsules/')
+      ) {
+        const relayId = decodeURIComponent(
+          url.pathname.substring('/v1/relay/capsules/'.length),
+        );
+        const capsule = await state.loadRelayCapsule(relayId);
+        if (!capsule) {
+          return jsonResponse(
+            { message: 'Relay capsule not found or expired.' },
+            404,
+          );
+        }
+        return jsonResponse(clientRelayCapsuleRecord(capsule));
+      }
+
+      if (request.method === 'GET' && url.pathname === '/relay/import') {
+        return htmlResponse(renderRelayImportPage());
+      }
+
       return jsonResponse({ message: 'Not found.' }, 404);
     } catch (error) {
       const message =
@@ -365,6 +410,24 @@ export class BitGoState extends DurableObject<Env> {
         fileverseReceiptKey(receiptId),
       )) ?? null
     );
+  }
+
+  async saveRelayCapsule(capsule: RelayCapsuleRecord): Promise<void> {
+    await this.ctx.storage.put(relayCapsuleKey(capsule.relayId), capsule);
+  }
+
+  async loadRelayCapsule(relayId: string): Promise<RelayCapsuleRecord | null> {
+    const capsule = await this.ctx.storage.get<RelayCapsuleRecord>(
+      relayCapsuleKey(relayId),
+    );
+    if (!capsule) {
+      return null;
+    }
+    if (Date.parse(capsule.expiresAt) <= Date.now()) {
+      await this.ctx.storage.delete(relayCapsuleKey(relayId));
+      return null;
+    }
+    return capsule;
   }
 }
 
@@ -534,6 +597,46 @@ function clientFileverseReceiptRecord(
     upstreamUrl: receipt.upstreamUrl,
     storageMode: receipt.storageMode,
     message: receipt.message,
+  };
+}
+
+async function storeRelayCapsule(
+  state: DurableObjectStub<BitGoState>,
+  input: RelayCapsuleInput,
+): Promise<RelayCapsuleRecord> {
+  const existing = await state.loadRelayCapsule(input.relayId);
+  if (existing) {
+    return existing;
+  }
+
+  const createdAtMs = Date.parse(input.createdAt);
+  if (!Number.isFinite(createdAtMs)) {
+    throw new HttpError(400, 'Relay capsule createdAt is invalid.');
+  }
+  if (createdAtMs + relayCapsuleLifetimeMs <= Date.now()) {
+    throw new HttpError(410, 'Relay capsule expired.');
+  }
+
+  const now = new Date();
+  const capsule: RelayCapsuleRecord = {
+    ...input,
+    createdAt: new Date(createdAtMs).toISOString(),
+    storedAt: now.toISOString(),
+    expiresAt: new Date(createdAtMs + relayCapsuleLifetimeMs).toISOString(),
+  };
+  await state.saveRelayCapsule(capsule);
+  return capsule;
+}
+
+function clientRelayCapsuleRecord(
+  capsule: RelayCapsuleRecord,
+): RelayCapsuleInput {
+  return {
+    version: capsule.version,
+    relayId: capsule.relayId,
+    createdAt: capsule.createdAt,
+    nonceBase64: capsule.nonceBase64,
+    encryptedPacketBase64: capsule.encryptedPacketBase64,
   };
 }
 
@@ -1257,7 +1360,11 @@ function validateFileverseReceiptInput(body: unknown): FileverseReceiptInput {
   if (direction !== 'inbound' && direction !== 'outbound') {
     throw new HttpError(400, 'Missing direction.');
   }
-  if (transport !== 'hotspot' && transport !== 'ble') {
+  if (
+    transport !== 'hotspot' &&
+    transport !== 'ble' &&
+    transport !== 'ultrasonic'
+  ) {
     throw new HttpError(400, 'Missing transport.');
   }
   if (!transferId) {
@@ -1299,6 +1406,44 @@ function validateFileverseReceiptInput(body: unknown): FileverseReceiptInput {
     transactionSignature: transactionSignature ?? undefined,
     explorerUrl: explorerUrl ?? undefined,
     receiptPngBase64,
+  };
+}
+
+function validateRelayCapsuleInput(body: unknown): RelayCapsuleInput {
+  if (typeof body !== 'object' || body == null) {
+    throw new HttpError(400, 'Invalid relay capsule payload.');
+  }
+  const input = body as Record<string, unknown>;
+  const version = typeof input.version === 'number'
+    ? Math.trunc(input.version)
+    : 1;
+  const relayId = sanitizeString(input.relayId);
+  const createdAt = sanitizeString(input.createdAt);
+  const nonceBase64 = sanitizeString(input.nonceBase64);
+  const encryptedPacketBase64 = sanitizeString(input.encryptedPacketBase64);
+
+  if (version !== 1) {
+    throw new HttpError(400, 'Unsupported relay capsule version.');
+  }
+  if (!relayId) {
+    throw new HttpError(400, 'Missing relayId.');
+  }
+  if (!createdAt) {
+    throw new HttpError(400, 'Missing createdAt.');
+  }
+  if (!nonceBase64) {
+    throw new HttpError(400, 'Missing nonceBase64.');
+  }
+  if (!encryptedPacketBase64) {
+    throw new HttpError(400, 'Missing encryptedPacketBase64.');
+  }
+
+  return {
+    version,
+    relayId,
+    createdAt,
+    nonceBase64,
+    encryptedPacketBase64,
   };
 }
 
@@ -1734,6 +1879,10 @@ function fileverseReceiptKey(receiptId: string): string {
   return `fileverse:${receiptId}`;
 }
 
+function relayCapsuleKey(relayId: string): string {
+  return `relay:${relayId}`;
+}
+
 function scopeKey(chain: AppChain, network: AppNetwork): string {
   return `${chain}:${network}`;
 }
@@ -1768,6 +1917,234 @@ function renderNotFoundPage(): string {
       <h1>Receipt not found</h1>
       <p>This Fileverse receipt link is missing or expired. Return to Bitsend and save the receipt again to generate a fresh public link.</p>
     </div>
+  </body>
+</html>`;
+}
+
+function renderRelayImportPage(): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bitsend relay courier</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; font-family: Arial, sans-serif; background: linear-gradient(180deg, #f4ead8 0%, #f8f5ee 100%); color: #1f1b16; }
+      .wrap { max-width: 860px; margin: 0 auto; padding: 28px 18px 40px; }
+      .card { background: rgba(255,255,255,0.94); border-radius: 28px; padding: 24px; box-shadow: 0 18px 50px rgba(0,0,0,0.10); }
+      .eyebrow { text-transform: uppercase; letter-spacing: 0.16em; font-size: 12px; color: #8e7d64; margin-bottom: 10px; }
+      h1 { margin: 0 0 8px; font-size: 32px; }
+      p { margin: 0; color: #5b5347; line-height: 1.5; }
+      .status { margin-top: 20px; padding: 16px 18px; border-radius: 20px; background: #faf7f1; }
+      .status h2 { margin: 0 0 8px; font-size: 18px; }
+      .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+      button { border: 0; border-radius: 999px; padding: 11px 15px; background: #1f1b16; color: white; font: inherit; cursor: pointer; }
+      .muted { background: #e9e0cf; color: #1f1b16; }
+      ul { margin: 18px 0 0; padding-left: 18px; color: #5b5347; }
+      li { margin-top: 8px; word-break: break-word; }
+      code { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
+      @media (max-width: 640px) { .wrap { padding: 18px 12px 28px; } h1 { font-size: 28px; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="eyebrow">Bitsend courier relay</div>
+        <h1>Encrypted relay capsule courier</h1>
+        <p>This page can hold an encrypted Bitsend payload on a browser-only device and upload it later when internet is available. The courier only sees ciphertext.</p>
+        <div class="status">
+          <h2 id="status">Relay page ready</h2>
+          <p id="detail">Open a Bitsend relay QR or link on this device to queue a capsule.</p>
+        </div>
+        <div class="actions">
+          <button id="retry" type="button">Retry upload</button>
+          <button id="refresh" class="muted" type="button">Refresh queue</button>
+        </div>
+        <ul id="queue"></ul>
+      </div>
+    </div>
+    <script>
+      const storagePrefix = 'bitsend-relay:';
+      const statusEl = document.getElementById('status');
+      const detailEl = document.getElementById('detail');
+      const queueEl = document.getElementById('queue');
+
+      function setStatus(title, detail) {
+        statusEl.textContent = title;
+        detailEl.textContent = detail;
+      }
+
+      function decodeBase64Url(fragment) {
+        const normalized = fragment.replace(/-/g, '+').replace(/_/g, '/');
+        const padding = (4 - (normalized.length % 4)) % 4;
+        const padded = normalized + '='.repeat(padding);
+        const binary = atob(padded);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index);
+        }
+        return JSON.parse(new TextDecoder().decode(bytes));
+      }
+
+      function isRelayCapsule(value) {
+        return Boolean(
+          value &&
+          typeof value === 'object' &&
+          typeof value.relayId === 'string' &&
+          value.relayId.length > 0 &&
+          typeof value.createdAt === 'string' &&
+          value.createdAt.length > 0 &&
+          typeof value.nonceBase64 === 'string' &&
+          value.nonceBase64.length > 0 &&
+          typeof value.encryptedPacketBase64 === 'string' &&
+          value.encryptedPacketBase64.length > 0
+        );
+      }
+
+      function loadPendingCapsules() {
+        const capsules = [];
+        for (let index = 0; index < localStorage.length; index += 1) {
+          const key = localStorage.key(index);
+          if (!key || !key.startsWith(storagePrefix)) {
+            continue;
+          }
+          try {
+            const raw = localStorage.getItem(key);
+            if (!raw) {
+              continue;
+            }
+            const capsule = JSON.parse(raw);
+            if (isRelayCapsule(capsule)) {
+              capsules.push(capsule);
+            }
+          } catch (_) {
+            // Ignore malformed local entries.
+          }
+        }
+        capsules.sort((left, right) => {
+          return String(left.createdAt).localeCompare(String(right.createdAt));
+        });
+        return capsules;
+      }
+
+      function renderQueue() {
+        const capsules = loadPendingCapsules();
+        queueEl.innerHTML = '';
+        if (capsules.length === 0) {
+          const item = document.createElement('li');
+          item.textContent = 'No queued relay capsules on this device.';
+          queueEl.appendChild(item);
+          return capsules;
+        }
+        for (const capsule of capsules) {
+          const item = document.createElement('li');
+          item.textContent = capsule.relayId + ' queued at ' + capsule.createdAt;
+          queueEl.appendChild(item);
+        }
+        return capsules;
+      }
+
+      function storeCapsule(capsule) {
+        localStorage.setItem(storagePrefix + capsule.relayId, JSON.stringify(capsule));
+        renderQueue();
+      }
+
+      function removeCapsule(relayId) {
+        localStorage.removeItem(storagePrefix + relayId);
+        renderQueue();
+      }
+
+      async function uploadCapsule(capsule) {
+        const response = await fetch('/v1/relay/capsules', {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(capsule),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.message || ('Upload failed (' + response.status + ').'));
+        }
+      }
+
+      async function flushPendingCapsules() {
+        const capsules = renderQueue();
+        if (capsules.length === 0) {
+          setStatus('Relay page ready', 'Open a Bitsend relay QR or link on this device to queue a capsule.');
+          return;
+        }
+        if (!navigator.onLine) {
+          setStatus('Stored offline', 'This device saved the encrypted capsule and will retry automatically when connectivity returns.');
+          return;
+        }
+
+        setStatus('Uploading relay capsule', 'Queued encrypted payloads are being uploaded to Bitsend.');
+        let uploaded = 0;
+        for (const capsule of capsules) {
+          try {
+            await uploadCapsule(capsule);
+            removeCapsule(capsule.relayId);
+            uploaded += 1;
+          } catch (error) {
+            setStatus(
+              'Upload paused',
+              error instanceof Error
+                ? error.message
+                : 'Relay upload failed. The encrypted capsule is still stored on this device.'
+            );
+            return;
+          }
+        }
+        setStatus(
+          'Relay upload complete',
+          uploaded === 1
+            ? '1 encrypted relay capsule uploaded to Bitsend.'
+            : uploaded + ' encrypted relay capsules uploaded to Bitsend.'
+        );
+      }
+
+      function ingestHashCapsule() {
+        if (!location.hash || location.hash.length <= 1) {
+          return;
+        }
+        try {
+          const capsule = decodeBase64Url(location.hash.slice(1));
+          if (!isRelayCapsule(capsule)) {
+            throw new Error('Relay capsule is invalid.');
+          }
+          storeCapsule(capsule);
+          history.replaceState(null, '', location.pathname + location.search);
+          setStatus(
+            'Capsule stored',
+            'The encrypted payload is saved on this browser courier and will upload when internet is available.'
+          );
+        } catch (error) {
+          setStatus(
+            'Relay link error',
+            error instanceof Error
+              ? error.message
+              : 'This relay link could not be decoded.'
+          );
+        }
+      }
+
+      document.getElementById('retry').addEventListener('click', () => {
+        void flushPendingCapsules();
+      });
+      document.getElementById('refresh').addEventListener('click', () => {
+        renderQueue();
+      });
+      window.addEventListener('online', () => {
+        void flushPendingCapsules();
+      });
+
+      ingestHashCapsule();
+      renderQueue();
+      void flushPendingCapsules();
+    </script>
   </body>
 </html>`;
 }

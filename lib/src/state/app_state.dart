@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -15,12 +16,16 @@ import 'package:web3dart/web3dart.dart' show EthPrivateKey, TransactionReceipt;
 import '../models/app_models.dart';
 import '../services/bitgo_client_service.dart';
 import '../services/ble_transport_service.dart';
+import '../services/device_auth_service.dart';
 import '../services/ethereum_service.dart';
 import '../services/fileverse_client_service.dart';
 import '../services/hotspot_transport_service.dart';
 import '../services/local_store.dart';
+import '../services/relay_client_service.dart';
+import '../services/relay_crypto_service.dart';
 import '../services/solana_service.dart';
 import '../services/transport_contract.dart';
+import '../services/ultrasonic_transport_service.dart';
 import '../services/wallet_service.dart';
 
 const double minimumFundingSol = 0.05;
@@ -52,8 +57,12 @@ class BitsendAppState extends ChangeNotifier {
     NetworkInfo? networkInfo,
     SolanaService? solanaService,
     EthereumService? ethereumService,
+    DeviceAuthService? deviceAuthService,
     BitGoClientService? bitGoClientService,
     FileverseClientService? fileverseClientService,
+    RelayClientService? relayClientService,
+    RelayCryptoService? relayCryptoService,
+    UltrasonicTransportService? ultrasonicTransportService,
     Uuid? uuid,
     DateTime Function()? clock,
   }) : _store = store ?? LocalStore(),
@@ -68,12 +77,19 @@ class BitsendAppState extends ChangeNotifier {
        _ethereumService =
            ethereumService ??
            EthereumService(rpcEndpoint: defaultEthereumTestnetRpcEndpoint),
+       _deviceAuthService = deviceAuthService ?? DeviceAuthService(),
        _bitGoClientService =
            bitGoClientService ??
            BitGoClientService(endpoint: defaultBitGoBackendEndpoint),
        _fileverseClientService =
            fileverseClientService ??
            FileverseClientService(endpoint: defaultBitGoBackendEndpoint),
+       _relayClientService =
+           relayClientService ??
+           RelayClientService(endpoint: defaultBitGoBackendEndpoint),
+       _relayCryptoService = relayCryptoService ?? RelayCryptoService(),
+       _ultrasonicTransportService =
+           ultrasonicTransportService ?? UltrasonicTransportService(),
        _uuid = uuid ?? const Uuid(),
        _clock = clock ?? DateTime.now;
 
@@ -85,8 +101,12 @@ class BitsendAppState extends ChangeNotifier {
   final NetworkInfo _networkInfo;
   final SolanaService _solanaService;
   final EthereumService _ethereumService;
+  final DeviceAuthService _deviceAuthService;
   final BitGoClientService _bitGoClientService;
   final FileverseClientService _fileverseClientService;
+  final RelayClientService _relayClientService;
+  final RelayCryptoService _relayCryptoService;
+  final UltrasonicTransportService _ultrasonicTransportService;
   final Uuid _uuid;
   final DateTime Function() _clock;
 
@@ -95,6 +115,8 @@ class BitsendAppState extends ChangeNotifier {
   bool _initialized = false;
   bool _initializing = false;
   bool _localPermissionsGranted = false;
+  bool _ultrasonicPermissionsGranted = false;
+  bool _ultrasonicSupported = false;
   bool _hasInternet = false;
   bool _hasLocalLink = false;
   bool _hasDevnet = false;
@@ -102,6 +124,9 @@ class BitsendAppState extends ChangeNotifier {
   String? _statusMessage;
   String? _announcementMessage;
   int _announcementSerial = 0;
+  bool _deviceAuthAvailable = false;
+  bool _deviceAuthHasBiometricOption = false;
+  bool _deviceUnlocked = true;
   String? _localIp;
   ChainKind _activeChain = ChainKind.ethereum;
   ChainNetwork _activeNetwork = ChainNetwork.testnet;
@@ -139,12 +164,23 @@ class BitsendAppState extends ChangeNotifier {
   List<PendingTransfer> _pendingTransfers = <PendingTransfer>[];
   List<ReceiverDiscoveryItem> _bleReceivers = <ReceiverDiscoveryItem>[];
   bool _bleDiscovering = false;
+  bool _ultrasonicListenerRunning = false;
+  PendingRelaySession? _activeUltrasonicSession;
+  final Map<String, PendingRelaySession> _pendingRelaySessions =
+      <String, PendingRelaySession>{};
   bool _realtimeSettlementSyncRunning = false;
 
   bool get initialized => _initialized;
   bool get initializing => _initializing;
   bool get working => _working;
   String? get statusMessage => _statusMessage;
+  bool get deviceAuthAvailable => _deviceAuthAvailable;
+  bool get deviceAuthHasBiometricOption => _deviceAuthHasBiometricOption;
+  bool get requiresDeviceUnlock =>
+      hasWallet && _deviceAuthAvailable && !_deviceUnlocked;
+  String get deviceUnlockMethodLabel => _deviceAuthHasBiometricOption
+      ? 'fingerprint or phone passcode'
+      : 'phone passcode';
   ChainKind get activeChain => _activeChain;
   ChainNetwork get activeNetwork => _activeNetwork;
   WalletEngine get activeWalletEngine => _activeWalletEngine;
@@ -159,6 +195,14 @@ class BitsendAppState extends ChangeNotifier {
   bool get hasLocalLink => _hasLocalLink;
   bool get hasDevnet => _hasDevnet;
   bool get localPermissionsGranted => _localPermissionsGranted;
+  bool get ultrasonicPermissionsGranted => _ultrasonicPermissionsGranted;
+  bool get ultrasonicSupported => _ultrasonicSupported;
+  bool get ultrasonicListenerRunning => _ultrasonicListenerRunning;
+  PendingRelaySession? get activeUltrasonicSession => _activeUltrasonicSession;
+  List<PendingRelaySession> get pendingRelaySessions =>
+      List<PendingRelaySession>.unmodifiable(
+        _pendingRelaySessions.values.toList(growable: false),
+      );
   bool get hasOfflineReadyBlockhash => _activeWalletEngine == WalletEngine.bitgo
       ? true
       : _activeChain == ChainKind.solana
@@ -214,7 +258,9 @@ class BitsendAppState extends ChangeNotifier {
   String? get lastSentTransferId => _lastSentTransferId;
   String? get lastReceivedTransferId => _lastReceivedTransferId;
   bool get listenerRunning =>
-      _hotspotTransportService.isListening || _bleTransportService.isListening;
+      _hotspotTransportService.isListening ||
+      _bleTransportService.isListening ||
+      _ultrasonicListenerRunning;
   bool get hotspotListenerRunning => _hotspotTransportService.isListening;
   bool get bleListenerRunning => _bleTransportService.isListening;
 
@@ -295,6 +341,9 @@ class BitsendAppState extends ChangeNotifier {
     if (!hasWallet) {
       return '/onboarding/welcome';
     }
+    if (requiresDeviceUnlock) {
+      return '/unlock';
+    }
     return '/home';
   }
 
@@ -340,6 +389,7 @@ class BitsendAppState extends ChangeNotifier {
       }
       _bitGoClientService.endpoint = _bitgoEndpoint;
       _fileverseClientService.endpoint = _bitgoEndpoint;
+      _relayClientService.endpoint = _bitgoEndpoint;
       await _refreshBitGoBackendHealth(allowFailure: true);
       for (final ChainKind chain in ChainKind.values) {
         for (final ChainNetwork network in ChainNetwork.values) {
@@ -365,6 +415,7 @@ class BitsendAppState extends ChangeNotifier {
           : ChainNetwork.values.byName(savedNetworkName);
       await _loadWalletEngineForActiveScope();
       await _reloadWalletProfiles();
+      await _refreshDeviceAuthSupport(lockWallet: true);
       _applyActiveChainSnapshot();
       _sendDraft = SendDraft(
         chain: _activeChain,
@@ -373,7 +424,10 @@ class BitsendAppState extends ChangeNotifier {
       );
       await _loadCachedReadinessForActiveScope();
       _pendingTransfers = await _store.loadTransfers();
+      await _loadPendingRelaySessions();
       await _refreshLocalPermissions();
+      _ultrasonicSupported = await _ultrasonicTransportService.isSupported() ||
+          (!kIsWeb && defaultTargetPlatform == TargetPlatform.android);
 
       _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
         _,
@@ -392,6 +446,7 @@ class BitsendAppState extends ChangeNotifier {
   Future<void> createWallet() async {
     await _walletService.createWallet();
     await _reloadWalletProfiles();
+    await _refreshDeviceAuthSupport(lockWallet: false);
     _applyActiveChainSnapshot();
     notifyListeners();
   }
@@ -399,7 +454,53 @@ class BitsendAppState extends ChangeNotifier {
   Future<void> restoreWallet(String seedPhrase) async {
     await _walletService.restoreWallet(seedPhrase);
     await _reloadWalletProfiles();
+    await _refreshDeviceAuthSupport(lockWallet: false);
     _applyActiveChainSnapshot();
+    notifyListeners();
+  }
+
+  Future<void> _refreshDeviceAuthSupport({required bool lockWallet}) async {
+    if (!hasWallet) {
+      _deviceAuthAvailable = false;
+      _deviceAuthHasBiometricOption = false;
+      _deviceUnlocked = true;
+      return;
+    }
+    final DeviceAuthSupport support = await _deviceAuthService.loadSupport();
+    _deviceAuthAvailable = support.isAvailable;
+    _deviceAuthHasBiometricOption = support.hasBiometricOption;
+    _deviceUnlocked = !_deviceAuthAvailable || !lockWallet;
+  }
+
+  Future<bool> authenticateDevice({
+    String? reason,
+    bool forcePrompt = false,
+  }) async {
+    if (!hasWallet || !_deviceAuthAvailable) {
+      return true;
+    }
+    if (_deviceUnlocked && !forcePrompt) {
+      return true;
+    }
+    final bool unlocked = await _deviceAuthService.authenticate(
+      reason:
+          reason ??
+          (_deviceAuthHasBiometricOption
+              ? 'Unlock Bitsend with your fingerprint or phone passcode.'
+              : 'Unlock Bitsend with your phone passcode.'),
+    );
+    if (unlocked) {
+      _deviceUnlocked = true;
+      notifyListeners();
+    }
+    return unlocked;
+  }
+
+  void lockWalletForSession() {
+    if (!hasWallet || !_deviceAuthAvailable) {
+      return;
+    }
+    _deviceUnlocked = false;
     notifyListeners();
   }
 
@@ -410,6 +511,8 @@ class BitsendAppState extends ChangeNotifier {
     if (listenerRunning) {
       await _hotspotTransportService.stop();
       await _bleTransportService.stop();
+      await _ultrasonicTransportService.stop();
+      _ultrasonicListenerRunning = false;
     }
     _activeChain = chain;
     await _loadWalletEngineForActiveScope();
@@ -422,6 +525,7 @@ class BitsendAppState extends ChangeNotifier {
       clearReceiver: true,
     );
     _applyActiveChainSnapshot();
+    _syncActiveUltrasonicSessionForScope();
     await _store.saveSetting('active_chain', chain.name);
     await _loadCachedReadinessForActiveScope();
     await _refreshConnectivityState();
@@ -439,6 +543,8 @@ class BitsendAppState extends ChangeNotifier {
     if (listenerRunning) {
       await _hotspotTransportService.stop();
       await _bleTransportService.stop();
+      await _ultrasonicTransportService.stop();
+      _ultrasonicListenerRunning = false;
     }
     _activeNetwork = network;
     await _loadWalletEngineForActiveScope();
@@ -451,6 +557,7 @@ class BitsendAppState extends ChangeNotifier {
       clearReceiver: true,
     );
     _applyActiveChainSnapshot();
+    _syncActiveUltrasonicSessionForScope();
     await _store.saveSetting('active_network', network.name);
     await _loadCachedReadinessForActiveScope();
     await _refreshConnectivityState();
@@ -468,6 +575,8 @@ class BitsendAppState extends ChangeNotifier {
     if (listenerRunning) {
       await _hotspotTransportService.stop();
       await _bleTransportService.stop();
+      await _ultrasonicTransportService.stop();
+      _ultrasonicListenerRunning = false;
     }
     _activeWalletEngine = engine;
     _walletEngines[_activeScopeKey] = engine;
@@ -479,6 +588,7 @@ class BitsendAppState extends ChangeNotifier {
       amountSol: 0,
       clearReceiver: true,
     );
+    _syncActiveUltrasonicSessionForScope();
     await _store.saveSetting(_walletEngineKey(_activeScopeKey), engine.name);
     await _refreshConnectivityState();
     if (_wallet != null) {
@@ -516,6 +626,7 @@ class BitsendAppState extends ChangeNotifier {
     }
     _bitGoClientService.endpoint = _bitgoEndpoint;
     _fileverseClientService.endpoint = _bitgoEndpoint;
+    _relayClientService.endpoint = _bitgoEndpoint;
   }
 
   Future<void> _loadWalletEngineForActiveScope() async {
@@ -754,6 +865,14 @@ class BitsendAppState extends ChangeNotifier {
     return requestBlePermissions();
   }
 
+  Future<void> requestUltrasonicPermissions() async {
+    final PermissionStatus status = await Permission.microphone.request();
+    _ultrasonicPermissionsGranted =
+        status == PermissionStatus.granted ||
+        status == PermissionStatus.limited;
+    notifyListeners();
+  }
+
   Future<void> setRpcEndpoint(String value) async {
     final String endpoint = value.trim();
     if (endpoint.isEmpty) {
@@ -787,6 +906,7 @@ class BitsendAppState extends ChangeNotifier {
     _bitGoClientService.clearSession();
     _fileverseClientService.endpoint = endpoint;
     _fileverseClientService.clearSession();
+    _relayClientService.endpoint = endpoint;
     _bitgoBackendMode = BitGoBackendMode.unknown;
     await _store.saveSetting('bitgo_endpoint', endpoint);
     if (_activeWalletEngine == WalletEngine.bitgo) {
@@ -829,6 +949,8 @@ class BitsendAppState extends ChangeNotifier {
     String receiverEndpoint = '',
     String receiverPeripheralId = '',
     String receiverPeripheralName = '',
+    String receiverSessionToken = '',
+    String receiverRelayId = '',
     String receiverPreferredChain = '',
     String receiverPreferredToken = '',
   }) {
@@ -838,6 +960,8 @@ class BitsendAppState extends ChangeNotifier {
       receiverEndpoint: _normalizeEndpoint(receiverEndpoint),
       receiverPeripheralId: receiverPeripheralId.trim(),
       receiverPeripheralName: receiverPeripheralName.trim(),
+      receiverSessionToken: receiverSessionToken.trim(),
+      receiverRelayId: receiverRelayId.trim(),
       receiverPreferredChain: receiverPreferredChain.trim(),
       receiverPreferredToken: receiverPreferredToken.trim(),
     );
@@ -905,6 +1029,7 @@ class BitsendAppState extends ChangeNotifier {
     await _refreshConnectivityState();
     if (_wallet != null && _hasInternet) {
       await refreshWalletData();
+      await _importPendingRelayCapsules();
       await broadcastPendingTransfers();
       await refreshSubmittedTransfers();
     } else if (_wallet != null) {
@@ -1006,6 +1131,20 @@ class BitsendAppState extends ChangeNotifier {
         _sendDraft.receiverPeripheralId.isEmpty) {
       throw const FormatException('Select a BLE receiver before sending.');
     }
+    if (_activeWalletEngine == WalletEngine.local &&
+        _sendDraft.transport == TransportKind.ultrasonic &&
+        _sendDraft.receiverSessionToken.isEmpty) {
+      throw const FormatException(
+        'Scan the receiver ultrasonic QR before sending.',
+      );
+    }
+    if (_activeWalletEngine == WalletEngine.local &&
+        _sendDraft.transport == TransportKind.ultrasonic &&
+        _sendDraft.receiverRelayId.isEmpty) {
+      throw const FormatException(
+        'Receiver relay details are missing. Scan the receiver QR again.',
+      );
+    }
     if (_activeChain.isEvm &&
         !_ethereumService.isValidAddress(_sendDraft.receiverAddress) &&
         _ethereumService.isEnsName(_sendDraft.receiverLabel)) {
@@ -1097,13 +1236,17 @@ class BitsendAppState extends ChangeNotifier {
         transport: _sendDraft.transport,
         createdAt: createdAt,
         updatedAt: snapshot.updatedAt ?? createdAt,
-        remoteEndpoint: _sendDraft.transport == TransportKind.hotspot
-            ? (_sendDraft.receiverEndpoint.isEmpty
-                  ? 'Address discovery'
-                  : _sendDraft.receiverEndpoint)
-            : (_sendDraft.receiverPeripheralName.isEmpty
-                  ? 'BLE discovery'
-                  : _sendDraft.receiverPeripheralName),
+        remoteEndpoint: switch (_sendDraft.transport) {
+          TransportKind.hotspot => _sendDraft.receiverEndpoint.isEmpty
+              ? 'Address discovery'
+              : _sendDraft.receiverEndpoint,
+          TransportKind.ble => _sendDraft.receiverPeripheralName.isEmpty
+              ? 'BLE discovery'
+              : _sendDraft.receiverPeripheralName,
+          TransportKind.ultrasonic => _sendDraft.receiverRelayId.isEmpty
+              ? 'Ultrasonic pairing'
+              : _sendDraft.receiverRelayId,
+        },
         transactionSignature: snapshot.transactionSignature,
         explorerUrl: snapshot.explorerUrl,
         lastError: status.isError ? snapshot.message : null,
@@ -1123,6 +1266,132 @@ class BitsendAppState extends ChangeNotifier {
       return transfer;
     }
 
+    final (
+      String transferId,
+      DateTime createdAt,
+      OfflineEnvelope envelope,
+      ValidatedTransactionDetails details
+    ) = await _prepareSignedLocalEnvelope(lamports: lamports);
+
+    if (_sendDraft.transport == TransportKind.hotspot) {
+      final Uri endpoint = Uri.parse(_sendDraft.receiverEndpoint);
+      await _hotspotTransportService.send(
+        endpoint: endpoint,
+        envelope: envelope,
+      );
+    } else if (_sendDraft.transport == TransportKind.ble) {
+      await _bleTransportService.send(
+        peripheralId: _sendDraft.receiverPeripheralId,
+        envelope: envelope,
+      );
+    } else {
+      await _ultrasonicTransportService.send(
+        packet: _createUltrasonicPacket(envelope),
+      );
+    }
+
+    final PendingTransfer transfer = PendingTransfer(
+      transferId: transferId,
+      chain: _activeChain,
+      network: _activeNetwork,
+      walletEngine: WalletEngine.local,
+      direction: TransferDirection.outbound,
+      status: TransferStatus.sentOffline,
+      amountLamports: lamports,
+      senderAddress: _offlineWallet!.address,
+      receiverAddress: _sendDraft.receiverAddress,
+      transport: _sendDraft.transport,
+      createdAt: createdAt,
+      updatedAt: createdAt,
+      envelope: envelope,
+      remoteEndpoint: switch (_sendDraft.transport) {
+        TransportKind.hotspot => _sendDraft.receiverEndpoint,
+        TransportKind.ble => _sendDraft.receiverPeripheralName,
+        TransportKind.ultrasonic => 'Ultrasonic direct',
+      },
+      transactionSignature: details.transactionSignature,
+    );
+
+    await _persistTransfer(transfer);
+    _lastSentTransferId = transfer.transferId;
+    if (_hasInternet) {
+      unawaited(_broadcastTransferInBackground(transfer));
+      unawaited(_startRealtimeSettlementSync());
+    }
+    clearDraft();
+    return transfer;
+  }
+
+  Future<PreparedRelayCapsule> prepareRelayCapsuleForCurrentDraft() async {
+    if (_activeWalletEngine != WalletEngine.local) {
+      throw const FormatException(
+        'Browser relay is only available in Local wallet mode.',
+      );
+    }
+    if (_sendDraft.transport != TransportKind.ultrasonic) {
+      throw const FormatException(
+        'Browser relay is only available for ultrasonic receiver sessions.',
+      );
+    }
+    if (_sendDraft.receiverAddress.isEmpty ||
+        _sendDraft.receiverSessionToken.isEmpty ||
+        _sendDraft.receiverRelayId.isEmpty) {
+      throw const FormatException(
+        'Scan the receiver ultrasonic QR before creating a relay capsule.',
+      );
+    }
+    final int lamports = _activeChain.amountToBaseUnits(_sendDraft.amountSol);
+    if (lamports <= 0) {
+      throw const FormatException('Enter an amount greater than zero.');
+    }
+    final (
+      String transferId,
+      DateTime createdAt,
+      OfflineEnvelope envelope,
+      ValidatedTransactionDetails details
+    ) = await _prepareSignedLocalEnvelope(lamports: lamports);
+    final UltrasonicTransferPacket packet = _createUltrasonicPacket(envelope);
+    final RelayCapsule capsule = await _relayCryptoService.encryptPacket(
+      packet: packet,
+      relayId: _sendDraft.receiverRelayId,
+      sessionToken: _sendDraft.receiverSessionToken,
+    );
+    final PendingTransfer transfer = PendingTransfer(
+      transferId: transferId,
+      chain: _activeChain,
+      network: _activeNetwork,
+      walletEngine: WalletEngine.local,
+      direction: TransferDirection.outbound,
+      status: TransferStatus.sentOffline,
+      amountLamports: lamports,
+      senderAddress: _offlineWallet!.address,
+      receiverAddress: _sendDraft.receiverAddress,
+      transport: TransportKind.ultrasonic,
+      createdAt: createdAt,
+      updatedAt: createdAt,
+      envelope: envelope,
+      remoteEndpoint: 'Browser courier',
+      transactionSignature: details.transactionSignature,
+    );
+    await _persistTransfer(transfer);
+    _lastSentTransferId = transfer.transferId;
+    final PreparedRelayCapsule prepared = PreparedRelayCapsule(
+      transfer: transfer,
+      relayCapsule: capsule,
+      relayUrl: _relayClientService.relayImportUri(capsule),
+    );
+    clearDraft();
+    return prepared;
+  }
+
+  Future<(
+    String transferId,
+    DateTime createdAt,
+    OfflineEnvelope envelope,
+    ValidatedTransactionDetails details
+  )> _prepareSignedLocalEnvelope({
+    required int lamports,
+  }) async {
     final int feeHeadroom = _activeChain == ChainKind.solana
         ? solFeeHeadroomLamports
         : _estimatedEthereumFeeHeadroom();
@@ -1182,48 +1451,52 @@ class BitsendAppState extends ChangeNotifier {
       );
       details = _ethereumService.validateEnvelope(envelope);
     }
+    return (transferId, createdAt, envelope, details);
+  }
 
-    if (_sendDraft.transport == TransportKind.hotspot) {
-      final Uri endpoint = Uri.parse(_sendDraft.receiverEndpoint);
-      await _hotspotTransportService.send(
-        endpoint: endpoint,
-        envelope: envelope,
-      );
-    } else {
-      await _bleTransportService.send(
-        peripheralId: _sendDraft.receiverPeripheralId,
-        envelope: envelope,
-      );
-    }
-
-    final PendingTransfer transfer = PendingTransfer(
-      transferId: transferId,
-      chain: _activeChain,
-      network: _activeNetwork,
-      walletEngine: WalletEngine.local,
-      direction: TransferDirection.outbound,
-      status: TransferStatus.sentOffline,
-      amountLamports: lamports,
-      senderAddress: _offlineWallet!.address,
-      receiverAddress: _sendDraft.receiverAddress,
-      transport: _sendDraft.transport,
-      createdAt: createdAt,
-      updatedAt: createdAt,
-      envelope: envelope,
-      remoteEndpoint: _sendDraft.transport == TransportKind.hotspot
-          ? _sendDraft.receiverEndpoint
-          : _sendDraft.receiverPeripheralName,
-      transactionSignature: details.transactionSignature,
+  UltrasonicTransferPacket _createUltrasonicPacket(OfflineEnvelope envelope) {
+    final UltrasonicTransferPacket packet = UltrasonicTransferPacket.create(
+      chain: envelope.chain,
+      network: envelope.network,
+      transferId: envelope.transferId,
+      createdAt: envelope.createdAt,
+      sessionToken: _sendDraft.receiverSessionToken,
+      signedTransactionBytes: base64Decode(envelope.signedTransactionBase64),
     );
-
-    await _persistTransfer(transfer);
-    _lastSentTransferId = transfer.transferId;
-    if (_hasInternet) {
-      unawaited(_broadcastTransferInBackground(transfer));
-      unawaited(_startRealtimeSettlementSync());
+    if (packet.toBytes().length > UltrasonicTransferPacket.maximumEncodedLength) {
+      throw const FormatException(
+        'Signed payload is too large for ultrasonic delivery. Use Relay via browser courier or BLE.',
+      );
     }
-    clearDraft();
-    return transfer;
+    return packet;
+  }
+
+  Future<TransportReceiveResult> _handleIncomingUltrasonicPacket(
+    UltrasonicTransferPacket packet,
+  ) async {
+    if (!packet.isChecksumValid) {
+      return const TransportReceiveResult(
+        accepted: false,
+        message: 'Ultrasonic packet checksum mismatch.',
+      );
+    }
+    final PendingRelaySession? session = _relaySessionForPacket(packet);
+    if (session == null) {
+      return const TransportReceiveResult(
+        accepted: false,
+        message: 'Receiver session token does not match this ultrasonic packet.',
+      );
+    }
+    final OfflineEnvelope envelope = _buildEnvelopeFromUltrasonicPacket(packet);
+    final TransportReceiveResult result = await _handleIncomingEnvelope(envelope);
+    if (result.accepted) {
+      await _removePendingRelaySession(session.relayId);
+      if (_activeUltrasonicSession?.relayId == session.relayId &&
+          _ultrasonicListenerRunning) {
+        await _createOrRotateActiveUltrasonicSession();
+      }
+    }
+    return result;
   }
 
   Future<PendingTransfer> _fallbackBitGoDraftToLocalAndSend(
@@ -1281,7 +1554,7 @@ class BitsendAppState extends ChangeNotifier {
   Future<void> startReceiver() async {
     if (_activeWalletEngine == WalletEngine.bitgo) {
       throw const FormatException(
-        'BitGo mode does not use offline receive. Switch to Local mode to listen over hotspot or BLE.',
+        'BitGo mode does not use offline receive. Switch to Local mode to listen over hotspot, BLE, or ultrasonic.',
       );
     }
     if (_wallet == null) {
@@ -1289,16 +1562,27 @@ class BitsendAppState extends ChangeNotifier {
     }
     if (_receiveTransport == TransportKind.ble) {
       await requestBlePermissions();
+    } else if (_receiveTransport == TransportKind.ultrasonic) {
+      await requestUltrasonicPermissions();
+      if (!_ultrasonicPermissionsGranted) {
+        throw const FormatException(
+          'Microphone access is required for ultrasonic receive.',
+        );
+      }
     }
     await _refreshConnectivityState();
     if (_receiveTransport == TransportKind.hotspot) {
+      _ultrasonicListenerRunning = false;
       await _bleTransportService.stop();
+      await _ultrasonicTransportService.stop();
       await _hotspotTransportService.start(
         onEnvelope: _handleIncomingEnvelope,
         onActivity: _handleReceiverTransportActivity,
       );
-    } else {
+    } else if (_receiveTransport == TransportKind.ble) {
+      _ultrasonicListenerRunning = false;
       await _hotspotTransportService.stop();
+      await _ultrasonicTransportService.stop();
       await _bleTransportService.start(
         onEnvelope: _handleIncomingEnvelope,
         receiverChain: _activeChain,
@@ -1307,6 +1591,22 @@ class BitsendAppState extends ChangeNotifier {
         receiverAddress: _wallet!.address,
         onActivity: _handleReceiverTransportActivity,
       );
+    } else {
+      await _hotspotTransportService.stop();
+      await _bleTransportService.stop();
+      await _createOrRotateActiveUltrasonicSession();
+      try {
+        await _ultrasonicTransportService.start(
+          sessionToken: _activeUltrasonicSession!.sessionToken,
+          onPacket: _handleIncomingUltrasonicPacket,
+          onActivity: _handleReceiverTransportActivity,
+        );
+      } catch (_) {
+        _announce(
+          'Ultrasonic relay session is ready. Direct ultrasonic delivery is unavailable on this build, but the QR can still be used for browser relay.',
+        );
+      }
+      _ultrasonicListenerRunning = true;
     }
     notifyListeners();
   }
@@ -1314,6 +1614,8 @@ class BitsendAppState extends ChangeNotifier {
   Future<void> stopReceiver() async {
     await _hotspotTransportService.stop();
     await _bleTransportService.stop();
+    await _ultrasonicTransportService.stop();
+    _ultrasonicListenerRunning = false;
     notifyListeners();
   }
 
@@ -1655,8 +1957,12 @@ class BitsendAppState extends ChangeNotifier {
   Future<void> clearLocalData() async {
     await _hotspotTransportService.stop();
     await _bleTransportService.stop();
+    await _ultrasonicTransportService.stop();
     await _walletService.clearAll();
     await _store.clearAll();
+    _pendingRelaySessions.clear();
+    _activeUltrasonicSession = null;
+    _ultrasonicListenerRunning = false;
     _rpcEndpoints[_scopeKey(ChainKind.solana, ChainNetwork.testnet)] =
         defaultSolanaTestnetRpcEndpoint;
     _rpcEndpoints[_scopeKey(ChainKind.solana, ChainNetwork.mainnet)] =
@@ -1697,15 +2003,22 @@ class BitsendAppState extends ChangeNotifier {
     _bitGoClientService.clearSession();
     _fileverseClientService.endpoint = defaultBitGoBackendEndpoint;
     _fileverseClientService.clearSession();
+    _relayClientService.endpoint = defaultBitGoBackendEndpoint;
     _sendDraft = const SendDraft();
     _receiveTransport = TransportKind.hotspot;
     _pendingTransfers = <PendingTransfer>[];
     _bleReceivers = <ReceiverDiscoveryItem>[];
     _bleDiscovering = false;
+    _ultrasonicListenerRunning = false;
+    _activeUltrasonicSession = null;
+    _pendingRelaySessions.clear();
     _lastSentTransferId = null;
     _lastReceivedTransferId = null;
     _statusMessage = null;
     _announcementMessage = null;
+    _deviceAuthAvailable = false;
+    _deviceAuthHasBiometricOption = false;
+    _deviceUnlocked = true;
     notifyListeners();
   }
 
@@ -1791,6 +2104,183 @@ class BitsendAppState extends ChangeNotifier {
       accepted: true,
       message: 'Stored successfully.',
     );
+  }
+
+  OfflineEnvelope _buildEnvelopeFromUltrasonicPacket(
+    UltrasonicTransferPacket packet,
+  ) {
+    final ValidatedTransactionDetails details =
+        packet.chain == ChainKind.solana
+        ? _validateSolanaSignedTransactionBytes(
+            packet.signedTransactionBytes,
+            network: packet.network,
+          )
+        : _validateEvmSignedTransactionBytes(
+            packet.signedTransactionBytes,
+            chain: packet.chain,
+            network: packet.network,
+          );
+    return OfflineEnvelope.create(
+      transferId: packet.transferId,
+      createdAt: packet.createdAt,
+      chain: packet.chain,
+      network: packet.network,
+      senderAddress: details.senderAddress,
+      receiverAddress: details.receiverAddress,
+      amountLamports: details.amountLamports,
+      signedTransactionBase64: base64Encode(packet.signedTransactionBytes),
+      transportKind: TransportKind.ultrasonic,
+    );
+  }
+
+  PendingRelaySession? _relaySessionForPacket(UltrasonicTransferPacket packet) {
+    for (final PendingRelaySession session in _pendingRelaySessions.values) {
+      if (session.sessionToken == packet.sessionToken &&
+          session.chain == packet.chain &&
+          session.network == packet.network) {
+        return session;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _createOrRotateActiveUltrasonicSession() async {
+    if (_wallet == null) {
+      return;
+    }
+    final PendingRelaySession session = PendingRelaySession(
+      relayId: _uuid.v4(),
+      sessionToken: _randomSessionToken(),
+      chain: _activeChain,
+      network: _activeNetwork,
+      receiverAddress: _wallet!.address,
+      createdAt: _clock(),
+    );
+    _activeUltrasonicSession = session;
+    _pendingRelaySessions[session.relayId] = session;
+    await _savePendingRelaySessions();
+  }
+
+  Future<void> _loadPendingRelaySessions() async {
+    _pendingRelaySessions.clear();
+    final List<dynamic>? rawSessions = await _store.loadSetting<List<dynamic>>(
+      _relaySessionsKey,
+    );
+    if (rawSessions == null) {
+      return;
+    }
+    for (final dynamic item in rawSessions) {
+      if (item is! Map) {
+        continue;
+      }
+      final PendingRelaySession session = PendingRelaySession.fromJson(
+        Map<String, dynamic>.from(item),
+      );
+      if (session.isExpired) {
+        continue;
+      }
+      _pendingRelaySessions[session.relayId] = session;
+    }
+    _syncActiveUltrasonicSessionForScope();
+  }
+
+  Future<void> _savePendingRelaySessions() async {
+    await _store.saveSetting(
+      _relaySessionsKey,
+      _pendingRelaySessions.values
+          .map((PendingRelaySession session) => session.toJson())
+          .toList(growable: false),
+    );
+  }
+
+  Future<void> _removePendingRelaySession(String relayId) async {
+    _pendingRelaySessions.remove(relayId);
+    _syncActiveUltrasonicSessionForScope();
+    await _savePendingRelaySessions();
+  }
+
+  void _syncActiveUltrasonicSessionForScope() {
+    if (_activeWalletEngine != WalletEngine.local || _wallet == null) {
+      _activeUltrasonicSession = null;
+      return;
+    }
+    _activeUltrasonicSession = _pendingRelaySessions.values
+        .where((PendingRelaySession session) {
+          return session.chain == _activeChain &&
+              session.network == _activeNetwork &&
+              session.receiverAddress == _wallet!.address;
+        })
+        .fold<PendingRelaySession?>(
+          null,
+          (PendingRelaySession? latest, PendingRelaySession session) {
+            if (latest == null || session.createdAt.isAfter(latest.createdAt)) {
+              return session;
+            }
+            return latest;
+          },
+        );
+  }
+
+  Future<void> _importPendingRelayCapsules() async {
+    if (!_hasInternet || _wallet == null || _pendingRelaySessions.isEmpty) {
+      return;
+    }
+    final List<PendingRelaySession> sessions = _pendingRelaySessions.values
+        .where((PendingRelaySession session) {
+          return session.chain == _activeChain &&
+              session.network == _activeNetwork &&
+              session.receiverAddress == _wallet!.address;
+        })
+        .toList(growable: false);
+    bool updated = false;
+    for (final PendingRelaySession session in sessions) {
+      if (session.isExpired) {
+        _pendingRelaySessions.remove(session.relayId);
+        updated = true;
+        continue;
+      }
+      final RelayCapsule? capsule = await _relayClientService.fetchCapsule(
+        session.relayId,
+      );
+      if (capsule == null) {
+        continue;
+      }
+      try {
+        final UltrasonicTransferPacket packet = await _relayCryptoService
+            .decryptCapsule(
+              capsule: capsule,
+              sessionToken: session.sessionToken,
+            );
+        final TransportReceiveResult result = await _handleIncomingUltrasonicPacket(
+          packet,
+        );
+        if (result.accepted) {
+          updated = true;
+        }
+      } catch (error) {
+        _announce(_cleanErrorMessage(error));
+        _pendingRelaySessions.remove(session.relayId);
+        updated = true;
+      }
+    }
+    if (updated) {
+      _syncActiveUltrasonicSessionForScope();
+      await _savePendingRelaySessions();
+      notifyListeners();
+    }
+  }
+
+  String _randomSessionToken() {
+    final Random random = Random.secure();
+    final List<int> bytes = List<int>.generate(
+      UltrasonicTransferPacket.sessionTokenLength,
+      (_) => random.nextInt(256),
+    );
+    final StringBuffer buffer = StringBuffer();
+    for (final int value in bytes) {
+      buffer.write(value.toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
   }
 
   void _handleReceiverTransportActivity(TransportActivityNotice notice) {
@@ -1946,6 +2436,7 @@ class BitsendAppState extends ChangeNotifier {
         await Permission.bluetoothConnect.status;
     final PermissionStatus bluetoothAdvertise =
         await Permission.bluetoothAdvertise.status;
+    final PermissionStatus microphone = await Permission.microphone.status;
     _localPermissionsGranted =
         <PermissionStatus>[
           location,
@@ -1956,6 +2447,9 @@ class BitsendAppState extends ChangeNotifier {
           return status == PermissionStatus.granted ||
               status == PermissionStatus.limited;
         });
+    _ultrasonicPermissionsGranted =
+        microphone == PermissionStatus.granted ||
+        microphone == PermissionStatus.limited;
   }
 
   bool get _isCachedBlockhashExpired {
@@ -2423,6 +2917,8 @@ class BitsendAppState extends ChangeNotifier {
     return context.gasPriceWei * EthereumService.transferGasLimit;
   }
 
+  static const String _relaySessionsKey = 'pending_relay_sessions';
+
   String _cachedBlockhashKey(String scopeKey) => 'cached_blockhash_$scopeKey';
 
   String _cachedEthereumContextKey(String scopeKey) =>
@@ -2465,6 +2961,24 @@ class BitsendAppState extends ChangeNotifier {
     return _ethereumService.validateEnvelope(envelope);
   }
 
+  ValidatedTransactionDetails _validateEvmSignedTransactionBytes(
+    Uint8List bytes, {
+    required ChainKind chain,
+    required ChainNetwork network,
+  }) {
+    _ethereumService.chain = chain;
+    _ethereumService.network = network;
+    return _ethereumService.validateSignedTransactionBytes(bytes);
+  }
+
+  ValidatedTransactionDetails _validateSolanaSignedTransactionBytes(
+    Uint8List bytes, {
+    required ChainNetwork network,
+  }) {
+    _solanaService.network = network;
+    return _solanaService.validateSignedTransactionBytes(bytes);
+  }
+
   Future<void> _runTask(
     String status,
     Future<void> Function() operation,
@@ -2499,6 +3013,7 @@ class BitsendAppState extends ChangeNotifier {
     _connectivitySubscription?.cancel();
     unawaited(_hotspotTransportService.stop());
     unawaited(_bleTransportService.dispose());
+    unawaited(_ultrasonicTransportService.stop());
     super.dispose();
   }
 

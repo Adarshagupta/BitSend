@@ -1,0 +1,21 @@
+Resolving dependencies...
+Downloading packages...
+  characters 1.4.0 (1.4.1 available)
+  eip55 1.0.2 (1.0.3 available)
+  json_rpc_2 3.0.3 (4.1.0 available)
+  local_auth 2.3.0 (3.0.1 available)
+  local_auth_android 1.0.56 (2.0.5 available)
+  local_auth_darwin 1.6.1 (2.0.3 available)
+  local_auth_windows 1.0.11 (2.0.1 available)
+  matcher 0.12.17 (0.12.19 available)
+  material_color_utilities 0.11.1 (0.13.0 available)
+  meta 1.17.0 (1.18.1 available)
+  pointycastle 3.9.1 (4.0.0 available)
+  sec 1.1.0 (1.1.1 available)
+  test_api 0.7.7 (0.7.10 available)
+  wallet 0.0.13 (0.0.18 available)
+  web3dart 2.7.3 (3.0.2 available)
+  win32 5.15.0 (6.0.0 available)
+Got dependencies!
+16 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.

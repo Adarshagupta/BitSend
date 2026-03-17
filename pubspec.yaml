@@ -19,8 +19,10 @@ dependencies:
   network_info_plus: ^7.0.0
   permission_handler: ^12.0.1
   flutter_secure_storage: ^10.0.0
+  local_auth: ^2.3.0
   uuid: ^4.5.3
   crypto: ^3.0.7
+  cryptography: ^2.9.0
   bip39: ^1.0.6
   bluetooth_low_energy: ^6.2.1
   qr_flutter: ^4.1.0

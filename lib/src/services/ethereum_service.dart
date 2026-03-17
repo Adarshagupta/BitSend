@@ -336,7 +336,30 @@ class EthereumService {
         !isValidAddress(envelope.receiverAddress)) {
       throw const FormatException('Envelope addresses are invalid.');
     }
-    final Uint8List signedBytes = base64Decode(envelope.signedTransactionBase64);
+    final ValidatedTransactionDetails details = validateSignedTransactionBytes(
+      base64Decode(envelope.signedTransactionBase64),
+    );
+    if (details.senderAddress != envelope.senderAddress) {
+      throw FormatException(
+        'Envelope sender does not match the signed ${chain.label} transaction.',
+      );
+    }
+    if (details.receiverAddress != envelope.receiverAddress) {
+      throw FormatException(
+        'Envelope receiver does not match the signed ${chain.label} transaction.',
+      );
+    }
+    if (details.amountLamports != envelope.amountLamports) {
+      throw FormatException(
+        'Envelope amount does not match the signed ${chain.label} transaction.',
+      );
+    }
+    return details;
+  }
+
+  ValidatedTransactionDetails validateSignedTransactionBytes(
+    Uint8List signedBytes,
+  ) {
     final _DecodedLegacyEthereumTransaction transaction =
         _decodeLegacySignedTransaction(signedBytes);
     if (transaction.chainId != _expectedChainId) {
@@ -352,21 +375,6 @@ class EthereumService {
     if (transaction.data.isNotEmpty) {
       throw FormatException(
         'Only simple ${chain.label} value transfers are supported.',
-      );
-    }
-    if (transaction.from.hexEip55 != envelope.senderAddress) {
-      throw FormatException(
-        'Envelope sender does not match the signed ${chain.label} transaction.',
-      );
-    }
-    if (transaction.to!.hexEip55 != envelope.receiverAddress) {
-      throw FormatException(
-        'Envelope receiver does not match the signed ${chain.label} transaction.',
-      );
-    }
-    if (transaction.value != BigInt.from(envelope.amountLamports)) {
-      throw FormatException(
-        'Envelope amount does not match the signed ${chain.label} transaction.',
       );
     }
     final String transactionHash = _hexFromBytes(

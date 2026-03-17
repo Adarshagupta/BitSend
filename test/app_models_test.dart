@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:bitsend/src/models/app_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -96,6 +98,94 @@ void main() {
       expect(parsed.network, ChainNetwork.testnet);
       expect(parsed.transport, TransportKind.ble);
       expect(parsed.address, payload.address);
+    });
+
+    test('round-trips ultrasonic payloads with session and relay fields', () {
+      const ReceiverInvitePayload payload = ReceiverInvitePayload(
+        chain: ChainKind.ethereum,
+        network: ChainNetwork.testnet,
+        transport: TransportKind.ultrasonic,
+        address: '0x7f6fB8965F10E6F5463cd5C6c60008E64Ca07161',
+        displayAddress: '0x7f6f...7161',
+        sessionToken: '00112233445566778899aabbccddeeff',
+        relayId: 'relay-session-1',
+      );
+
+      final ReceiverInvitePayload parsed = ReceiverInvitePayload.fromQrData(
+        payload.toQrData(),
+      );
+
+      expect(parsed.transport, TransportKind.ultrasonic);
+      expect(parsed.sessionToken, payload.sessionToken);
+      expect(parsed.relayId, payload.relayId);
+    });
+
+    test('accepts version 1 receiver QR payloads', () {
+      final ReceiverInvitePayload parsed = ReceiverInvitePayload.fromQrData(
+        '{"type":"bitsend.receiver","version":1,"chain":"solana","network":"solana-devnet","transport":"hotspot","address":"5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z","displayAddress":"5g7h...Qk1Z","endpoint":"http://192.168.1.22:8787"}',
+      );
+
+      expect(parsed.transport, TransportKind.hotspot);
+      expect(parsed.endpoint, 'http://192.168.1.22:8787');
+    });
+  });
+
+  group('SendDraft.hasReceiver', () {
+    test('requires a session token for ultrasonic handoff', () {
+      expect(
+        const SendDraft(
+          transport: TransportKind.ultrasonic,
+          receiverAddress: '0x1111111111111111111111111111111111111111',
+        ).hasReceiver,
+        isFalse,
+      );
+      expect(
+        const SendDraft(
+          transport: TransportKind.ultrasonic,
+          receiverAddress: '0x1111111111111111111111111111111111111111',
+          receiverSessionToken: '00112233445566778899aabbccddeeff',
+        ).hasReceiver,
+        isTrue,
+      );
+    });
+  });
+
+  group('Ultrasonic packets', () {
+    test('round-trips a compact transfer packet', () {
+      final UltrasonicTransferPacket packet = UltrasonicTransferPacket.create(
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        transferId: '123e4567-e89b-12d3-a456-426614174000',
+        createdAt: DateTime.utc(2026, 3, 14, 12),
+        sessionToken: '00112233445566778899aabbccddeeff',
+        signedTransactionBytes: Uint8List.fromList(<int>[1, 2, 3, 4, 5]),
+      );
+
+      final UltrasonicTransferPacket parsed = UltrasonicTransferPacket.fromBytes(
+        packet.toBytes(),
+      );
+
+      expect(packet.isChecksumValid, isTrue);
+      expect(parsed.transferId, packet.transferId);
+      expect(parsed.sessionToken, packet.sessionToken);
+      expect(parsed.signedTransactionBytes, orderedEquals(<int>[1, 2, 3, 4, 5]));
+    });
+
+    test('round-trips an acknowledgement packet', () {
+      final UltrasonicAckPacket packet = UltrasonicAckPacket.create(
+        transferId: '123e4567-e89b-12d3-a456-426614174000',
+        sessionToken: '00112233445566778899aabbccddeeff',
+        accepted: true,
+      );
+
+      final UltrasonicAckPacket parsed = UltrasonicAckPacket.fromBytes(
+        packet.toBytes(),
+      );
+
+      expect(parsed.isChecksumValid, isTrue);
+      expect(parsed.transferId, packet.transferId);
+      expect(parsed.sessionToken, packet.sessionToken);
+      expect(parsed.accepted, isTrue);
     });
   });
 

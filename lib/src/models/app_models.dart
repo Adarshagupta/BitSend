@@ -205,22 +205,25 @@ double _pow10(int exponent) {
   return result;
 }
 
-enum TransportKind { hotspot, ble }
+enum TransportKind { hotspot, ble, ultrasonic }
 
 extension TransportKindX on TransportKind {
   String get label => switch (this) {
     TransportKind.hotspot => 'Hotspot / Local Wi-Fi',
     TransportKind.ble => 'Bluetooth Low Energy',
+    TransportKind.ultrasonic => 'Ultrasonic',
   };
 
   String get shortLabel => switch (this) {
     TransportKind.hotspot => 'Hotspot',
     TransportKind.ble => 'BLE',
+    TransportKind.ultrasonic => 'Ultrasonic',
   };
 
   IconData get icon => switch (this) {
     TransportKind.hotspot => Icons.wifi_tethering_rounded,
     TransportKind.ble => Icons.bluetooth_rounded,
+    TransportKind.ultrasonic => Icons.graphic_eq_rounded,
   };
 }
 
@@ -348,6 +351,8 @@ class SendDraft {
     this.receiverEndpoint = '',
     this.receiverPeripheralId = '',
     this.receiverPeripheralName = '',
+    this.receiverSessionToken = '',
+    this.receiverRelayId = '',
     this.receiverPreferredChain = '',
     this.receiverPreferredToken = '',
     this.amountSol = 0,
@@ -362,6 +367,8 @@ class SendDraft {
   final String receiverEndpoint;
   final String receiverPeripheralId;
   final String receiverPeripheralName;
+  final String receiverSessionToken;
+  final String receiverRelayId;
   final String receiverPreferredChain;
   final String receiverPreferredToken;
   final double amountSol;
@@ -372,6 +379,7 @@ class SendDraft {
         WalletEngine.local => switch (transport) {
           TransportKind.hotspot => receiverEndpoint.isNotEmpty,
           TransportKind.ble => receiverPeripheralId.isNotEmpty,
+          TransportKind.ultrasonic => receiverSessionToken.isNotEmpty,
         },
         WalletEngine.bitgo => true,
       };
@@ -387,6 +395,8 @@ class SendDraft {
     String? receiverEndpoint,
     String? receiverPeripheralId,
     String? receiverPeripheralName,
+    String? receiverSessionToken,
+    String? receiverRelayId,
     String? receiverPreferredChain,
     String? receiverPreferredToken,
     double? amountSol,
@@ -410,6 +420,12 @@ class SendDraft {
       receiverPeripheralName: clearReceiver
           ? ''
           : receiverPeripheralName ?? this.receiverPeripheralName,
+      receiverSessionToken: clearReceiver
+          ? ''
+          : receiverSessionToken ?? this.receiverSessionToken,
+      receiverRelayId: clearReceiver
+          ? ''
+          : receiverRelayId ?? this.receiverRelayId,
       receiverPreferredChain: clearReceiver
           ? ''
           : receiverPreferredChain ?? this.receiverPreferredChain,
@@ -769,10 +785,12 @@ class ReceiverInvitePayload {
     required this.address,
     required this.displayAddress,
     this.endpoint,
+    this.sessionToken,
+    this.relayId,
   });
 
   static const String type = 'bitsend.receiver';
-  static const int currentVersion = 1;
+  static const int currentVersion = 2;
 
   final ChainKind chain;
   final ChainNetwork network;
@@ -780,6 +798,8 @@ class ReceiverInvitePayload {
   final String address;
   final String displayAddress;
   final String? endpoint;
+  final String? sessionToken;
+  final String? relayId;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'type': type,
@@ -791,6 +811,9 @@ class ReceiverInvitePayload {
     'address': address,
     'displayAddress': displayAddress,
     'endpoint': endpoint,
+    if (sessionToken != null && sessionToken!.isNotEmpty)
+      'sessionToken': sessionToken,
+    if (relayId != null && relayId!.isNotEmpty) 'relayId': relayId,
   };
 
   String toQrData() => jsonEncode(toJson());
@@ -842,7 +865,8 @@ class ReceiverInvitePayload {
         'This QR code is for a different network.',
       ),
     };
-    if ((json['version'] as int?) != currentVersion) {
+    final int version = (json['version'] as int?) ?? 1;
+    if (version != 1 && version != currentVersion) {
       throw const FormatException('This QR code version is not supported.');
     }
 
@@ -864,6 +888,20 @@ class ReceiverInvitePayload {
         'Receiver hotspot endpoint is missing from the QR code.',
       );
     }
+    final String? sessionToken = (json['sessionToken'] as String?)?.trim();
+    final String? relayId = (json['relayId'] as String?)?.trim();
+    if (transport == TransportKind.ultrasonic &&
+        (sessionToken == null || sessionToken.isEmpty)) {
+      throw const FormatException(
+        'Receiver ultrasonic session token is missing from the QR code.',
+      );
+    }
+    if (transport == TransportKind.ultrasonic &&
+        (relayId == null || relayId.isEmpty)) {
+      throw const FormatException(
+        'Receiver relay id is missing from the QR code.',
+      );
+    }
 
     return ReceiverInvitePayload(
       chain: scope.$1,
@@ -872,8 +910,332 @@ class ReceiverInvitePayload {
       address: address,
       displayAddress: displayAddress.isEmpty ? address : displayAddress,
       endpoint: endpoint == null || endpoint.isEmpty ? null : endpoint,
+      sessionToken: sessionToken == null || sessionToken.isEmpty
+          ? null
+          : sessionToken,
+      relayId: relayId == null || relayId.isEmpty ? null : relayId,
     );
   }
+}
+
+class UltrasonicTransferPacket {
+  const UltrasonicTransferPacket({
+    required this.version,
+    required this.chain,
+    required this.network,
+    required this.transferId,
+    required this.createdAt,
+    required this.sessionToken,
+    required this.signedTransactionBytes,
+    required this.checksum,
+  });
+
+  static const int currentVersion = 1;
+  static const int sessionTokenLength = 16;
+  static const int checksumLength = 32;
+  static const int maximumEncodedLength = 256;
+
+  final int version;
+  final ChainKind chain;
+  final ChainNetwork network;
+  final String transferId;
+  final DateTime createdAt;
+  final String sessionToken;
+  final Uint8List signedTransactionBytes;
+  final String checksum;
+
+  Uint8List _payloadBytes() {
+    final Uint8List transferIdBytes = _uuidStringToBytes(transferId);
+    final Uint8List tokenBytes = _sessionTokenToBytes(sessionToken);
+    final ByteData header = ByteData(1 + 1 + 1 + 16 + 8 + 16 + 2);
+    int offset = 0;
+    header.setUint8(offset, version);
+    offset += 1;
+    header.setUint8(offset, chain.index);
+    offset += 1;
+    header.setUint8(offset, network.index);
+    offset += 1;
+    for (int i = 0; i < transferIdBytes.length; i += 1) {
+      header.setUint8(offset + i, transferIdBytes[i]);
+    }
+    offset += transferIdBytes.length;
+    header.setInt64(offset, createdAt.millisecondsSinceEpoch, Endian.big);
+    offset += 8;
+    for (int i = 0; i < tokenBytes.length; i += 1) {
+      header.setUint8(offset + i, tokenBytes[i]);
+    }
+    offset += tokenBytes.length;
+    header.setUint16(offset, signedTransactionBytes.length, Endian.big);
+    return Uint8List.fromList(<int>[
+      ...header.buffer.asUint8List(),
+      ...signedTransactionBytes,
+    ]);
+  }
+
+  String computeChecksum() {
+    return sha256.convert(_payloadBytes()).toString();
+  }
+
+  bool get isChecksumValid => checksum == computeChecksum();
+
+  Uint8List toBytes() {
+    return Uint8List.fromList(<int>[
+      ..._payloadBytes(),
+      ..._hexToBytes(checksum),
+    ]);
+  }
+
+  factory UltrasonicTransferPacket.create({
+    required ChainKind chain,
+    required ChainNetwork network,
+    required String transferId,
+    required DateTime createdAt,
+    required String sessionToken,
+    required Uint8List signedTransactionBytes,
+  }) {
+    final UltrasonicTransferPacket unsigned = UltrasonicTransferPacket(
+      version: currentVersion,
+      chain: chain,
+      network: network,
+      transferId: transferId,
+      createdAt: createdAt,
+      sessionToken: sessionToken,
+      signedTransactionBytes: signedTransactionBytes,
+      checksum: '',
+    );
+    return UltrasonicTransferPacket(
+      version: unsigned.version,
+      chain: unsigned.chain,
+      network: unsigned.network,
+      transferId: unsigned.transferId,
+      createdAt: unsigned.createdAt,
+      sessionToken: unsigned.sessionToken,
+      signedTransactionBytes: unsigned.signedTransactionBytes,
+      checksum: unsigned.computeChecksum(),
+    );
+  }
+
+  factory UltrasonicTransferPacket.fromBytes(Uint8List bytes) {
+    if (bytes.length < 77) {
+      throw const FormatException('Ultrasonic transfer packet is too short.');
+    }
+    final ByteData header = ByteData.sublistView(bytes, 0, 45);
+    int offset = 0;
+    final int version = header.getUint8(offset);
+    offset += 1;
+    if (version != currentVersion) {
+      throw const FormatException('Unsupported ultrasonic transfer version.');
+    }
+    final ChainKind chain = ChainKind.values[header.getUint8(offset)];
+    offset += 1;
+    final ChainNetwork network = ChainNetwork.values[header.getUint8(offset)];
+    offset += 1;
+    final String transferId = _uuidBytesToString(bytes.sublist(offset, offset + 16));
+    offset += 16;
+    final DateTime createdAt = DateTime.fromMillisecondsSinceEpoch(
+      header.getInt64(offset, Endian.big),
+    );
+    offset += 8;
+    final String sessionToken = _sessionTokenBytesToString(
+      bytes.sublist(offset, offset + sessionTokenLength),
+    );
+    offset += sessionTokenLength;
+    final int signedLength = header.getUint16(offset, Endian.big);
+    offset += 2;
+    final int signedEnd = 45 + signedLength;
+    if (signedEnd + checksumLength > bytes.length) {
+      throw const FormatException('Ultrasonic transfer payload is truncated.');
+    }
+    final Uint8List signedTransactionBytes = Uint8List.fromList(
+      bytes.sublist(45, signedEnd),
+    );
+    final String checksum = _bytesToHex(
+      bytes.sublist(signedEnd, signedEnd + checksumLength),
+    );
+    return UltrasonicTransferPacket(
+      version: version,
+      chain: chain,
+      network: network,
+      transferId: transferId,
+      createdAt: createdAt,
+      sessionToken: sessionToken,
+      signedTransactionBytes: signedTransactionBytes,
+      checksum: checksum,
+    );
+  }
+}
+
+class UltrasonicAckPacket {
+  const UltrasonicAckPacket({
+    required this.version,
+    required this.transferId,
+    required this.sessionToken,
+    required this.accepted,
+    required this.checksum,
+  });
+
+  static const int currentVersion = 1;
+  static const int checksumLength = 32;
+
+  final int version;
+  final String transferId;
+  final String sessionToken;
+  final bool accepted;
+  final String checksum;
+
+  Uint8List _payloadBytes() {
+    final Uint8List transferIdBytes = _uuidStringToBytes(transferId);
+    final Uint8List tokenBytes = _sessionTokenToBytes(sessionToken);
+    return Uint8List.fromList(<int>[
+      version,
+      ...transferIdBytes,
+      ...tokenBytes,
+      accepted ? 1 : 0,
+    ]);
+  }
+
+  String computeChecksum() => sha256.convert(_payloadBytes()).toString();
+
+  bool get isChecksumValid => checksum == computeChecksum();
+
+  Uint8List toBytes() => Uint8List.fromList(<int>[
+    ..._payloadBytes(),
+    ..._hexToBytes(checksum),
+  ]);
+
+  factory UltrasonicAckPacket.create({
+    required String transferId,
+    required String sessionToken,
+    required bool accepted,
+  }) {
+    final UltrasonicAckPacket unsigned = UltrasonicAckPacket(
+      version: currentVersion,
+      transferId: transferId,
+      sessionToken: sessionToken,
+      accepted: accepted,
+      checksum: '',
+    );
+    return UltrasonicAckPacket(
+      version: unsigned.version,
+      transferId: unsigned.transferId,
+      sessionToken: unsigned.sessionToken,
+      accepted: unsigned.accepted,
+      checksum: unsigned.computeChecksum(),
+    );
+  }
+
+  factory UltrasonicAckPacket.fromBytes(Uint8List bytes) {
+    if (bytes.length < 1 + 16 + UltrasonicTransferPacket.sessionTokenLength + 1 + checksumLength) {
+      throw const FormatException('Ultrasonic acknowledgement is too short.');
+    }
+    final int version = bytes[0];
+    if (version != currentVersion) {
+      throw const FormatException('Unsupported ultrasonic acknowledgement version.');
+    }
+    final String transferId = _uuidBytesToString(bytes.sublist(1, 17));
+    final String sessionToken = _sessionTokenBytesToString(
+      bytes.sublist(17, 33),
+    );
+    final bool accepted = bytes[33] == 1;
+    final String checksum = _bytesToHex(
+      bytes.sublist(34, 34 + checksumLength),
+    );
+    return UltrasonicAckPacket(
+      version: version,
+      transferId: transferId,
+      sessionToken: sessionToken,
+      accepted: accepted,
+      checksum: checksum,
+    );
+  }
+}
+
+class RelayCapsule {
+  const RelayCapsule({
+    required this.version,
+    required this.relayId,
+    required this.createdAt,
+    required this.nonceBase64,
+    required this.encryptedPacketBase64,
+  });
+
+  static const int currentVersion = 1;
+
+  final int version;
+  final String relayId;
+  final DateTime createdAt;
+  final String nonceBase64;
+  final String encryptedPacketBase64;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'version': version,
+    'relayId': relayId,
+    'createdAt': createdAt.toIso8601String(),
+    'nonceBase64': nonceBase64,
+    'encryptedPacketBase64': encryptedPacketBase64,
+  };
+
+  String toQrData() => jsonEncode(toJson());
+
+  factory RelayCapsule.fromJson(Map<String, dynamic> json) => RelayCapsule(
+    version: (json['version'] as int?) ?? currentVersion,
+    relayId: json['relayId'] as String,
+    createdAt: DateTime.parse(json['createdAt'] as String),
+    nonceBase64: json['nonceBase64'] as String,
+    encryptedPacketBase64: json['encryptedPacketBase64'] as String,
+  );
+}
+
+class PendingRelaySession {
+  const PendingRelaySession({
+    required this.relayId,
+    required this.sessionToken,
+    required this.chain,
+    required this.network,
+    required this.receiverAddress,
+    required this.createdAt,
+  });
+
+  final String relayId;
+  final String sessionToken;
+  final ChainKind chain;
+  final ChainNetwork network;
+  final String receiverAddress;
+  final DateTime createdAt;
+
+  bool get isExpired =>
+      DateTime.now().difference(createdAt) > const Duration(hours: 24);
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'relayId': relayId,
+    'sessionToken': sessionToken,
+    'chain': chain.name,
+    'network': network.name,
+    'receiverAddress': receiverAddress,
+    'createdAt': createdAt.toIso8601String(),
+  };
+
+  factory PendingRelaySession.fromJson(Map<String, dynamic> json) =>
+      PendingRelaySession(
+        relayId: json['relayId'] as String,
+        sessionToken: json['sessionToken'] as String,
+        chain: ChainKind.values.byName(json['chain'] as String),
+        network: ChainNetwork.values.byName(json['network'] as String),
+        receiverAddress: json['receiverAddress'] as String,
+        createdAt: DateTime.parse(json['createdAt'] as String),
+      );
+}
+
+class PreparedRelayCapsule {
+  const PreparedRelayCapsule({
+    required this.transfer,
+    required this.relayCapsule,
+    required this.relayUrl,
+  });
+
+  final PendingTransfer transfer;
+  final RelayCapsule relayCapsule;
+  final Uri relayUrl;
 }
 
 class OfflineEnvelope {
@@ -1301,6 +1663,66 @@ class EthereumPreparedContext {
         chainId: json['chainId'] as int,
         fetchedAt: DateTime.parse(json['fetchedAt'] as String),
       );
+}
+
+Uint8List _uuidStringToBytes(String value) {
+  final String normalized = value.replaceAll('-', '').trim().toLowerCase();
+  if (normalized.length != 32) {
+    throw const FormatException('Transfer id must be a UUID string.');
+  }
+  return _hexToBytes(normalized);
+}
+
+String _uuidBytesToString(List<int> bytes) {
+  if (bytes.length != 16) {
+    throw const FormatException('Transfer id bytes must be 16 bytes long.');
+  }
+  final String normalized = _bytesToHex(bytes);
+  return [
+    normalized.substring(0, 8),
+    normalized.substring(8, 12),
+    normalized.substring(12, 16),
+    normalized.substring(16, 20),
+    normalized.substring(20),
+  ].join('-');
+}
+
+Uint8List _sessionTokenToBytes(String token) {
+  final String normalized = token.trim().toLowerCase();
+  if (normalized.length != UltrasonicTransferPacket.sessionTokenLength * 2) {
+    throw const FormatException('Session token must be 16 bytes in hex.');
+  }
+  return _hexToBytes(normalized);
+}
+
+String _sessionTokenBytesToString(List<int> bytes) {
+  if (bytes.length != UltrasonicTransferPacket.sessionTokenLength) {
+    throw const FormatException('Session token bytes must be 16 bytes long.');
+  }
+  return _bytesToHex(bytes);
+}
+
+Uint8List _hexToBytes(String value) {
+  final String normalized = value.trim();
+  if (normalized.length.isOdd) {
+    throw const FormatException('Hex string length must be even.');
+  }
+  final Uint8List bytes = Uint8List(normalized.length ~/ 2);
+  for (int index = 0; index < normalized.length; index += 2) {
+    bytes[index ~/ 2] = int.parse(
+      normalized.substring(index, index + 2),
+      radix: 16,
+    );
+  }
+  return bytes;
+}
+
+String _bytesToHex(List<int> bytes) {
+  final StringBuffer buffer = StringBuffer();
+  for (final int value in bytes) {
+    buffer.write(value.toRadixString(16).padLeft(2, '0'));
+  }
+  return buffer.toString();
 }
 
 class Formatters {

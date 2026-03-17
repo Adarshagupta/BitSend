@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:solana/dto.dart'
@@ -204,8 +205,25 @@ class SolanaService {
     if (!isValidAddress(envelope.senderAddress) || !isValidAddress(envelope.receiverAddress)) {
       throw const FormatException('Envelope addresses are invalid.');
     }
+    final ValidatedTransactionDetails details = validateSignedTransactionBytes(
+      base64Decode(envelope.signedTransactionBase64),
+    );
+    if (details.senderAddress != envelope.senderAddress) {
+      throw const FormatException('Envelope sender does not match the signed transaction.');
+    }
+    if (details.receiverAddress != envelope.receiverAddress) {
+      throw const FormatException('Envelope receiver does not match the signed transaction.');
+    }
+    if (details.amountLamports != envelope.amountLamports) {
+      throw const FormatException('Envelope amount does not match the signed transaction.');
+    }
+    return details;
+  }
 
-    final SignedTx signedTx = SignedTx.decode(envelope.signedTransactionBase64);
+  ValidatedTransactionDetails validateSignedTransactionBytes(
+    Uint8List signedTransactionBytes,
+  ) {
+    final SignedTx signedTx = SignedTx.decode(base64Encode(signedTransactionBytes));
     final Message message = signedTx.decompileMessage();
     if (message.instructions.length != 1) {
       throw const FormatException('Only single transfer transactions are supported.');
@@ -234,16 +252,6 @@ class SolanaService {
 
     final ByteData byteData = ByteData.sublistView(Uint8List.fromList(data.sublist(4, 12)));
     final int amountLamports = byteData.getUint64(0, Endian.little);
-
-    if (senderAddress != envelope.senderAddress) {
-      throw const FormatException('Envelope sender does not match the signed transaction.');
-    }
-    if (receiverAddress != envelope.receiverAddress) {
-      throw const FormatException('Envelope receiver does not match the signed transaction.');
-    }
-    if (amountLamports != envelope.amountLamports) {
-      throw const FormatException('Envelope amount does not match the signed transaction.');
-    }
 
     return ValidatedTransactionDetails(
       chain: ChainKind.solana,

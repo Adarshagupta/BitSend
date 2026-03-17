@@ -166,6 +166,132 @@ class WelcomeScreen extends StatelessWidget {
   }
 }
 
+class UnlockScreen extends StatefulWidget {
+  const UnlockScreen({super.key});
+
+  @override
+  State<UnlockScreen> createState() => _UnlockScreenState();
+}
+
+class _UnlockScreenState extends State<UnlockScreen> {
+  String? _error;
+  bool _unlocking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _unlock();
+    });
+  }
+
+  Future<void> _unlock() async {
+    if (_unlocking) {
+      return;
+    }
+    final BitsendAppState state = BitsendStateScope.of(context);
+    if (!state.requiresDeviceUnlock) {
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pushReplacementNamed(AppRoutes.home);
+      return;
+    }
+    setState(() {
+      _unlocking = true;
+      _error = null;
+    });
+    try {
+      final bool unlocked = await state.authenticateDevice(
+        forcePrompt: true,
+        reason:
+            'Unlock Bitsend with your ${state.deviceUnlockMethodLabel}.',
+      );
+      if (!mounted) {
+        return;
+      }
+      if (unlocked) {
+        Navigator.of(context).pushReplacementNamed(AppRoutes.home);
+        return;
+      }
+      setState(() {
+        _error = 'Unlock was cancelled. Use your ${state.deviceUnlockMethodLabel} to continue.';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = _messageFor(error);
+      });
+    } finally {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _unlocking = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final BitsendAppState state = BitsendStateScope.of(context);
+    return BitsendPageScaffold(
+      title: 'Unlock wallet',
+      subtitle: 'Use your ${state.deviceUnlockMethodLabel} before opening Bitsend.',
+      showBack: false,
+      scrollable: false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          SectionCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Icon(
+                  state.deviceAuthHasBiometricOption
+                      ? Icons.fingerprint_rounded
+                      : Icons.lock_rounded,
+                  size: 32,
+                  color: AppColors.ink,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Security check',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Bitsend will ask for your ${state.deviceUnlockMethodLabel} before showing wallet data on this device.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ],
+            ),
+          ),
+          if (_error != null) ...<Widget>[
+            const SizedBox(height: 16),
+            InlineBanner(
+              title: 'Unlock required',
+              caption: _error!,
+              icon: Icons.lock_clock_rounded,
+            ),
+          ],
+        ],
+      ),
+      bottom: ElevatedButton(
+        onPressed: _unlocking ? null : _unlock,
+        child: Text(
+          _unlocking
+              ? 'Checking ${state.deviceUnlockMethodLabel}...'
+              : 'Unlock now',
+        ),
+      ),
+    );
+  }
+}
+
 class WalletSetupScreen extends StatefulWidget {
   const WalletSetupScreen({super.key});
 
@@ -179,6 +305,7 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
   final TextEditingController _phraseController = TextEditingController();
   String? _backupPath;
   _WalletSetupAction? _activeSetupAction;
+  bool _recoveryPhraseVisible = false;
 
   @override
   void dispose() {
@@ -193,6 +320,7 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
     setState(() {
       _activeSetupAction = _WalletSetupAction.create;
       _backupPath = null;
+      _recoveryPhraseVisible = false;
     });
     try {
       await state.createWallet();
@@ -215,6 +343,7 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
     setState(() {
       _activeSetupAction = _WalletSetupAction.restore;
       _backupPath = null;
+      _recoveryPhraseVisible = false;
     });
     try {
       await state.restoreWallet(_phraseController.text);
@@ -231,6 +360,15 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
   }
 
   Future<void> _exportBackup(BitsendAppState state) async {
+    final bool authorized = await _authorizeDeviceAction(
+      context,
+      state,
+      reason:
+          'Confirm your ${state.deviceUnlockMethodLabel} before exporting the wallet backup.',
+    );
+    if (!authorized) {
+      return;
+    }
     try {
       final WalletBackupExport export = await state.exportWalletBackup();
       if (!mounted) {
@@ -250,11 +388,39 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
     if (wallet == null) {
       return;
     }
+    final bool authorized = await _authorizeDeviceAction(
+      context,
+      state,
+      reason:
+          'Confirm your ${state.deviceUnlockMethodLabel} before copying the recovery phrase.',
+    );
+    if (!authorized) {
+      return;
+    }
     await Clipboard.setData(ClipboardData(text: wallet.seedPhrase));
     if (!mounted) {
       return;
     }
     _showSnack(context, 'Recovery phrase copied.');
+  }
+
+  Future<void> _revealRecoveryPhrase(BitsendAppState state) async {
+    final WalletProfile? wallet = state.wallet;
+    if (wallet == null) {
+      return;
+    }
+    final bool authorized = await _authorizeDeviceAction(
+      context,
+      state,
+      reason:
+          'Confirm your ${state.deviceUnlockMethodLabel} before revealing the recovery phrase.',
+    );
+    if (!authorized || !mounted) {
+      return;
+    }
+    setState(() {
+      _recoveryPhraseVisible = true;
+    });
   }
 
   Future<void> _copyBackupPath() async {
@@ -280,6 +446,8 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
     final bool restoringWallet =
         _activeSetupAction == _WalletSetupAction.restore;
     final bool setupActionRunning = _activeSetupAction != null;
+    final bool hideRecoveryPhrase =
+        state.deviceAuthAvailable && !_recoveryPhraseVisible;
     return BitsendPageScaffold(
       title: walletReady ? 'Secure your wallet' : 'Set up this device',
       subtitle: walletReady
@@ -371,15 +539,36 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 16),
-                      SelectableText(
-                        wallet.seedPhrase,
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
+                      if (!hideRecoveryPhrase)
+                        SelectableText(
+                          wallet.seedPhrase,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        )
+                      else
+                        Text(
+                          'Use your ${state.deviceUnlockMethodLabel} to reveal the recovery phrase on this device.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
                       const SizedBox(height: 18),
                       Wrap(
                         spacing: 10,
                         runSpacing: 10,
                         children: <Widget>[
+                          OutlinedButton.icon(
+                            onPressed: hideRecoveryPhrase
+                                ? () => _revealRecoveryPhrase(state)
+                                : null,
+                            icon: Icon(
+                              hideRecoveryPhrase
+                                  ? Icons.fingerprint_rounded
+                                  : Icons.lock_open_rounded,
+                            ),
+                            label: Text(
+                              hideRecoveryPhrase
+                                  ? 'Reveal phrase'
+                                  : 'Phrase unlocked',
+                            ),
+                          ),
                           ElevatedButton.icon(
                             onPressed: state.working
                                 ? null
@@ -1829,7 +2018,10 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
   }
 
   Future<void> _continue(BitsendAppState state) async {
-    final String rawReceiver = _addressController.text.trim();
+    final String rawReceiver =
+        state.sendDraft.transport == TransportKind.ultrasonic
+        ? state.sendDraft.receiverAddress
+        : _addressController.text.trim();
     String receiverAddress = rawReceiver;
     String receiverLabel = '';
     String receiverPreferredChain = '';
@@ -1890,7 +2082,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
         receiverPreferredChain: receiverPreferredChain,
         receiverPreferredToken: receiverPreferredToken,
       );
-    } else {
+    } else if (state.sendDraft.transport == TransportKind.ble) {
       state.updateReceiver(
         receiverAddress: receiverAddress,
         receiverLabel: receiverLabel,
@@ -1899,6 +2091,23 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
         receiverPreferredChain: receiverPreferredChain,
         receiverPreferredToken: receiverPreferredToken,
       );
+    } else {
+      state.updateReceiver(
+        receiverAddress: receiverAddress,
+        receiverLabel: receiverLabel,
+        receiverSessionToken: state.sendDraft.receiverSessionToken,
+        receiverRelayId: state.sendDraft.receiverRelayId,
+        receiverPreferredChain: receiverPreferredChain,
+        receiverPreferredToken: receiverPreferredToken,
+      );
+    }
+    if (state.sendDraft.transport == TransportKind.ultrasonic &&
+        state.sendDraft.receiverRelayId.isEmpty) {
+      _showSnack(
+        context,
+        'Scan the receiver ultrasonic QR before continuing.',
+      );
+      return;
     }
     if (!state.sendDraft.hasReceiver) {
       _showSnack(
@@ -1907,7 +2116,9 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
             ? 'Receiver address is required for BitGo mode.'
             : state.sendDraft.transport == TransportKind.hotspot
             ? 'Receiver address and endpoint are required.'
-            : 'Receiver address and a discovered BLE device are required.',
+            : state.sendDraft.transport == TransportKind.ble
+            ? 'Receiver address and a discovered BLE device are required.'
+            : 'Scan the receiver ultrasonic QR before continuing.',
       );
       return;
     }
@@ -1996,6 +2207,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
     final BitsendAppState state = BitsendStateScope.of(context);
     final TransportKind transport = state.sendDraft.transport;
     final bool usingBitGo = state.activeWalletEngine == WalletEngine.bitgo;
+    final bool showUltrasonic = !usingBitGo && state.ultrasonicSupported;
     return BitsendPageScaffold(
       title: 'Choose receiver',
       subtitle: usingBitGo
@@ -2014,17 +2226,23 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
             const SizedBox(height: 16),
           ],
           SegmentedButton<TransportKind>(
-            segments: const <ButtonSegment<TransportKind>>[
-              ButtonSegment<TransportKind>(
+            segments: <ButtonSegment<TransportKind>>[
+              const ButtonSegment<TransportKind>(
                 value: TransportKind.hotspot,
                 label: Text('Hotspot'),
                 icon: Icon(Icons.wifi_tethering_rounded),
               ),
-              ButtonSegment<TransportKind>(
+              const ButtonSegment<TransportKind>(
                 value: TransportKind.ble,
                 label: Text('BLE'),
                 icon: Icon(Icons.bluetooth_rounded),
               ),
+              if (showUltrasonic)
+                const ButtonSegment<TransportKind>(
+                  value: TransportKind.ultrasonic,
+                  label: Text('Ultrasonic'),
+                  icon: Icon(Icons.graphic_eq_rounded),
+                ),
             ],
             selected: <TransportKind>{transport},
             onSelectionChanged: (Set<TransportKind> value) {
@@ -2060,6 +2278,7 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                 const SizedBox(height: 10),
                 TextField(
                   controller: _addressController,
+                  readOnly: transport == TransportKind.ultrasonic,
                   decoration: InputDecoration(
                     labelText: state.activeChain.isEvm
                         ? 'Receiver address or ENS'
@@ -2095,7 +2314,15 @@ class _SendTransportScreenState extends State<SendTransportScreen> {
                     ),
                   ],
                 ],
-                if (usingBitGo &&
+                if (transport == TransportKind.ultrasonic) ...<Widget>[
+                  const SizedBox(height: 18),
+                  const InlineBanner(
+                    title: 'QR pairing required',
+                    caption:
+                        'Ultrasonic handoff is paired through the receiver QR. Scan the receiver QR to fill the address, session token, and relay id before continuing.',
+                    icon: Icons.qr_code_rounded,
+                  ),
+                ] else if (usingBitGo &&
                     transport == TransportKind.hotspot) ...<Widget>[
                   const SizedBox(height: 18),
                   const InlineBanner(
@@ -2500,12 +2727,16 @@ class SendReviewScreen extends StatelessWidget {
                       ? 'Discovery'
                       : draft.transport == TransportKind.hotspot
                       ? 'Endpoint'
-                      : 'BLE receiver',
+                      : draft.transport == TransportKind.ble
+                      ? 'BLE receiver'
+                      : 'Session',
                   value: usingBitGo
                       ? draft.transport.label
                       : draft.transport == TransportKind.hotspot
                       ? draft.receiverEndpoint
-                      : draft.receiverPeripheralName,
+                      : draft.transport == TransportKind.ble
+                      ? draft.receiverPeripheralName
+                      : draft.receiverRelayId,
                 ),
                 DetailRow(
                   label: 'Amount',
@@ -2545,14 +2776,197 @@ class SendReviewScreen extends StatelessWidget {
           ),
         ],
       ),
-      bottom: ElevatedButton(
-        onPressed: amountLimitMessage != null
-            ? null
-            : () {
-                Navigator.of(context).pushNamed(AppRoutes.sendProgress);
-              },
-        child: Text(usingBitGo ? 'Submit with BitGo' : 'Sign and send'),
+      bottom: draft.transport == TransportKind.ultrasonic && !usingBitGo
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                ElevatedButton(
+                  onPressed: amountLimitMessage != null
+                      ? null
+                      : () {
+                          Navigator.of(context).pushNamed(AppRoutes.sendProgress);
+                        },
+                  child: const Text('Sign and send'),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton(
+                  onPressed: amountLimitMessage != null
+                      ? null
+                      : () {
+                          Navigator.of(context).pushNamed(AppRoutes.sendRelay);
+                        },
+                  child: const Text('Relay via browser courier'),
+                ),
+              ],
+            )
+          : ElevatedButton(
+              onPressed: amountLimitMessage != null
+                  ? null
+                  : () {
+                      Navigator.of(context).pushNamed(AppRoutes.sendProgress);
+                    },
+              child: Text(usingBitGo ? 'Submit with BitGo' : 'Sign and send'),
+            ),
+    );
+  }
+}
+
+class SendRelayScreen extends StatefulWidget {
+  const SendRelayScreen({super.key});
+
+  @override
+  State<SendRelayScreen> createState() => _SendRelayScreenState();
+}
+
+class _SendRelayScreenState extends State<SendRelayScreen> {
+  PreparedRelayCapsule? _prepared;
+  String? _error;
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) {
+      return;
+    }
+    _started = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _prepare();
+    });
+  }
+
+  Future<void> _prepare() async {
+    final BitsendAppState state = BitsendStateScope.of(context);
+    try {
+      final PreparedRelayCapsule prepared =
+          await state.prepareRelayCapsuleForCurrentDraft();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _prepared = prepared;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = _messageFor(error);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final PreparedRelayCapsule? prepared = _prepared;
+    return BitsendPageScaffold(
+      title: 'Browser relay',
+      subtitle: 'Show this QR or copy the link on a browser courier device.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          if (_error != null) ...<Widget>[
+            InlineBanner(
+              title: 'Relay setup failed',
+              caption: _error!,
+              icon: Icons.error_outline_rounded,
+            ),
+            const SizedBox(height: 16),
+          ],
+          if (prepared == null && _error == null)
+            const SectionCard(
+              child: SizedBox(
+                height: 160,
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            )
+          else if (prepared != null) ...<Widget>[
+            SectionCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Center(
+                    child: QrImageView(
+                      data: prepared.relayUrl.toString(),
+                      version: QrVersions.auto,
+                      size: 220,
+                      backgroundColor: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  DetailRow(
+                    label: 'Relay ID',
+                    value: prepared.relayCapsule.relayId,
+                  ),
+                  DetailRow(
+                    label: 'Transfer',
+                    value: prepared.transfer.transferId,
+                  ),
+                  DetailRow(
+                    label: 'Amount',
+                    value: Formatters.asset(
+                      prepared.transfer.amountSol,
+                      prepared.transfer.chain,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            SectionCard(
+              child: SelectionArea(
+                child: Text(
+                  prepared.relayUrl.toString(),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
+      bottom: prepared == null
+          ? (_error == null
+                ? const SizedBox(
+                    height: 56,
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                : ElevatedButton(
+                    onPressed: () {
+                      setState(() {
+                        _error = null;
+                        _prepared = null;
+                      });
+                      _prepare();
+                    },
+                    child: const Text('Try again'),
+                  ))
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    await Clipboard.setData(
+                      ClipboardData(text: prepared.relayUrl.toString()),
+                    );
+                    if (!mounted) {
+                      return;
+                    }
+                    _showSnack(context, 'Relay link copied.');
+                  },
+                  icon: const Icon(Icons.copy_all_rounded),
+                  label: const Text('Copy link'),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton(
+                  onPressed: () {
+                    Navigator.of(context).pushReplacementNamed(
+                      AppRoutes.sendSuccess,
+                    );
+                  },
+                  child: const Text('Open success'),
+                ),
+              ],
+            ),
     );
   }
 }
@@ -2648,7 +3062,9 @@ class _SendProgressScreenState extends State<SendProgressScreen> {
               title: 'Deliver offline',
               caption: transport == TransportKind.hotspot
                   ? 'The signed envelope is sent to the receiver over the local network.'
-                  : 'The signed envelope is sent to the receiver over BLE.',
+                  : transport == TransportKind.ble
+                  ? 'The signed envelope is sent to the receiver over BLE.'
+                  : 'The signed envelope is sent over the ultrasonic session.',
               complete: _stage > 1,
               current: _stage == 1,
             ),
@@ -3097,9 +3513,12 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
     final BitsendAppState state = BitsendStateScope.of(context);
     final TransportKind transport = state.receiveTransport;
     final bool usingBitGo = state.activeWalletEngine == WalletEngine.bitgo;
+    final bool showUltrasonic = !usingBitGo && state.ultrasonicSupported;
     final bool activeListener = transport == TransportKind.hotspot
         ? state.hotspotListenerRunning
-        : state.bleListenerRunning;
+        : transport == TransportKind.ble
+        ? state.bleListenerRunning
+        : state.ultrasonicListenerRunning;
     final ReceiverInvitePayload? invite = _receiverInvitePayload(
       state,
       transport,
@@ -3108,8 +3527,8 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
     return BitsendPageScaffold(
       title: 'Receive',
       subtitle: usingBitGo
-          ? 'BitGo mode does not listen offline. Switch back to Local mode to receive over hotspot or BLE.'
-          : 'Catch a signed handoff over local Wi-Fi or BLE.',
+          ? 'BitGo mode does not listen offline. Switch back to Local mode to receive over hotspot, BLE, or ultrasonic.'
+          : 'Catch a signed handoff over hotspot, BLE, or ultrasonic.',
       onRefresh: state.working ? null : state.refreshStatus,
       showBack: false,
       showHeader: false,
@@ -3125,7 +3544,7 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
             const InlineBanner(
               title: 'BitGo mode does not listen offline',
               caption:
-                  'Switch back to Local mode from the header to receive over hotspot or BLE.',
+                  'Switch back to Local mode from the header to receive over hotspot, BLE, or ultrasonic.',
               icon: Icons.shield_outlined,
             ),
             const SizedBox(height: 16),
@@ -3135,6 +3554,7 @@ class _ReceiveListenScreenState extends State<ReceiveListenScreen> {
             transport: transport,
             activeListener: activeListener && !usingBitGo,
             hasWallet: state.hasWallet,
+            showUltrasonic: showUltrasonic,
             invite: invite,
             receiverDisplayAddress:
                 state.wallet?.displayAddress ?? 'Wallet missing',
@@ -4591,6 +5011,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _ensTokenController;
   String? _backupPath;
   EnsPaymentPreference? _loadedEnsPreference;
+  bool _recoveryPhraseVisible = false;
 
   @override
   void initState() {
@@ -4632,6 +5053,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _clearAll(BitsendAppState state) async {
+    final bool authorized = await _authorizeDeviceAction(
+      context,
+      state,
+      reason:
+          'Confirm your ${state.deviceUnlockMethodLabel} before clearing all wallet data from this device.',
+    );
+    if (!authorized) {
+      return;
+    }
     try {
       await state.clearLocalData();
       if (!mounted) {
@@ -4674,6 +5104,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _exportBackup(BitsendAppState state) async {
+    final bool authorized = await _authorizeDeviceAction(
+      context,
+      state,
+      reason:
+          'Confirm your ${state.deviceUnlockMethodLabel} before exporting the wallet backup.',
+    );
+    if (!authorized) {
+      return;
+    }
     try {
       final WalletBackupExport export = await state.exportWalletBackup();
       if (!mounted) {
@@ -4686,6 +5125,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (error) {
       _showSnack(context, _messageFor(error));
     }
+  }
+
+  Future<void> _copyPhrase(BitsendAppState state) async {
+    final WalletProfile? wallet = state.wallet;
+    if (wallet == null) {
+      return;
+    }
+    final bool authorized = await _authorizeDeviceAction(
+      context,
+      state,
+      reason:
+          'Confirm your ${state.deviceUnlockMethodLabel} before copying the recovery phrase.',
+    );
+    if (!authorized) {
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: wallet.seedPhrase));
+    if (!mounted) {
+      return;
+    }
+    _showSnack(context, 'Recovery phrase copied.');
+  }
+
+  Future<void> _revealRecoveryPhrase(BitsendAppState state) async {
+    if (state.wallet == null) {
+      return;
+    }
+    final bool authorized = await _authorizeDeviceAction(
+      context,
+      state,
+      reason:
+          'Confirm your ${state.deviceUnlockMethodLabel} before revealing the recovery phrase.',
+    );
+    if (!authorized || !mounted) {
+      return;
+    }
+    setState(() {
+      _recoveryPhraseVisible = true;
+    });
   }
 
   Future<void> _readEnsPreference(BitsendAppState state) async {
@@ -4740,6 +5218,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final BitsendAppState state = BitsendStateScope.of(context);
+    final bool hideRecoveryPhrase =
+        state.wallet != null &&
+        state.deviceAuthAvailable &&
+        !_recoveryPhraseVisible;
     final String defaultRpcHint = switch ((
       state.activeChain,
       state.activeNetwork,
@@ -4775,10 +5257,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 8),
-                SelectableText(
-                  state.wallet?.seedPhrase ?? 'Wallet not created yet.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
+                if (state.wallet == null)
+                  const Text('Wallet not created yet.')
+                else if (!hideRecoveryPhrase)
+                  SelectableText(
+                    state.wallet!.seedPhrase,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  )
+                else
+                  Text(
+                    'Use your ${state.deviceUnlockMethodLabel} to reveal the recovery phrase on this device.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
                 const SizedBox(height: 12),
                 Text(
                   state.offlineWallet == null
@@ -4792,17 +5282,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   runSpacing: 10,
                   children: <Widget>[
                     OutlinedButton(
+                      onPressed: state.wallet == null || !hideRecoveryPhrase
+                          ? null
+                          : () => _revealRecoveryPhrase(state),
+                      child: Text(
+                        hideRecoveryPhrase
+                            ? 'Reveal phrase'
+                            : 'Phrase unlocked',
+                      ),
+                    ),
+                    OutlinedButton(
                       onPressed: state.wallet == null
                           ? null
-                          : () async {
-                              await Clipboard.setData(
-                                ClipboardData(text: state.wallet!.seedPhrase),
-                              );
-                              if (!context.mounted) {
-                                return;
-                              }
-                              _showSnack(context, 'Recovery phrase copied.');
-                            },
+                          : () => _copyPhrase(state),
                       child: const Text('Copy phrase'),
                     ),
                     ElevatedButton(
@@ -8004,8 +8496,13 @@ ReceiverInvitePayload? _receiverInvitePayload(
   if (wallet == null) {
     return null;
   }
+  final PendingRelaySession? ultrasonicSession = state.activeUltrasonicSession;
   if (transport == TransportKind.hotspot &&
       (!activeListener || state.localEndpoint == null)) {
+    return null;
+  }
+  if (transport == TransportKind.ultrasonic &&
+      (!activeListener || ultrasonicSession == null)) {
     return null;
   }
   return ReceiverInvitePayload(
@@ -8015,6 +8512,12 @@ ReceiverInvitePayload? _receiverInvitePayload(
     address: wallet.address,
     displayAddress: wallet.displayAddress,
     endpoint: transport == TransportKind.hotspot ? state.localEndpoint : null,
+    sessionToken: transport == TransportKind.ultrasonic
+        ? ultrasonicSession!.sessionToken
+        : null,
+    relayId: transport == TransportKind.ultrasonic
+        ? ultrasonicSession!.relayId
+        : null,
   );
 }
 
@@ -8058,6 +8561,7 @@ class _ReceiveStudioCard extends StatelessWidget {
     required this.transport,
     required this.activeListener,
     required this.hasWallet,
+    required this.showUltrasonic,
     required this.invite,
     required this.receiverDisplayAddress,
     required this.receiverAddress,
@@ -8071,6 +8575,7 @@ class _ReceiveStudioCard extends StatelessWidget {
   final TransportKind transport;
   final bool activeListener;
   final bool hasWallet;
+  final bool showUltrasonic;
   final ReceiverInvitePayload? invite;
   final String receiverDisplayAddress;
   final String receiverAddress;
@@ -8085,21 +8590,35 @@ class _ReceiveStudioCard extends StatelessWidget {
         ? 'Wallet needed before receive'
         : activeListener
         ? 'Ready to catch a handoff'
-        : transport == TransportKind.hotspot
-        ? 'Open same-network receive'
-        : 'Open Bluetooth receive';
+        : switch (transport) {
+            TransportKind.hotspot => 'Open same-network receive',
+            TransportKind.ble => 'Open Bluetooth receive',
+            TransportKind.ultrasonic => 'Open ultrasonic receive',
+          };
     final String caption = !hasWallet
         ? 'Create or restore a wallet first.'
-        : transport == TransportKind.hotspot
-        ? activeListener
-              ? 'Share the QR on the same Wi-Fi or hotspot. The sender fills your address and endpoint in one scan.'
-              : 'Start when both phones share the same Wi-Fi or hotspot.'
-        : activeListener
-        ? 'Keep Bluetooth on and leave this screen open so nearby senders can discover this receiver.'
-        : 'Start when Bluetooth is on and both phones are nearby.';
-    final String helper = transport == TransportKind.hotspot
-        ? (endpoint ?? 'Join a local Wi-Fi or hotspot first.')
-        : 'bitsend BLE receiver';
+        : switch (transport) {
+            TransportKind.hotspot => activeListener
+                ? 'Share the QR on the same Wi-Fi or hotspot. The sender fills your address and endpoint in one scan.'
+                : 'Start when both phones share the same Wi-Fi or hotspot.',
+            TransportKind.ble => activeListener
+                ? 'Keep Bluetooth on and leave this screen open so nearby senders can discover this receiver.'
+                : 'Start when Bluetooth is on and both phones are nearby.',
+            TransportKind.ultrasonic => activeListener
+                ? 'Share the QR to pair an ultrasonic or browser relay session. The sender gets your address, session token, and relay id in one scan.'
+                : 'Start to mint a fresh ultrasonic session token and relay id.',
+          };
+    final String helper = switch (transport) {
+      TransportKind.hotspot => endpoint ?? 'Join a local Wi-Fi or hotspot first.',
+      TransportKind.ble => 'bitsend BLE receiver',
+      TransportKind.ultrasonic =>
+        invite?.relayId ?? 'A fresh relay id appears after ultrasonic receive starts.',
+    };
+    final String helperLabel = switch (transport) {
+      TransportKind.hotspot => 'Endpoint',
+      TransportKind.ble => 'Signal',
+      TransportKind.ultrasonic => 'Relay ID',
+    };
     final bool showEndpointWarning =
         transport == TransportKind.hotspot && endpoint == null;
 
@@ -8110,17 +8629,23 @@ class _ReceiveStudioCard extends StatelessWidget {
         builder: (BuildContext context, BoxConstraints constraints) {
           final bool wide = constraints.maxWidth >= 620;
           final Widget transportSwitch = SegmentedButton<TransportKind>(
-            segments: const <ButtonSegment<TransportKind>>[
-              ButtonSegment<TransportKind>(
+            segments: <ButtonSegment<TransportKind>>[
+              const ButtonSegment<TransportKind>(
                 value: TransportKind.hotspot,
                 label: Text('Hotspot'),
                 icon: Icon(Icons.wifi_tethering_rounded),
               ),
-              ButtonSegment<TransportKind>(
+              const ButtonSegment<TransportKind>(
                 value: TransportKind.ble,
                 label: Text('BLE'),
                 icon: Icon(Icons.bluetooth_rounded),
               ),
+              if (showUltrasonic)
+                const ButtonSegment<TransportKind>(
+                  value: TransportKind.ultrasonic,
+                  label: Text('Ultrasonic'),
+                  icon: Icon(Icons.graphic_eq_rounded),
+                ),
             ],
             selected: <TransportKind>{transport},
             onSelectionChanged: (Set<TransportKind> value) {
@@ -8311,9 +8836,7 @@ class _ReceiveStudioCard extends StatelessWidget {
                         const SizedBox(height: 14),
                         _ReceiveMetaLine(
                           icon: transport.icon,
-                          label: transport == TransportKind.hotspot
-                              ? 'Endpoint'
-                              : 'Signal',
+                          label: helperLabel,
                           value: helper,
                         ),
                         const SizedBox(height: 8),
@@ -8406,16 +8929,23 @@ class _ReceiveHeroQr extends StatelessWidget {
     final String caption = !hasWallet
         ? 'Set up the wallet first.'
         : invite == null
-        ? transport == TransportKind.hotspot
-              ? activeListener
-                    ? 'Waiting for the local endpoint.'
-                    : 'Start hotspot receive to show the live QR.'
-              : activeListener
-              ? 'BLE is live. Nearby senders can detect this receiver.'
-              : 'Start BLE receive to show the live QR.'
-        : transport == TransportKind.hotspot
-        ? 'Scan to fill address and endpoint.'
-        : 'Scan to switch the sender into BLE.';
+        ? switch (transport) {
+            TransportKind.hotspot => activeListener
+                ? 'Waiting for the local endpoint.'
+                : 'Start hotspot receive to show the live QR.',
+            TransportKind.ble => activeListener
+                ? 'BLE is live. Nearby senders can detect this receiver.'
+                : 'Start BLE receive to show the live QR.',
+            TransportKind.ultrasonic => activeListener
+                ? 'Ultrasonic pairing is live. Senders can scan this QR for direct handoff or browser relay.'
+                : 'Start ultrasonic receive to show the live pairing QR.',
+          }
+        : switch (transport) {
+            TransportKind.hotspot => 'Scan to fill address and endpoint.',
+            TransportKind.ble => 'Scan to switch the sender into BLE.',
+            TransportKind.ultrasonic =>
+              'Scan to fill the address, session token, and relay id.',
+          };
 
     return Container(
       width: 244,
@@ -8460,9 +8990,13 @@ class _ReceiveHeroQr extends StatelessWidget {
               ),
               child: Icon(
                 hasWallet
-                    ? transport == TransportKind.hotspot
-                          ? Icons.wifi_tethering_rounded
-                          : Icons.bluetooth_searching_rounded
+                    ? switch (transport) {
+                        TransportKind.hotspot =>
+                          Icons.wifi_tethering_rounded,
+                        TransportKind.ble =>
+                          Icons.bluetooth_searching_rounded,
+                        TransportKind.ultrasonic => Icons.graphic_eq_rounded,
+                      }
                     : Icons.account_balance_wallet_outlined,
                 size: 44,
                 color: hasWallet ? _transportTone(transport) : AppColors.slate,
@@ -8699,6 +9233,12 @@ Future<bool> _prepareScannedReceiverDraft(
 ) async {
   await state.setActiveChain(invite.chain);
   await state.setActiveNetwork(invite.network);
+  if (state.activeWalletEngine == WalletEngine.bitgo &&
+      invite.transport == TransportKind.ultrasonic) {
+    throw const FormatException(
+      'Ultrasonic pairing is only available in Local wallet mode.',
+    );
+  }
   state.clearDraft();
   state.setSendTransport(invite.transport);
 
@@ -8708,6 +9248,15 @@ Future<bool> _prepareScannedReceiverDraft(
       receiverEndpoint: state.activeWalletEngine == WalletEngine.local
           ? invite.endpoint ?? ''
           : '',
+    );
+    return true;
+  }
+
+  if (invite.transport == TransportKind.ultrasonic) {
+    state.updateReceiver(
+      receiverAddress: invite.address,
+      receiverSessionToken: invite.sessionToken ?? '',
+      receiverRelayId: invite.relayId ?? '',
     );
     return true;
   }
@@ -8760,6 +9309,7 @@ bool _addressesMatch(String left, String right) {
 Color _transportTone(TransportKind transport) => switch (transport) {
   TransportKind.hotspot => AppColors.blue,
   TransportKind.ble => AppColors.emerald,
+  TransportKind.ultrasonic => AppColors.amber,
 };
 
 class _ReceiverQrScannerScreen extends StatefulWidget {
@@ -8984,4 +9534,26 @@ String _messageFor(Object error) {
     return separator == -1 ? text : text.substring(separator + 2);
   }
   return text;
+}
+
+Future<bool> _authorizeDeviceAction(
+  BuildContext context,
+  BitsendAppState state, {
+  required String reason,
+}) async {
+  try {
+    final bool authorized = await state.authenticateDevice(
+      reason: reason,
+      forcePrompt: true,
+    );
+    if (!authorized && context.mounted) {
+      _showSnack(context, 'Device authentication was cancelled.');
+    }
+    return authorized;
+  } catch (error) {
+    if (context.mounted) {
+      _showSnack(context, _messageFor(error));
+    }
+    return false;
+  }
 }

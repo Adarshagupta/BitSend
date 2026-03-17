@@ -34,6 +34,25 @@ void main() {
     expect(find.text('Send now. Settle later.'), findsOneWidget);
   });
 
+  testWidgets('boot routes an existing wallet into unlock when device auth is required', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      bootRouteValue: AppRoutes.unlock,
+      walletValue: _wallet,
+      deviceAuthAvailableValue: true,
+      deviceAuthHasBiometricOptionValue: true,
+      requiresDeviceUnlockValue: true,
+      authenticateDeviceResultValue: false,
+    );
+
+    await tester.pumpWidget(BitsendApp(appState: state));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Unlock wallet'), findsOneWidget);
+    expect(find.text('Unlock now'), findsOneWidget);
+  });
+
   testWidgets('home shows send prep card when not prepared', (
     WidgetTester tester,
   ) async {
@@ -135,6 +154,26 @@ void main() {
     expect(find.text('Save to ENS'), findsOneWidget);
   });
 
+  testWidgets('settings hides recovery phrase until reveal is requested', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      offlineWalletValue: _offlineWallet,
+      deviceAuthAvailableValue: true,
+      deviceAuthHasBiometricOptionValue: true,
+    );
+
+    await pumpWithState(tester, state: state, child: const SettingsScreen());
+
+    expect(find.text(_wallet.seedPhrase), findsNothing);
+    expect(find.text('Reveal phrase'), findsOneWidget);
+    expect(
+      find.textContaining('fingerprint or phone passcode'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('fund screen allows skipping when wallet is not funded', (
     WidgetTester tester,
   ) async {
@@ -207,6 +246,35 @@ void main() {
     expect(find.text('Ready to catch a handoff'), findsOneWidget);
     expect(find.text('Share QR'), findsOneWidget);
     expect(find.text('Stop listener'), findsOneWidget);
+  });
+
+  testWidgets('receive screen shows ultrasonic relay details when supported', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      receiveTransportValue: TransportKind.ultrasonic,
+      ultrasonicSupportedValue: true,
+      ultrasonicListenerRunningValue: true,
+      activeUltrasonicSessionValue: const PendingRelaySession(
+        relayId: 'relay-session-1',
+        sessionToken: '00112233445566778899aabbccddeeff',
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        receiverAddress: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+        createdAt: DateTime(2026, 3, 14, 12),
+      ),
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const ReceiveListenScreen(),
+    );
+
+    expect(find.text('Ultrasonic'), findsAtLeastNWidgets(1));
+    expect(find.text('Relay ID:'), findsOneWidget);
+    expect(find.text('relay-session-1'), findsOneWidget);
   });
 
   testWidgets('receive result screen shows the stored transfer details', (
@@ -785,6 +853,9 @@ class _TestBitsendAppState extends BitsendAppState {
     this.bitgoBackendModeValue = BitGoBackendMode.live,
     this.hotspotListenerRunningValue = false,
     this.bleListenerRunningValue = false,
+    this.ultrasonicSupportedValue = false,
+    this.ultrasonicListenerRunningValue = false,
+    this.activeUltrasonicSessionValue,
     this.lastSentTransferValue,
     this.lastReceivedTransferIdValue,
     this.announcementMessageValue,
@@ -792,6 +863,10 @@ class _TestBitsendAppState extends BitsendAppState {
     this.estimatedSendFeeHeadroomSolValue = 0,
     this.maxSendAmountSolValue = 0,
     this.validateSendAmountHandler,
+    this.deviceAuthAvailableValue = false,
+    this.deviceAuthHasBiometricOptionValue = false,
+    this.requiresDeviceUnlockValue = false,
+    this.authenticateDeviceResultValue = true,
   }) : super(clock: () => DateTime(2026, 3, 13, 12));
 
   final String bootRouteValue;
@@ -819,6 +894,9 @@ class _TestBitsendAppState extends BitsendAppState {
   final BitGoBackendMode bitgoBackendModeValue;
   final bool hotspotListenerRunningValue;
   final bool bleListenerRunningValue;
+  final bool ultrasonicSupportedValue;
+  final bool ultrasonicListenerRunningValue;
+  final PendingRelaySession? activeUltrasonicSessionValue;
   final PendingTransfer? lastSentTransferValue;
   final String? lastReceivedTransferIdValue;
   final String? announcementMessageValue;
@@ -826,6 +904,10 @@ class _TestBitsendAppState extends BitsendAppState {
   final double estimatedSendFeeHeadroomSolValue;
   final double maxSendAmountSolValue;
   final String? Function(double amountSol)? validateSendAmountHandler;
+  final bool deviceAuthAvailableValue;
+  final bool deviceAuthHasBiometricOptionValue;
+  final bool requiresDeviceUnlockValue;
+  final bool authenticateDeviceResultValue;
 
   @override
   Future<void> initialize() async {}
@@ -856,6 +938,27 @@ class _TestBitsendAppState extends BitsendAppState {
 
   @override
   String? get statusMessage => statusMessageValue;
+
+  @override
+  bool get deviceAuthAvailable => deviceAuthAvailableValue;
+
+  @override
+  bool get deviceAuthHasBiometricOption =>
+      deviceAuthHasBiometricOptionValue;
+
+  @override
+  bool get requiresDeviceUnlock => requiresDeviceUnlockValue;
+
+  @override
+  String get deviceUnlockMethodLabel => deviceAuthHasBiometricOptionValue
+      ? 'fingerprint or phone passcode'
+      : 'phone passcode';
+
+  @override
+  Future<bool> authenticateDevice({
+    String? reason,
+    bool forcePrompt = false,
+  }) async => authenticateDeviceResultValue;
 
   @override
   bool get hasEnoughFunding => hasEnoughFundingValue;
@@ -921,13 +1024,25 @@ class _TestBitsendAppState extends BitsendAppState {
 
   @override
   bool get listenerRunning =>
-      hotspotListenerRunningValue || bleListenerRunningValue;
+      hotspotListenerRunningValue ||
+      bleListenerRunningValue ||
+      ultrasonicListenerRunningValue;
 
   @override
   bool get hotspotListenerRunning => hotspotListenerRunningValue;
 
   @override
   bool get bleListenerRunning => bleListenerRunningValue;
+
+  @override
+  bool get ultrasonicSupported => ultrasonicSupportedValue;
+
+  @override
+  bool get ultrasonicListenerRunning => ultrasonicListenerRunningValue;
+
+  @override
+  PendingRelaySession? get activeUltrasonicSession =>
+      activeUltrasonicSessionValue;
 
   @override
   String? get lastReceivedTransferId => lastReceivedTransferIdValue;
