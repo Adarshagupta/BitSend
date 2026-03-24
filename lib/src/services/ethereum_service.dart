@@ -15,6 +15,10 @@ class EthereumService {
   static const int mainnetChainId = 1;
   static const int baseSepoliaChainId = 84532;
   static const int baseMainnetChainId = 8453;
+  static const int bnbTestnetChainId = 97;
+  static const int bnbMainnetChainId = 56;
+  static const int polygonAmoyChainId = 80002;
+  static const int polygonMainnetChainId = 137;
   static const int transferGasLimit = 21000;
   static const Duration _defaultConfirmationTimeout = Duration(seconds: 75);
   static final EthereumAddress _ensRegistryAddress = EthereumAddress.fromHex(
@@ -82,6 +86,274 @@ class EthereumService {
 ]
 ''',
     'ENSResolver',
+  ).functions.single;
+  static final ContractFunction _erc20BalanceOfFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "constant": true,
+    "inputs": [{"name":"account","type":"address"}],
+    "name": "balanceOf",
+    "outputs": [{"name":"","type":"uint256"}],
+    "payable": false,
+    "stateMutability": "view",
+    "type": "function"
+  }
+]
+''',
+    'ERC20',
+  ).functions.single;
+  static final ContractFunction _erc20AllowanceFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "constant": true,
+    "inputs": [
+      {"name":"owner","type":"address"},
+      {"name":"spender","type":"address"}
+    ],
+    "name": "allowance",
+    "outputs": [{"name":"","type":"uint256"}],
+    "payable": false,
+    "stateMutability": "view",
+    "type": "function"
+  }
+]
+''',
+    'ERC20',
+  ).functions.single;
+  static final ContractFunction _erc20TransferFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "constant": false,
+    "inputs": [
+      {"name":"to","type":"address"},
+      {"name":"value","type":"uint256"}
+    ],
+    "name": "transfer",
+    "outputs": [{"name":"","type":"bool"}],
+    "payable": false,
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]
+''',
+    'ERC20',
+  ).functions.single;
+  static final ContractFunction _erc20ApproveFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "constant": false,
+    "inputs": [
+      {"name":"spender","type":"address"},
+      {"name":"value","type":"uint256"}
+    ],
+    "name": "approve",
+    "outputs": [{"name":"","type":"bool"}],
+    "payable": false,
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]
+''',
+    'ERC20',
+  ).functions.single;
+  static final ContractFunction _erc20DecimalsFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "constant": true,
+    "inputs": [],
+    "name": "decimals",
+    "outputs": [{"name":"","type":"uint8"}],
+    "payable": false,
+    "stateMutability": "view",
+    "type": "function"
+  }
+]
+''',
+    'ERC20',
+  ).functions.single;
+  static final ContractFunction _erc20SymbolFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "constant": true,
+    "inputs": [],
+    "name": "symbol",
+    "outputs": [{"name":"","type":"string"}],
+    "payable": false,
+    "stateMutability": "view",
+    "type": "function"
+  }
+]
+''',
+    'ERC20',
+  ).functions.single;
+  static final ContractFunction _erc20NameFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "constant": true,
+    "inputs": [],
+    "name": "name",
+    "outputs": [{"name":"","type":"string"}],
+    "payable": false,
+    "stateMutability": "view",
+    "type": "function"
+  }
+]
+''',
+    'ERC20',
+  ).functions.single;
+  static final ContractFunction _offlineVoucherCreateEscrowFunction =
+      ContractAbi.fromJson(
+        '''
+[
+  {
+    "inputs": [
+      {"internalType":"bytes32","name":"escrowId","type":"bytes32"},
+      {"internalType":"address","name":"asset","type":"address"},
+      {"internalType":"uint256","name":"amount","type":"uint256"},
+      {"internalType":"uint64","name":"expiry","type":"uint64"},
+      {"internalType":"bytes32","name":"voucherRoot","type":"bytes32"}
+    ],
+    "name":"createEscrow",
+    "outputs":[],
+    "stateMutability":"payable",
+    "type":"function"
+  }
+]
+''',
+        'BitSendOfflineVoucherEscrow',
+      ).functions.single;
+  static final ContractFunction _offlineVoucherClaimFunction =
+      ContractAbi.fromJson(
+        '''
+[
+  {
+    "inputs": [
+      {"internalType":"bytes32","name":"escrowId","type":"bytes32"},
+      {"internalType":"bytes32","name":"voucherId","type":"bytes32"},
+      {"internalType":"uint256","name":"amount","type":"uint256"},
+      {"internalType":"uint64","name":"voucherExpiry","type":"uint64"},
+      {"internalType":"bytes32","name":"nonce","type":"bytes32"},
+      {"internalType":"address","name":"receiver","type":"address"},
+      {"internalType":"bytes","name":"ownerSignature","type":"bytes"},
+      {"internalType":"bytes32[]","name":"voucherProof","type":"bytes32[]"}
+    ],
+    "name":"claimVoucher",
+    "outputs":[],
+    "stateMutability":"nonpayable",
+    "type":"function"
+  }
+]
+''',
+        'BitSendOfflineVoucherEscrow',
+      ).functions.single;
+  static final ContractFunction _offlineVoucherRefundFunction =
+      ContractAbi.fromJson(
+        '''
+[
+  {
+    "inputs":[{"internalType":"bytes32","name":"escrowId","type":"bytes32"}],
+    "name":"refundExpiredEscrow",
+    "outputs":[],
+    "stateMutability":"nonpayable",
+    "type":"function"
+  }
+]
+''',
+        'BitSendOfflineVoucherEscrow',
+      ).functions.single;
+  static final ContractFunction _offlineVoucherEscrowViewFunction =
+      ContractAbi.fromJson(
+        '''
+[
+  {
+    "inputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],
+    "name":"escrows",
+    "outputs":[
+      {"internalType":"address","name":"owner","type":"address"},
+      {"internalType":"address","name":"asset","type":"address"},
+      {"internalType":"uint256","name":"totalAmount","type":"uint256"},
+      {"internalType":"uint256","name":"remainingAmount","type":"uint256"},
+      {"internalType":"uint64","name":"expiry","type":"uint64"},
+      {"internalType":"bytes32","name":"voucherRoot","type":"bytes32"},
+      {"internalType":"bool","name":"refunded","type":"bool"}
+    ],
+    "stateMutability":"view",
+    "type":"function"
+  }
+]
+''',
+        'BitSendOfflineVoucherEscrow',
+      ).functions.single;
+  static final ContractFunction _offlineVoucherClaimedViewFunction =
+      ContractAbi.fromJson(
+        '''
+[
+  {
+    "inputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],
+    "name":"claimedVoucherIds",
+    "outputs":[{"internalType":"bool","name":"","type":"bool"}],
+    "stateMutability":"view",
+    "type":"function"
+  }
+]
+''',
+        'BitSendOfflineVoucherEscrow',
+      ).functions.single;
+  static final String _transferEventTopic = web3_crypto.bytesToHex(
+    web3_crypto.keccak256(
+      Uint8List.fromList(utf8.encode('Transfer(address,address,uint256)')),
+    ),
+    include0x: true,
+  );
+  static final ContractFunction _supportsInterfaceFunction =
+      ContractAbi.fromJson(
+        '''
+[
+  {
+    "inputs":[{"name":"interfaceId","type":"bytes4"}],
+    "name":"supportsInterface",
+    "outputs":[{"name":"","type":"bool"}],
+    "stateMutability":"view",
+    "type":"function"
+  }
+]
+''',
+        'ERC165',
+      ).functions.single;
+  static final ContractFunction _erc721OwnerOfFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "inputs":[{"name":"tokenId","type":"uint256"}],
+    "name":"ownerOf",
+    "outputs":[{"name":"","type":"address"}],
+    "stateMutability":"view",
+    "type":"function"
+  }
+]
+''',
+    'ERC721',
+  ).functions.single;
+  static final ContractFunction _erc721TokenUriFunction = ContractAbi.fromJson(
+    '''
+[
+  {
+    "inputs":[{"name":"tokenId","type":"uint256"}],
+    "name":"tokenURI",
+    "outputs":[{"name":"","type":"string"}],
+    "stateMutability":"view",
+    "type":"function"
+  }
+]
+''',
+    'ERC721',
   ).functions.single;
 
   String _rpcEndpoint;
@@ -261,6 +533,191 @@ class EthereumService {
     return balance.getInWei.toInt();
   }
 
+  Future<int> getTokenBalanceBaseUnits({
+    required String ownerAddress,
+    required String contractAddress,
+  }) async {
+    final List<dynamic> result = await _callViewFunction(
+      contract: EthereumAddress.fromHex(contractAddress),
+      function: _erc20BalanceOfFunction,
+      params: <dynamic>[EthereumAddress.fromHex(ownerAddress)],
+    );
+    final BigInt balance = result.single as BigInt;
+    return balance.toInt();
+  }
+
+  Future<int> getTokenAllowanceBaseUnits({
+    required String ownerAddress,
+    required String spenderAddress,
+    required String contractAddress,
+  }) async {
+    final List<dynamic> result = await _callViewFunction(
+      contract: EthereumAddress.fromHex(contractAddress),
+      function: _erc20AllowanceFunction,
+      params: <dynamic>[
+        EthereumAddress.fromHex(ownerAddress),
+        EthereumAddress.fromHex(spenderAddress),
+      ],
+    );
+    final BigInt allowance = result.single as BigInt;
+    return allowance.toInt();
+  }
+
+  Future<int> estimateContractCallGas({
+    required String senderAddress,
+    required String toAddress,
+    String dataHex = '0x',
+    int valueBaseUnits = 0,
+  }) async {
+    final Map<String, Object> payload = <String, Object>{
+      'from': EthereumAddress.fromHex(senderAddress).hexEip55,
+      'to': EthereumAddress.fromHex(toAddress).hexEip55,
+    };
+    if (dataHex.trim().isNotEmpty && dataHex.trim() != '0x') {
+      payload['data'] = dataHex.trim();
+    }
+    if (valueBaseUnits > 0) {
+      payload['value'] = '0x${valueBaseUnits.toRadixString(16)}';
+    }
+    final Object? result = await _rpcRequest('eth_estimateGas', <Object>[payload]);
+    if (result is! String || result.isEmpty) {
+      throw const FormatException(
+        'Ethereum RPC returned malformed gas estimate.',
+      );
+    }
+    return web3_crypto.hexToDartInt(result);
+  }
+
+  Future<int> estimateTokenTransferGas({
+    required String senderAddress,
+    required String receiverAddress,
+    required String contractAddress,
+    required int amountBaseUnits,
+  }) async {
+    final Object? result = await _rpcRequest(
+      'eth_estimateGas',
+      <Object>[
+        <String, Object>{
+          'from': EthereumAddress.fromHex(senderAddress).hexEip55,
+          'to': EthereumAddress.fromHex(contractAddress).hexEip55,
+          'data': web3_crypto.bytesToHex(
+            _erc20TransferFunction.encodeCall(<dynamic>[
+              EthereumAddress.fromHex(receiverAddress),
+              BigInt.from(amountBaseUnits),
+            ]),
+            include0x: true,
+          ),
+        },
+      ],
+    );
+    if (result is! String || result.isEmpty) {
+      throw const FormatException(
+        'Ethereum RPC returned malformed token gas estimate.',
+      );
+    }
+    return web3_crypto.hexToDartInt(result);
+  }
+
+  Future<int> estimateTokenApprovalGas({
+    required String senderAddress,
+    required String spenderAddress,
+    required String contractAddress,
+    required int amountBaseUnits,
+  }) {
+    return estimateContractCallGas(
+      senderAddress: senderAddress,
+      toAddress: contractAddress,
+      dataHex: web3_crypto.bytesToHex(
+        _erc20ApproveFunction.encodeCall(<dynamic>[
+          EthereumAddress.fromHex(spenderAddress),
+          BigInt.from(amountBaseUnits),
+        ]),
+        include0x: true,
+      ),
+    );
+  }
+
+  Future<int> getBlockNumber() async {
+    final Object? result = await _rpcRequest('eth_blockNumber', const <Object>[]);
+    if (result is! String || result.isEmpty) {
+      throw const FormatException('Ethereum RPC returned malformed block data.');
+    }
+    return web3_crypto.hexToDartInt(result);
+  }
+
+  Future<Set<String>> discoverErc20Contracts({
+    required String ownerAddress,
+    int? fromBlock,
+    int? toBlock,
+    int chunkSize = 100000,
+  }) async {
+    final String ownerTopic = _topicForAddress(ownerAddress);
+    final int endBlock = toBlock ?? await getBlockNumber();
+    final int startBlock = (() {
+      final int candidate = fromBlock ?? endBlock - chunkSize + 1;
+      return candidate < 0 ? 0 : candidate;
+    })();
+    final Set<String> contracts = <String>{};
+    for (
+      int chunkStart = startBlock;
+      chunkStart <= endBlock;
+      chunkStart += chunkSize
+    ) {
+      final int chunkEnd = (() {
+        final int candidate = chunkStart + chunkSize - 1;
+        return candidate > endBlock ? endBlock : candidate;
+      })();
+      final List<Map<String, dynamic>> incomingLogs = await _getLogs(
+        fromBlock: chunkStart,
+        toBlock: chunkEnd,
+        topics: <Object?>[_transferEventTopic, null, ownerTopic],
+      );
+      final List<Map<String, dynamic>> outgoingLogs = await _getLogs(
+        fromBlock: chunkStart,
+        toBlock: chunkEnd,
+        topics: <Object?>[_transferEventTopic, ownerTopic],
+      );
+      for (final Map<String, dynamic> log in <Map<String, dynamic>>[
+        ...incomingLogs,
+        ...outgoingLogs,
+      ]) {
+        final String address = ((log['address'] as String?) ?? '').trim();
+        if (isValidAddress(address)) {
+          contracts.add(EthereumAddress.fromHex(address).hexEip55);
+        }
+      }
+    }
+    return contracts;
+  }
+
+  Future<TrackedAssetDefinition> describeErc20Asset(
+    String contractAddress,
+  ) async {
+    final EthereumAddress contract = EthereumAddress.fromHex(contractAddress);
+    final String symbol =
+        await _readErc20TextMetadata(
+          contract: contract,
+          function: _erc20SymbolFunction,
+          fallback: contract.hexEip55.substring(0, 6),
+        );
+    final String name =
+        await _readErc20TextMetadata(
+          contract: contract,
+          function: _erc20NameFunction,
+          fallback: 'Token $symbol',
+        );
+    final int decimals = await _readErc20Decimals(contract);
+    return TrackedAssetDefinition(
+      id: '${chain.name}:${network.name}:${contract.hexEip55.toLowerCase()}',
+      chain: chain,
+      network: network,
+      symbol: symbol,
+      displayName: name,
+      decimals: decimals,
+      contractAddress: contract.hexEip55,
+    );
+  }
+
   Future<EthereumPreparedContext> prepareTransferContext(
     String senderAddress,
   ) async {
@@ -395,21 +852,417 @@ class EthereumService {
     required String senderAddress,
     required String receiverAddress,
     required int amountBaseUnits,
+    int? gasPriceWeiOverride,
   }) async {
     final EthereumPreparedContext context = await prepareTransferContext(
       senderAddress,
     );
+    final EthereumPreparedContext effectiveContext =
+        gasPriceWeiOverride == null
+        ? context
+        : EthereumPreparedContext(
+            nonce: context.nonce,
+            gasPriceWei: gasPriceWeiOverride,
+            chainId: context.chainId,
+            fetchedAt: context.fetchedAt,
+          );
     final OfflineEnvelope envelope = await createSignedEnvelope(
       sender: sender,
       senderAddress: senderAddress,
       receiverAddress: receiverAddress,
       amountBaseUnits: amountBaseUnits,
-      preparedContext: context,
+      preparedContext: effectiveContext,
       transferId: 'direct-${DateTime.now().millisecondsSinceEpoch}',
       createdAt: DateTime.now(),
       transportKind: TransportKind.hotspot,
     );
     return broadcastSignedTransaction(envelope.signedTransactionBase64);
+  }
+
+  Future<String> sendTokenTransferNow({
+    required EthPrivateKey sender,
+    required String senderAddress,
+    required String receiverAddress,
+    required String contractAddress,
+    required int amountBaseUnits,
+    int? gasPriceWeiOverride,
+  }) async {
+    final EthereumPreparedContext context = await prepareTransferContext(
+      senderAddress,
+    );
+    final int gasLimit = await estimateTokenTransferGas(
+      senderAddress: senderAddress,
+      receiverAddress: receiverAddress,
+      contractAddress: contractAddress,
+      amountBaseUnits: amountBaseUnits,
+    );
+    final Uint8List signed = await _withClient(
+      (Web3Client client) => client.signTransaction(
+        sender,
+        Transaction(
+          to: EthereumAddress.fromHex(contractAddress),
+          nonce: context.nonce,
+          gasPrice: EtherAmount.inWei(
+            BigInt.from(gasPriceWeiOverride ?? context.gasPriceWei),
+          ),
+          maxGas: gasLimit,
+          data: _erc20TransferFunction.encodeCall(<dynamic>[
+            EthereumAddress.fromHex(receiverAddress),
+            BigInt.from(amountBaseUnits),
+          ]),
+        ),
+        chainId: context.chainId,
+      ),
+    );
+    try {
+      return await _withClient(
+        (Web3Client client) => client.sendRawTransaction(signed),
+      );
+    } catch (error) {
+      throw FormatException(_messageForBroadcastError(error));
+    }
+  }
+
+  Future<String> sendContractTransactionNow({
+    required EthPrivateKey sender,
+    required String senderAddress,
+    required String toAddress,
+    String dataHex = '0x',
+    int valueBaseUnits = 0,
+    int? gasLimit,
+    int? gasPriceWeiOverride,
+  }) async {
+    final EthereumPreparedContext context = await prepareTransferContext(
+      senderAddress,
+    );
+    final int resolvedGasLimit =
+        gasLimit ??
+        await estimateContractCallGas(
+          senderAddress: senderAddress,
+          toAddress: toAddress,
+          dataHex: dataHex,
+          valueBaseUnits: valueBaseUnits,
+        );
+    final Uint8List signed = await _withClient(
+      (Web3Client client) => client.signTransaction(
+        sender,
+        Transaction(
+          to: EthereumAddress.fromHex(toAddress),
+          value: valueBaseUnits <= 0
+              ? null
+              : EtherAmount.inWei(BigInt.from(valueBaseUnits)),
+          nonce: context.nonce,
+          gasPrice: EtherAmount.inWei(
+            BigInt.from(gasPriceWeiOverride ?? context.gasPriceWei),
+          ),
+          maxGas: resolvedGasLimit,
+          data: dataHex.trim().isEmpty || dataHex.trim() == '0x'
+              ? null
+              : web3_crypto.hexToBytes(dataHex),
+        ),
+        chainId: context.chainId,
+      ),
+    );
+    try {
+      return await _withClient(
+        (Web3Client client) => client.sendRawTransaction(signed),
+      );
+    } catch (error) {
+      throw FormatException(_messageForBroadcastError(error));
+    }
+  }
+
+  Future<String> sendApproveNow({
+    required EthPrivateKey sender,
+    required String senderAddress,
+    required String spenderAddress,
+    required String contractAddress,
+    required int amountBaseUnits,
+    int? gasPriceWeiOverride,
+  }) async {
+    final int gasLimit = await estimateTokenApprovalGas(
+      senderAddress: senderAddress,
+      spenderAddress: spenderAddress,
+      contractAddress: contractAddress,
+      amountBaseUnits: amountBaseUnits,
+    );
+    return sendContractTransactionNow(
+      sender: sender,
+      senderAddress: senderAddress,
+      toAddress: contractAddress,
+      dataHex: web3_crypto.bytesToHex(
+        _erc20ApproveFunction.encodeCall(<dynamic>[
+          EthereumAddress.fromHex(spenderAddress),
+          BigInt.from(amountBaseUnits),
+        ]),
+        include0x: true,
+      ),
+      gasLimit: gasLimit,
+      gasPriceWeiOverride: gasPriceWeiOverride,
+    );
+  }
+
+  Future<String> createOfflineVoucherEscrowNow({
+    required EthPrivateKey sender,
+    required String senderAddress,
+    required String contractAddress,
+    required String escrowId,
+    String? assetContractAddress,
+    required int amountBaseUnits,
+    required DateTime expiryAt,
+    required String voucherRoot,
+    int? gasPriceWeiOverride,
+  }) async {
+    final bool nativeAsset =
+        assetContractAddress == null || assetContractAddress.trim().isEmpty;
+    return sendContractTransactionNow(
+      sender: sender,
+      senderAddress: senderAddress,
+      toAddress: contractAddress,
+      valueBaseUnits: nativeAsset ? amountBaseUnits : 0,
+      dataHex: web3_crypto.bytesToHex(
+        _offlineVoucherCreateEscrowFunction.encodeCall(<dynamic>[
+          web3_crypto.hexToBytes(escrowId),
+          EthereumAddress.fromHex(
+            nativeAsset
+                ? '0x0000000000000000000000000000000000000000'
+                : assetContractAddress!,
+          ),
+          BigInt.from(amountBaseUnits),
+          BigInt.from(expiryAt.toUtc().millisecondsSinceEpoch ~/ 1000),
+          web3_crypto.hexToBytes(voucherRoot),
+        ]),
+        include0x: true,
+      ),
+      gasPriceWeiOverride: gasPriceWeiOverride,
+    );
+  }
+
+  Future<String> claimOfflineVoucherNow({
+    required EthPrivateKey sender,
+    required String senderAddress,
+    required String contractAddress,
+    required OfflineVoucherLeaf voucher,
+    required String receiverAddress,
+    required String assignmentSignatureHex,
+    required List<String> voucherProof,
+    int? gasPriceWeiOverride,
+  }) async {
+    return sendContractTransactionNow(
+      sender: sender,
+      senderAddress: senderAddress,
+      toAddress: contractAddress,
+      dataHex: web3_crypto.bytesToHex(
+        _offlineVoucherClaimFunction.encodeCall(<dynamic>[
+          web3_crypto.hexToBytes(voucher.escrowId),
+          web3_crypto.hexToBytes(voucher.voucherId),
+          BigInt.parse(voucher.amountBaseUnits),
+          BigInt.from(voucher.expiryAt.toUtc().millisecondsSinceEpoch ~/ 1000),
+          web3_crypto.hexToBytes(voucher.nonce),
+          EthereumAddress.fromHex(receiverAddress),
+          web3_crypto.hexToBytes(assignmentSignatureHex),
+          voucherProof.map(web3_crypto.hexToBytes).toList(growable: false),
+        ]),
+        include0x: true,
+      ),
+      gasPriceWeiOverride: gasPriceWeiOverride,
+    );
+  }
+
+  Future<String> refundOfflineVoucherEscrowNow({
+    required EthPrivateKey sender,
+    required String senderAddress,
+    required String contractAddress,
+    required String escrowId,
+    int? gasPriceWeiOverride,
+  }) async {
+    return sendContractTransactionNow(
+      sender: sender,
+      senderAddress: senderAddress,
+      toAddress: contractAddress,
+      dataHex: web3_crypto.bytesToHex(
+        _offlineVoucherRefundFunction.encodeCall(<dynamic>[
+          web3_crypto.hexToBytes(escrowId),
+        ]),
+        include0x: true,
+      ),
+      gasPriceWeiOverride: gasPriceWeiOverride,
+    );
+  }
+
+  Future<OfflineVoucherOnChainEscrow?> getOfflineVoucherEscrow({
+    required String contractAddress,
+    required String escrowId,
+  }) async {
+    final List<dynamic> values = await _callViewFunction(
+      contract: EthereumAddress.fromHex(contractAddress),
+      function: _offlineVoucherEscrowViewFunction,
+      params: <dynamic>[web3_crypto.hexToBytes(escrowId)],
+    );
+    final EthereumAddress owner = values[0] as EthereumAddress;
+    if (owner.hexNo0x == '0000000000000000000000000000000000000000') {
+      return null;
+    }
+    final EthereumAddress asset = values[1] as EthereumAddress;
+    final BigInt totalAmount = values[2] as BigInt;
+    final BigInt remainingAmount = values[3] as BigInt;
+    final BigInt expiry = values[4] as BigInt;
+    final Uint8List voucherRoot = values[5] as Uint8List;
+    final bool refunded = values[6] as bool;
+    return OfflineVoucherOnChainEscrow(
+      ownerAddress: owner.hexEip55,
+      assetContractAddress: asset.hexNo0x ==
+              '0000000000000000000000000000000000000000'
+          ? ''
+          : asset.hexEip55,
+      totalAmountBaseUnits: totalAmount.toString(),
+      remainingAmountBaseUnits: remainingAmount.toString(),
+      expiryAt: DateTime.fromMillisecondsSinceEpoch(
+        expiry.toInt() * 1000,
+        isUtc: true,
+      ),
+      voucherRoot: web3_crypto.bytesToHex(voucherRoot, include0x: true),
+      refunded: refunded,
+    );
+  }
+
+  Future<bool> isOfflineVoucherClaimed({
+    required String contractAddress,
+    required String voucherId,
+  }) async {
+    final List<dynamic> values = await _callViewFunction(
+      contract: EthereumAddress.fromHex(contractAddress),
+      function: _offlineVoucherClaimedViewFunction,
+      params: <dynamic>[web3_crypto.hexToBytes(voucherId)],
+    );
+    return values.single as bool;
+  }
+
+  String signPersonalMessageHex({
+    required EthPrivateKey signer,
+    required String message,
+  }) {
+    return web3_crypto.bytesToHex(
+      signer.signPersonalMessageToUint8List(
+        Uint8List.fromList(utf8.encode(message)),
+      ),
+      include0x: true,
+    );
+  }
+
+  String signPayloadHex({
+    required EthPrivateKey signer,
+    required Uint8List payload,
+  }) {
+    return web3_crypto.bytesToHex(
+      signer.signToUint8List(payload),
+      include0x: true,
+    );
+  }
+
+  Future<List<NftHolding>> discoverErc721Holdings({
+    required String ownerAddress,
+    int? fromBlock,
+    int? toBlock,
+    int chunkSize = 100000,
+  }) async {
+    final String ownerTopic = _topicForAddress(ownerAddress);
+    final int endBlock = toBlock ?? await getBlockNumber();
+    final int startBlock = (() {
+      final int candidate = fromBlock ?? endBlock - chunkSize + 1;
+      return candidate < 0 ? 0 : candidate;
+    })();
+    final Map<String, Set<String>> ownedTokenIds = <String, Set<String>>{};
+    for (
+      int chunkStart = startBlock;
+      chunkStart <= endBlock;
+      chunkStart += chunkSize
+    ) {
+      final int chunkEnd = (() {
+        final int candidate = chunkStart + chunkSize - 1;
+        return candidate > endBlock ? endBlock : candidate;
+      })();
+      final List<Map<String, dynamic>> incomingLogs = await _getLogs(
+        fromBlock: chunkStart,
+        toBlock: chunkEnd,
+        topics: <Object?>[_transferEventTopic, null, ownerTopic],
+      );
+      final List<Map<String, dynamic>> outgoingLogs = await _getLogs(
+        fromBlock: chunkStart,
+        toBlock: chunkEnd,
+        topics: <Object?>[_transferEventTopic, ownerTopic],
+      );
+      for (final Map<String, dynamic> log in incomingLogs) {
+        _applyErc721Log(log, ownedTokenIds, add: true);
+      }
+      for (final Map<String, dynamic> log in outgoingLogs) {
+        _applyErc721Log(log, ownedTokenIds, add: false);
+      }
+    }
+
+    final List<NftHolding> holdings = <NftHolding>[];
+    for (final MapEntry<String, Set<String>> entry in ownedTokenIds.entries) {
+      if (entry.value.isEmpty) {
+        continue;
+      }
+      final EthereumAddress contract = EthereumAddress.fromHex(entry.key);
+      if (!await _supportsErc721(contract)) {
+        continue;
+      }
+      String collectionName = '';
+      String symbol = '';
+      try {
+        collectionName = await _readErc20TextMetadata(
+          contract: contract,
+          function: _erc20NameFunction,
+          fallback: 'NFT Collection',
+        );
+      } catch (_) {}
+      try {
+        symbol = await _readErc20TextMetadata(
+          contract: contract,
+          function: _erc20SymbolFunction,
+          fallback: 'NFT',
+        );
+      } catch (_) {}
+      for (final String tokenId in entry.value) {
+        try {
+          final EthereumAddress owner = await _ownerOf(
+            contract: contract,
+            tokenId: tokenId,
+          );
+          if (owner.hexEip55.toLowerCase() !=
+              EthereumAddress.fromHex(ownerAddress).hexEip55.toLowerCase()) {
+            continue;
+          }
+          holdings.add(
+            NftHolding(
+              chain: chain,
+              network: network,
+              contractAddress: contract.hexEip55,
+              tokenId: tokenId,
+              ownerAddress: owner.hexEip55,
+              updatedAt: DateTime.now(),
+              collectionName: collectionName,
+              symbol: symbol,
+              tokenUri: await _readTokenUri(contract: contract, tokenId: tokenId),
+            ),
+          );
+        } catch (_) {
+          // Skip tokens that can no longer be resolved.
+        }
+      }
+    }
+    holdings.sort((NftHolding a, NftHolding b) {
+      final int collectionCompare = a.resolvedCollectionName.compareTo(
+        b.resolvedCollectionName,
+      );
+      if (collectionCompare != 0) {
+        return collectionCompare;
+      }
+      return a.tokenId.compareTo(b.tokenId);
+    });
+    return holdings;
   }
 
   Future<String> broadcastSignedTransaction(String encodedTransaction) async {
@@ -469,6 +1322,10 @@ class EthereumService {
       (ChainKind.ethereum, ChainNetwork.testnet) => 'sepolia.etherscan.io',
       (ChainKind.base, ChainNetwork.mainnet) => 'basescan.org',
       (ChainKind.base, ChainNetwork.testnet) => 'sepolia.basescan.org',
+      (ChainKind.bnb, ChainNetwork.mainnet) => 'bscscan.com',
+      (ChainKind.bnb, ChainNetwork.testnet) => 'testnet.bscscan.com',
+      (ChainKind.polygon, ChainNetwork.mainnet) => 'polygonscan.com',
+      (ChainKind.polygon, ChainNetwork.testnet) => 'amoy.polygonscan.com',
       (ChainKind.solana, _) => throw StateError(
         'EthereumService cannot build a Solana explorer URL.',
       ),
@@ -530,23 +1387,193 @@ class EthereumService {
     required ContractFunction function,
     required List<dynamic> params,
   }) async {
-    final Object? result = await _rpcRequest(
-      'eth_call',
-      <Object>[
-        <String, Object>{
-          'to': contract.hexEip55,
-          'data': web3_crypto.bytesToHex(
-            function.encodeCall(params),
-            include0x: true,
-          ),
-        },
-        'latest',
-      ],
+    final Object? result = await _ethCallRaw(
+      contract: contract,
+      data: web3_crypto.bytesToHex(
+        function.encodeCall(params),
+        include0x: true,
+      ),
     );
     if (result is! String || result.isEmpty) {
       throw const FormatException('Ethereum RPC returned malformed call data.');
     }
     return function.decodeReturnValues(result);
+  }
+
+  Future<Object?> _ethCallRaw({
+    required EthereumAddress contract,
+    required String data,
+  }) {
+    return _rpcRequest(
+      'eth_call',
+      <Object>[
+        <String, Object>{'to': contract.hexEip55, 'data': data},
+        'latest',
+      ],
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _getLogs({
+    required int fromBlock,
+    required int toBlock,
+    required List<Object?> topics,
+  }) async {
+    final Object? result = await _rpcRequest(
+      'eth_getLogs',
+      <Object>[
+        <String, Object?>{
+          'fromBlock': '0x${fromBlock.toRadixString(16)}',
+          'toBlock': '0x${toBlock.toRadixString(16)}',
+          'topics': topics,
+        },
+      ],
+    );
+    if (result is! List<dynamic>) {
+      throw const FormatException('Ethereum RPC returned malformed log data.');
+    }
+    return result
+        .whereType<Map<String, dynamic>>()
+        .toList(growable: false);
+  }
+
+  void _applyErc721Log(
+    Map<String, dynamic> log,
+    Map<String, Set<String>> ownedTokenIds, {
+    required bool add,
+  }) {
+    final String address = ((log['address'] as String?) ?? '').trim();
+    final List<dynamic> topics = (log['topics'] as List<dynamic>?) ?? const <dynamic>[];
+    if (!isValidAddress(address) || topics.length < 4) {
+      return;
+    }
+    final String tokenIdHex = '${topics[3] ?? ''}'.trim();
+    if (!tokenIdHex.startsWith('0x')) {
+      return;
+    }
+    final String normalizedAddress = EthereumAddress.fromHex(address).hexEip55;
+    final String tokenId = BigInt.parse(tokenIdHex.substring(2), radix: 16)
+        .toString();
+    final Set<String> tokens = ownedTokenIds.putIfAbsent(
+      normalizedAddress,
+      () => <String>{},
+    );
+    if (add) {
+      tokens.add(tokenId);
+    } else {
+      tokens.remove(tokenId);
+    }
+  }
+
+  Future<bool> _supportsErc721(EthereumAddress contract) async {
+    try {
+      final List<dynamic> result = await _callViewFunction(
+        contract: contract,
+        function: _supportsInterfaceFunction,
+        params: <dynamic>[Uint8List.fromList(const <int>[0x80, 0xac, 0x58, 0xcd])],
+      );
+      final Object value = result.single;
+      if (value is bool) {
+        return value;
+      }
+    } catch (_) {
+      // Fall through.
+    }
+    return false;
+  }
+
+  Future<EthereumAddress> _ownerOf({
+    required EthereumAddress contract,
+    required String tokenId,
+  }) async {
+    final List<dynamic> result = await _callViewFunction(
+      contract: contract,
+      function: _erc721OwnerOfFunction,
+      params: <dynamic>[BigInt.parse(tokenId)],
+    );
+    return result.single as EthereumAddress;
+  }
+
+  Future<String?> _readTokenUri({
+    required EthereumAddress contract,
+    required String tokenId,
+  }) async {
+    try {
+      final List<dynamic> result = await _callViewFunction(
+        contract: contract,
+        function: _erc721TokenUriFunction,
+        params: <dynamic>[BigInt.parse(tokenId)],
+      );
+      final String value = (result.single as String).trim();
+      return value.isEmpty ? null : value;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String> _readErc20TextMetadata({
+    required EthereumAddress contract,
+    required ContractFunction function,
+    required String fallback,
+  }) async {
+    try {
+      final List<dynamic> values = await _callViewFunction(
+        contract: contract,
+        function: function,
+        params: const <dynamic>[],
+      );
+      final String value = (values.single as String).trim();
+      if (value.isNotEmpty) {
+        return value;
+      }
+    } catch (_) {
+      // Some contracts return bytes32 instead of string.
+    }
+    final String selector = function.name == 'symbol' ? '0x95d89b41' : '0x06fdde03';
+    final Object? raw = await _ethCallRaw(contract: contract, data: selector);
+    if (raw is String && raw.length >= 66) {
+      final String decoded = _decodeBytes32String(raw);
+      if (decoded.isNotEmpty) {
+        return decoded;
+      }
+    }
+    return fallback;
+  }
+
+  Future<int> _readErc20Decimals(EthereumAddress contract) async {
+    try {
+      final List<dynamic> values = await _callViewFunction(
+        contract: contract,
+        function: _erc20DecimalsFunction,
+        params: const <dynamic>[],
+      );
+      final Object value = values.single;
+      if (value is BigInt) {
+        return value.toInt();
+      }
+      if (value is int) {
+        return value;
+      }
+    } catch (_) {
+      // Ignore and fall back.
+    }
+    return 18;
+  }
+
+  String _decodeBytes32String(String rawHex) {
+    try {
+      final Uint8List bytes = Uint8List.fromList(web3_crypto.hexToBytes(rawHex));
+      final List<int> compact = bytes.takeWhile((int byte) => byte != 0).toList(
+        growable: false,
+      );
+      return utf8.decode(compact, allowMalformed: true).trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  String _topicForAddress(String address) {
+    final String normalized = EthereumAddress.fromHex(address).hexNo0x.toLowerCase();
+    return '0x${normalized.padLeft(64, '0')}';
   }
 
   Future<EthereumAddress> _resolverForNode(Uint8List node) async {
@@ -627,6 +1654,10 @@ class EthereumService {
         (ChainKind.ethereum, ChainNetwork.testnet) => sepoliaChainId,
         (ChainKind.base, ChainNetwork.mainnet) => baseMainnetChainId,
         (ChainKind.base, ChainNetwork.testnet) => baseSepoliaChainId,
+        (ChainKind.bnb, ChainNetwork.mainnet) => bnbMainnetChainId,
+        (ChainKind.bnb, ChainNetwork.testnet) => bnbTestnetChainId,
+        (ChainKind.polygon, ChainNetwork.mainnet) => polygonMainnetChainId,
+        (ChainKind.polygon, ChainNetwork.testnet) => polygonAmoyChainId,
         (ChainKind.solana, _) => throw StateError(
           'EthereumService cannot prepare Solana chain IDs.',
         ),

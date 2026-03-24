@@ -48,7 +48,7 @@
 		<key>UIStatusBarHidden</key>
 		<false/>
 		<key>NSFaceIDUsageDescription</key>
-		<string>Use Face ID or your device passcode to unlock Bitsend and protect wallet recovery data.</string>
+		<string>Use Face ID to unlock Bitsend and protect wallet recovery data.</string>
 		<key>NSMicrophoneUsageDescription</key>
 		<string>Bitsend uses the microphone on supported Android relay flows for ultrasonic handoff pairing.</string>
 	</dict>

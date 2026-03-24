@@ -52,6 +52,131 @@ type RelayCapsuleRecord = RelayCapsuleInput & {
   expiresAt: string;
 };
 
+type OfflineEscrowInput = {
+  version: number;
+  escrowId: string;
+  chain: AppChain;
+  network: AppNetwork;
+  senderAddress: string;
+  assetId: string;
+  assetContract?: string;
+  amountBaseUnits: string;
+  collateralBaseUnits: string;
+  voucherRoot: string;
+  voucherCount: number;
+  maxVoucherAmountBaseUnits: string;
+  createdAt: string;
+  expiresAt: string;
+  stateRoot: string;
+  settlementContract?: string;
+};
+
+type OfflineEscrowRecord = OfflineEscrowInput & {
+  storedAt: string;
+};
+
+type OfflineVoucherInput = {
+  version: number;
+  escrowId: string;
+  voucherId: string;
+  amountBaseUnits: string;
+  expiryAt: string;
+  nonce: string;
+  receiverAddress?: string;
+};
+
+type OfflineProofBundleInput = {
+  version: number;
+  escrowId: string;
+  voucherId: string;
+  voucherRoot: string;
+  voucherProof: string[];
+  escrowStateRoot: string;
+  escrowProof: string[];
+  finalizedAt: string;
+  proofWindowExpiresAt: string;
+};
+
+type OfflineProofBundleRecord = OfflineProofBundleInput & {
+  storedAt: string;
+};
+
+type OfflinePaymentInput = {
+  version: number;
+  txId: string;
+  voucher: OfflineVoucherInput;
+  proofBundle: OfflineProofBundleInput;
+  senderAddress: string;
+  senderSignature: string;
+  transportHint: string;
+  createdAt: string;
+};
+
+type OfflineRelayMessageInput = {
+  version: number;
+  txId: string;
+  payment: OfflinePaymentInput;
+  hopCount: number;
+  priority: number;
+  createdAt: string;
+  expiresAt: string;
+};
+
+type OfflineRelayMessageRecord = OfflineRelayMessageInput & {
+  storedAt: string;
+};
+
+type OfflineClaimStatus =
+  | 'accepted'
+  | 'duplicate_rejected'
+  | 'expired_rejected'
+  | 'invalid_rejected'
+  | 'submitted_onchain'
+  | 'confirmed_onchain';
+
+type OfflineClaimSubmissionMode = 'receiver' | 'sponsor';
+
+type OfflineClaimInput = {
+  version: number;
+  voucherId: string;
+  txId: string;
+  escrowId: string;
+  claimerAddress: string;
+  createdAt: string;
+};
+
+type OfflineClaimRecord = OfflineClaimInput & {
+  status: OfflineClaimStatus;
+  submissionMode?: OfflineClaimSubmissionMode;
+  submissionAttempts?: number;
+  graceLockExpiresAt?: string;
+  settlementTransactionHash?: string;
+  lastError?: string;
+  resolvedAt?: string;
+};
+
+type OfflineClaimSettlementUpdateInput = {
+  version: number;
+  voucherId: string;
+  txId: string;
+  escrowId: string;
+  status: Extract<
+    OfflineClaimStatus,
+    'submitted_onchain' | 'confirmed_onchain' | 'invalid_rejected'
+  >;
+  updatedAt: string;
+  settlementTransactionHash?: string;
+  errorMessage?: string;
+};
+
+type OfflineRefundEligibilityRecord = {
+  escrowId: string;
+  refundable: boolean;
+  reason: string;
+  lockedUntil?: string;
+  blockingVoucherId?: string;
+};
+
 type SubmitTransferInput = {
   chain: AppChain;
   network: AppNetwork;
@@ -136,6 +261,11 @@ interface Env {
 
 const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 const relayCapsuleLifetimeMs = 24 * 60 * 60 * 1000;
+const offlineEscrowLifetimeMs = 7 * 24 * 60 * 60 * 1000;
+const offlineRelayMessageLifetimeMs = 24 * 60 * 60 * 1000;
+const offlineClaimGraceLockMs = 30 * 60 * 1000;
+const offlineMaxProofNodeCount = 64;
+const offlineMaxRelayPayloadBytes = 24 * 1024;
 const fileverseSyncPollAttempts = 45;
 const fileverseSyncPollDelayMs = 2000;
 const bitgoRequestTimeoutMs = 20000;
@@ -321,6 +451,131 @@ export default {
         return jsonResponse(clientRelayCapsuleRecord(capsule));
       }
 
+      if (request.method === 'POST' && url.pathname === '/v1/offline/escrows') {
+        const body = await parseJsonBody(request);
+        const input = validateOfflineEscrowInput(body);
+        const escrow = await storeOfflineEscrow(state, input);
+        return jsonResponse(clientOfflineEscrowRecord(escrow));
+      }
+
+      if (
+        request.method === 'GET' &&
+        url.pathname.startsWith('/v1/offline/escrows/')
+      ) {
+        if (url.pathname.endsWith('/refund-eligibility')) {
+          const escrowId = decodeURIComponent(
+            url.pathname
+              .substring('/v1/offline/escrows/'.length)
+              .replace('/refund-eligibility', ''),
+          );
+          const eligibility = await getOfflineRefundEligibility(state, escrowId);
+          return jsonResponse(eligibility);
+        }
+        const escrowId = decodeURIComponent(
+          url.pathname.substring('/v1/offline/escrows/'.length),
+        );
+        const escrow = await state.loadOfflineEscrow(escrowId);
+        if (!escrow) {
+          return jsonResponse({ message: 'Offline escrow not found or expired.' }, 404);
+        }
+        return jsonResponse(clientOfflineEscrowRecord(escrow));
+      }
+
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/v1/offline/proof-bundles'
+      ) {
+        const body = await parseJsonBody(request);
+        const input = validateOfflineProofBundleInput(body);
+        const proofBundle = await storeOfflineProofBundle(state, input);
+        return jsonResponse(clientOfflineProofBundleRecord(proofBundle));
+      }
+
+      if (
+        request.method === 'GET' &&
+        url.pathname.startsWith('/v1/offline/proof-bundles/')
+      ) {
+        const voucherId = decodeURIComponent(
+          url.pathname.substring('/v1/offline/proof-bundles/'.length),
+        );
+        const proofBundle = await state.loadOfflineProofBundle(voucherId);
+        if (!proofBundle) {
+          return jsonResponse(
+            { message: 'Offline proof bundle not found or expired.' },
+            404,
+          );
+        }
+        return jsonResponse(clientOfflineProofBundleRecord(proofBundle));
+      }
+
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/v1/offline/relay/messages'
+      ) {
+        const body = await parseJsonBody(request);
+        const input = validateOfflineRelayMessageInput(body);
+        const message = await storeOfflineRelayMessage(state, input);
+        return jsonResponse(clientOfflineRelayMessageRecord(message));
+      }
+
+      if (
+        request.method === 'GET' &&
+        url.pathname.startsWith('/v1/offline/relay/messages/')
+      ) {
+        const txId = decodeURIComponent(
+          url.pathname.substring('/v1/offline/relay/messages/'.length),
+        );
+        const message = await state.loadOfflineRelayMessage(txId);
+        if (!message) {
+          return jsonResponse(
+            { message: 'Offline relay message not found or expired.' },
+            404,
+          );
+        }
+        return jsonResponse(clientOfflineRelayMessageRecord(message));
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/offline/claims') {
+        const body = await parseJsonBody(request);
+        const input = validateOfflineClaimInput(body);
+        const claim = await resolveOfflineClaim(state, input);
+        return jsonResponse(claim);
+      }
+
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/v1/offline/claims/sponsored'
+      ) {
+        const body = await parseJsonBody(request);
+        const input = validateOfflineClaimInput(body);
+        const claim = await requestSponsoredOfflineClaim(state, input);
+        return jsonResponse(claim);
+      }
+
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/v1/offline/claims/settlement'
+      ) {
+        const body = await parseJsonBody(request);
+        const input = validateOfflineClaimSettlementUpdateInput(body);
+        const claim = await updateOfflineClaimSettlement(state, input);
+        return jsonResponse(claim);
+      }
+
+      if (
+        request.method === 'GET' &&
+        url.pathname.startsWith('/v1/offline/claims/')
+      ) {
+        const voucherId = decodeURIComponent(
+          url.pathname.substring('/v1/offline/claims/'.length),
+        );
+        const claim = await state.loadOfflineClaim(voucherId);
+        if (!claim) {
+          return jsonResponse({ message: 'Offline claim not found.' }, 404);
+        }
+        return jsonResponse(claim);
+      }
+
       if (request.method === 'GET' && url.pathname === '/relay/import') {
         return htmlResponse(renderRelayImportPage());
       }
@@ -428,6 +683,91 @@ export class BitGoState extends DurableObject<Env> {
       return null;
     }
     return capsule;
+  }
+
+  async saveOfflineEscrow(escrow: OfflineEscrowRecord): Promise<void> {
+    await this.ctx.storage.put(offlineEscrowKey(escrow.escrowId), escrow);
+  }
+
+  async loadOfflineEscrow(escrowId: string): Promise<OfflineEscrowRecord | null> {
+    const escrow = await this.ctx.storage.get<OfflineEscrowRecord>(
+      offlineEscrowKey(escrowId),
+    );
+    if (!escrow) {
+      return null;
+    }
+    if (Date.parse(escrow.expiresAt) <= Date.now()) {
+      await this.ctx.storage.delete(offlineEscrowKey(escrowId));
+      return null;
+    }
+    return escrow;
+  }
+
+  async saveOfflineProofBundle(bundle: OfflineProofBundleRecord): Promise<void> {
+    await this.ctx.storage.put(offlineProofBundleKey(bundle.voucherId), bundle);
+  }
+
+  async loadOfflineProofBundle(
+    voucherId: string,
+  ): Promise<OfflineProofBundleRecord | null> {
+    const bundle = await this.ctx.storage.get<OfflineProofBundleRecord>(
+      offlineProofBundleKey(voucherId),
+    );
+    if (!bundle) {
+      return null;
+    }
+    if (Date.parse(bundle.proofWindowExpiresAt) <= Date.now()) {
+      await this.ctx.storage.delete(offlineProofBundleKey(voucherId));
+      return null;
+    }
+    return bundle;
+  }
+
+  async saveOfflineRelayMessage(message: OfflineRelayMessageRecord): Promise<void> {
+    await this.ctx.storage.put(offlineRelayMessageKey(message.txId), message);
+  }
+
+  async loadOfflineRelayMessage(
+    txId: string,
+  ): Promise<OfflineRelayMessageRecord | null> {
+    const message = await this.ctx.storage.get<OfflineRelayMessageRecord>(
+      offlineRelayMessageKey(txId),
+    );
+    if (!message) {
+      return null;
+    }
+    if (Date.parse(message.expiresAt) <= Date.now()) {
+      await this.ctx.storage.delete(offlineRelayMessageKey(txId));
+      return null;
+    }
+    return message;
+  }
+
+  async saveOfflineClaim(claim: OfflineClaimRecord): Promise<void> {
+    await this.ctx.storage.put(offlineClaimKey(claim.voucherId), claim);
+  }
+
+  async loadOfflineClaim(voucherId: string): Promise<OfflineClaimRecord | null> {
+    return (
+      (await this.ctx.storage.get<OfflineClaimRecord>(
+        offlineClaimKey(voucherId),
+      )) ?? null
+    );
+  }
+
+  async listOfflineClaimsForEscrow(
+    escrowId: string,
+  ): Promise<OfflineClaimRecord[]> {
+    const records = await this.ctx.storage.list<OfflineClaimRecord>({
+      prefix: 'offline:claim:',
+    });
+    const claims: OfflineClaimRecord[] = [];
+    for (const claim of records.values()) {
+      if (claim.escrowId === escrowId) {
+        claims.push(claim);
+      }
+    }
+    return claims;
   }
 }
 
@@ -637,6 +977,453 @@ function clientRelayCapsuleRecord(
     createdAt: capsule.createdAt,
     nonceBase64: capsule.nonceBase64,
     encryptedPacketBase64: capsule.encryptedPacketBase64,
+  };
+}
+
+async function storeOfflineEscrow(
+  state: DurableObjectStub<BitGoState>,
+  input: OfflineEscrowInput,
+): Promise<OfflineEscrowRecord> {
+  const existing = await state.loadOfflineEscrow(input.escrowId);
+  if (existing) {
+    return existing;
+  }
+  const createdAtMs = Date.parse(input.createdAt);
+  const expiresAtMs = Date.parse(input.expiresAt);
+  if (createdAtMs + offlineEscrowLifetimeMs < Date.now()) {
+    throw new HttpError(410, 'Offline escrow expired.');
+  }
+  const record: OfflineEscrowRecord = {
+    ...input,
+    storedAt: new Date().toISOString(),
+    createdAt: new Date(createdAtMs).toISOString(),
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  };
+  await state.saveOfflineEscrow(record);
+  return record;
+}
+
+function clientOfflineEscrowRecord(
+  escrow: OfflineEscrowRecord,
+): OfflineEscrowInput {
+  return {
+    version: escrow.version,
+    escrowId: escrow.escrowId,
+    chain: escrow.chain,
+    network: escrow.network,
+    senderAddress: escrow.senderAddress,
+    assetId: escrow.assetId,
+    assetContract: escrow.assetContract,
+    amountBaseUnits: escrow.amountBaseUnits,
+    collateralBaseUnits: escrow.collateralBaseUnits,
+    voucherRoot: escrow.voucherRoot,
+    voucherCount: escrow.voucherCount,
+    maxVoucherAmountBaseUnits: escrow.maxVoucherAmountBaseUnits,
+    createdAt: escrow.createdAt,
+    expiresAt: escrow.expiresAt,
+    stateRoot: escrow.stateRoot,
+    settlementContract: escrow.settlementContract,
+  };
+}
+
+async function storeOfflineProofBundle(
+  state: DurableObjectStub<BitGoState>,
+  input: OfflineProofBundleInput,
+): Promise<OfflineProofBundleRecord> {
+  const existing = await state.loadOfflineProofBundle(input.voucherId);
+  if (existing) {
+    return existing;
+  }
+  const escrow = await state.loadOfflineEscrow(input.escrowId);
+  if (!escrow) {
+    throw new HttpError(400, 'Offline escrow must be registered before proofs.');
+  }
+  if (input.voucherRoot !== escrow.voucherRoot) {
+    throw new HttpError(400, 'Offline proof voucherRoot does not match escrow.');
+  }
+  if (input.escrowStateRoot !== escrow.stateRoot) {
+    throw new HttpError(400, 'Offline proof escrowStateRoot does not match escrow.');
+  }
+  if (Date.parse(input.proofWindowExpiresAt) > Date.parse(escrow.expiresAt)) {
+    throw new HttpError(400, 'Offline proof window exceeds escrow expiry.');
+  }
+  const proofBundle: OfflineProofBundleRecord = {
+    ...input,
+    storedAt: new Date().toISOString(),
+  };
+  await state.saveOfflineProofBundle(proofBundle);
+  return proofBundle;
+}
+
+function clientOfflineProofBundleRecord(
+  bundle: OfflineProofBundleRecord,
+): OfflineProofBundleInput {
+  return {
+    version: bundle.version,
+    escrowId: bundle.escrowId,
+    voucherId: bundle.voucherId,
+    voucherRoot: bundle.voucherRoot,
+    voucherProof: bundle.voucherProof,
+    escrowStateRoot: bundle.escrowStateRoot,
+    escrowProof: bundle.escrowProof,
+    finalizedAt: bundle.finalizedAt,
+    proofWindowExpiresAt: bundle.proofWindowExpiresAt,
+  };
+}
+
+function arraysEqual(values: string[], other: string[]): boolean {
+  if (values.length !== other.length) {
+    return false;
+  }
+  for (let index = 0; index < values.length; index += 1) {
+    if (values[index] !== other[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function assertOfflinePaymentMatchesProtocolState(
+  payment: OfflinePaymentInput,
+  escrow: OfflineEscrowRecord,
+  proofBundle: OfflineProofBundleRecord,
+): void {
+  if (payment.voucher.escrowId !== escrow.escrowId) {
+    throw new HttpError(400, 'Offline payment escrowId does not match escrow.');
+  }
+  if (payment.voucher.voucherId !== proofBundle.voucherId) {
+    throw new HttpError(400, 'Offline payment voucherId does not match proof bundle.');
+  }
+  if (payment.proofBundle.escrowId !== escrow.escrowId) {
+    throw new HttpError(400, 'Offline proof bundle escrowId does not match escrow.');
+  }
+  if (payment.proofBundle.voucherId !== proofBundle.voucherId) {
+    throw new HttpError(400, 'Offline proof bundle voucherId does not match stored proof.');
+  }
+  if (payment.proofBundle.voucherRoot !== escrow.voucherRoot) {
+    throw new HttpError(400, 'Offline voucher root does not match escrow.');
+  }
+  if (payment.proofBundle.voucherRoot !== proofBundle.voucherRoot) {
+    throw new HttpError(400, 'Offline voucher root does not match stored proof.');
+  }
+  if (payment.proofBundle.escrowStateRoot !== escrow.stateRoot) {
+    throw new HttpError(400, 'Offline escrow state root does not match escrow.');
+  }
+  if (payment.proofBundle.escrowStateRoot !== proofBundle.escrowStateRoot) {
+    throw new HttpError(400, 'Offline escrow state root does not match stored proof.');
+  }
+  if (!arraysEqual(payment.proofBundle.voucherProof, proofBundle.voucherProof)) {
+    throw new HttpError(400, 'Offline voucher proof does not match stored proof.');
+  }
+  if (!arraysEqual(payment.proofBundle.escrowProof, proofBundle.escrowProof)) {
+    throw new HttpError(400, 'Offline escrow proof does not match stored proof.');
+  }
+  if (payment.senderAddress !== escrow.senderAddress) {
+    throw new HttpError(400, 'Offline payment senderAddress does not match escrow.');
+  }
+  if (
+    parseBaseUnits(payment.voucher.amountBaseUnits) >
+    parseBaseUnits(escrow.maxVoucherAmountBaseUnits)
+  ) {
+    throw new HttpError(400, 'Offline voucher amount exceeds escrow max voucher size.');
+  }
+  if (
+    parseBaseUnits(payment.voucher.amountBaseUnits) >
+    parseBaseUnits(escrow.amountBaseUnits)
+  ) {
+    throw new HttpError(400, 'Offline voucher amount exceeds escrow balance.');
+  }
+  if (Date.parse(payment.voucher.expiryAt) > Date.parse(escrow.expiresAt)) {
+    throw new HttpError(400, 'Offline voucher expiry exceeds escrow expiry.');
+  }
+  if (
+    Date.parse(payment.proofBundle.proofWindowExpiresAt) >
+    Date.parse(escrow.expiresAt)
+  ) {
+    throw new HttpError(400, 'Offline proof window exceeds escrow expiry.');
+  }
+  if (
+    Date.parse(payment.voucher.expiryAt) >
+    Date.parse(payment.proofBundle.proofWindowExpiresAt)
+  ) {
+    throw new HttpError(400, 'Offline voucher expiry exceeds proof window.');
+  }
+}
+
+async function storeOfflineRelayMessage(
+  state: DurableObjectStub<BitGoState>,
+  input: OfflineRelayMessageInput,
+): Promise<OfflineRelayMessageRecord> {
+  const existing = await state.loadOfflineRelayMessage(input.txId);
+  if (existing) {
+    return existing;
+  }
+  const computedTxId = await computeOfflinePaymentTxId(input.payment);
+  if (computedTxId !== input.txId || computedTxId !== input.payment.txId) {
+    throw new HttpError(400, 'Offline relay message txId is invalid.');
+  }
+  const now = Date.now();
+  const createdAtMs = Date.parse(input.createdAt);
+  const expiresAtMs = Date.parse(input.expiresAt);
+  if (expiresAtMs <= now) {
+    throw new HttpError(410, 'Offline relay message expired.');
+  }
+  const payloadBytes = new TextEncoder().encode(
+    canonicalJsonStringify(input.payment),
+  ).byteLength;
+  if (payloadBytes > offlineMaxRelayPayloadBytes) {
+    throw new HttpError(400, 'Offline relay payload is too large.');
+  }
+  const escrow = await state.loadOfflineEscrow(input.payment.voucher.escrowId);
+  if (!escrow) {
+    throw new HttpError(400, 'Offline escrow must be registered before relay.');
+  }
+  const proofBundle = await state.loadOfflineProofBundle(
+    input.payment.voucher.voucherId,
+  );
+  if (!proofBundle) {
+    throw new HttpError(400, 'Offline proof bundle must be registered before relay.');
+  }
+  assertOfflinePaymentMatchesProtocolState(input.payment, escrow, proofBundle);
+  const stored: OfflineRelayMessageRecord = {
+    ...input,
+    createdAt: new Date(createdAtMs).toISOString(),
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    storedAt: new Date().toISOString(),
+  };
+  await state.saveOfflineRelayMessage(stored);
+  return stored;
+}
+
+function clientOfflineRelayMessageRecord(
+  message: OfflineRelayMessageRecord,
+): OfflineRelayMessageInput {
+  return {
+    version: message.version,
+    txId: message.txId,
+    payment: message.payment,
+    hopCount: message.hopCount,
+    priority: message.priority,
+    createdAt: message.createdAt,
+    expiresAt: message.expiresAt,
+  };
+}
+
+async function resolveOfflineClaim(
+  state: DurableObjectStub<BitGoState>,
+  input: OfflineClaimInput,
+): Promise<OfflineClaimRecord> {
+  const now = new Date().toISOString();
+  const existing = await state.loadOfflineClaim(input.voucherId);
+  if (existing) {
+    if (
+      existing.txId === input.txId &&
+      existing.claimerAddress === input.claimerAddress
+    ) {
+      return existing;
+    }
+    return {
+      ...input,
+      status: 'duplicate_rejected',
+      resolvedAt: now,
+    };
+  }
+
+  const message = await state.loadOfflineRelayMessage(input.txId);
+  if (!message) {
+    return {
+      ...input,
+      status: 'invalid_rejected',
+      resolvedAt: now,
+    };
+  }
+  const computedTxId = await computeOfflinePaymentTxId(message.payment);
+  if (computedTxId !== input.txId || computedTxId !== message.payment.txId) {
+    return {
+      ...input,
+      status: 'invalid_rejected',
+      resolvedAt: now,
+    };
+  }
+  const escrow = await state.loadOfflineEscrow(input.escrowId);
+  const proofBundle = await state.loadOfflineProofBundle(input.voucherId);
+  if (!escrow || !proofBundle) {
+    return {
+      ...input,
+      status: 'invalid_rejected',
+      resolvedAt: now,
+    };
+  }
+  if (
+    message.payment.voucher.voucherId !== input.voucherId ||
+    message.payment.voucher.escrowId !== input.escrowId
+  ) {
+    return {
+      ...input,
+      status: 'invalid_rejected',
+      resolvedAt: now,
+    };
+  }
+  try {
+    assertOfflinePaymentMatchesProtocolState(message.payment, escrow, proofBundle);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      return {
+        ...input,
+        status: 'invalid_rejected',
+        resolvedAt: now,
+      };
+    }
+    throw error;
+  }
+  if (
+    Date.parse(message.payment.voucher.expiryAt) <= Date.now() ||
+    Date.parse(message.expiresAt) <= Date.now() ||
+    Date.parse(proofBundle.proofWindowExpiresAt) <= Date.now() ||
+    Date.parse(escrow.expiresAt) <= Date.now()
+  ) {
+    return {
+      ...input,
+      status: 'expired_rejected',
+      resolvedAt: now,
+    };
+  }
+  if (
+    message.payment.voucher.receiverAddress != null &&
+    message.payment.voucher.receiverAddress !== input.claimerAddress
+  ) {
+    return {
+      ...input,
+      status: 'invalid_rejected',
+      resolvedAt: now,
+    };
+  }
+  const accepted: OfflineClaimRecord = {
+    ...input,
+    status: 'accepted',
+    submissionAttempts: 0,
+    graceLockExpiresAt: new Date(
+      Date.now() + offlineClaimGraceLockMs,
+    ).toISOString(),
+    resolvedAt: now,
+  };
+  await state.saveOfflineClaim(accepted);
+  return accepted;
+}
+
+async function requestSponsoredOfflineClaim(
+  state: DurableObjectStub<BitGoState>,
+  input: OfflineClaimInput,
+): Promise<OfflineClaimRecord> {
+  const base = await resolveOfflineClaim(state, input);
+  if (
+    base.status !== 'accepted' &&
+    base.status !== 'submitted_onchain' &&
+    base.status !== 'confirmed_onchain'
+  ) {
+    return base;
+  }
+  if (base.status === 'confirmed_onchain') {
+    return base;
+  }
+  const updated: OfflineClaimRecord = {
+    ...base,
+    status: 'submitted_onchain',
+    submissionMode: 'sponsor',
+    submissionAttempts: (base.submissionAttempts ?? 0) + 1,
+    graceLockExpiresAt: laterIso(
+      base.graceLockExpiresAt,
+      new Date(Date.now() + offlineClaimGraceLockMs).toISOString(),
+    ),
+    resolvedAt: new Date().toISOString(),
+  };
+  await state.saveOfflineClaim(updated);
+  return updated;
+}
+
+async function updateOfflineClaimSettlement(
+  state: DurableObjectStub<BitGoState>,
+  input: OfflineClaimSettlementUpdateInput,
+): Promise<OfflineClaimRecord> {
+  const existing = await state.loadOfflineClaim(input.voucherId);
+  if (!existing) {
+    throw new HttpError(404, 'Offline claim not found.');
+  }
+  if (existing.txId !== input.txId || existing.escrowId !== input.escrowId) {
+    throw new HttpError(400, 'Offline claim settlement update does not match claim.');
+  }
+  const next: OfflineClaimRecord = {
+    ...existing,
+    status: input.status,
+    submissionMode:
+      existing.submissionMode ??
+      (input.status === 'submitted_onchain' ? 'receiver' : undefined),
+    submissionAttempts:
+      input.status === 'submitted_onchain'
+        ? maxNumber((existing.submissionAttempts ?? 0) + 1, 1)
+        : existing.submissionAttempts ?? 1,
+    graceLockExpiresAt:
+      input.status === 'submitted_onchain'
+        ? laterIso(
+            existing.graceLockExpiresAt,
+            new Date(Date.now() + offlineClaimGraceLockMs).toISOString(),
+          )
+        : existing.graceLockExpiresAt,
+    settlementTransactionHash:
+      sanitizeOptionalString(input.settlementTransactionHash) ??
+      existing.settlementTransactionHash,
+    lastError: sanitizeOptionalString(input.errorMessage) ?? undefined,
+    resolvedAt: input.updatedAt,
+  };
+  await state.saveOfflineClaim(next);
+  return next;
+}
+
+async function getOfflineRefundEligibility(
+  state: DurableObjectStub<BitGoState>,
+  escrowId: string,
+): Promise<OfflineRefundEligibilityRecord> {
+  const escrow = await state.loadOfflineEscrow(escrowId);
+  if (!escrow) {
+    throw new HttpError(404, 'Offline escrow not found or expired.');
+  }
+  const claims = await state.listOfflineClaimsForEscrow(escrowId);
+  const nowMs = Date.now();
+  for (const claim of claims) {
+    if (claim.status === 'confirmed_onchain') {
+      return {
+        escrowId,
+        refundable: false,
+        reason: 'claim_confirmed',
+        blockingVoucherId: claim.voucherId,
+      };
+    }
+    if (
+      (claim.status === 'accepted' || claim.status === 'submitted_onchain') &&
+      claim.graceLockExpiresAt &&
+      Date.parse(claim.graceLockExpiresAt) > nowMs
+    ) {
+      return {
+        escrowId,
+        refundable: false,
+        reason: 'claim_grace_active',
+        lockedUntil: claim.graceLockExpiresAt,
+        blockingVoucherId: claim.voucherId,
+      };
+    }
+  }
+  if (Date.parse(escrow.expiresAt) > nowMs) {
+    return {
+      escrowId,
+      refundable: false,
+      reason: 'escrow_not_expired',
+      lockedUntil: escrow.expiresAt,
+    };
+  }
+  return {
+    escrowId,
+    refundable: true,
+    reason: 'refundable',
   };
 }
 
@@ -1447,6 +2234,356 @@ function validateRelayCapsuleInput(body: unknown): RelayCapsuleInput {
   };
 }
 
+function validateOfflineEscrowInput(body: unknown): OfflineEscrowInput {
+  if (typeof body !== 'object' || body == null) {
+    throw new HttpError(400, 'Invalid offline escrow payload.');
+  }
+  const input = body as Record<string, unknown>;
+  const version = typeof input.version === 'number'
+    ? Math.trunc(input.version)
+    : 1;
+  const escrowId = sanitizeString(input.escrowId);
+  const chain = parseAppChain(input.chain);
+  const network = parseAppNetwork(input.network);
+  const senderAddress = sanitizeString(input.senderAddress);
+  const assetId = sanitizeString(input.assetId);
+  const assetContract = sanitizeOptionalString(input.assetContract);
+  const amountBaseUnits = normalizeRequiredBaseUnits(
+    input.amountBaseUnits,
+    'Missing amountBaseUnits.',
+  );
+  const collateralBaseUnits = normalizeRequiredBaseUnits(
+    input.collateralBaseUnits,
+    'Missing collateralBaseUnits.',
+  );
+  const voucherRoot = sanitizeString(input.voucherRoot);
+  const voucherCount = typeof input.voucherCount === 'number'
+    ? Math.trunc(input.voucherCount)
+    : 0;
+  const maxVoucherAmountBaseUnits = normalizeRequiredBaseUnits(
+    input.maxVoucherAmountBaseUnits,
+    'Missing maxVoucherAmountBaseUnits.',
+  );
+  const createdAt = normalizeIsoDateString(input.createdAt, 'Missing createdAt.');
+  const expiresAt = normalizeIsoDateString(input.expiresAt, 'Missing expiresAt.');
+  const stateRoot = sanitizeString(input.stateRoot);
+  const settlementContract = sanitizeOptionalString(input.settlementContract);
+
+  if (version !== 1) {
+    throw new HttpError(400, 'Unsupported offline escrow version.');
+  }
+  if (!escrowId) {
+    throw new HttpError(400, 'Missing escrowId.');
+  }
+  if (!senderAddress) {
+    throw new HttpError(400, 'Missing senderAddress.');
+  }
+  if (!assetId) {
+    throw new HttpError(400, 'Missing assetId.');
+  }
+  if (!voucherRoot) {
+    throw new HttpError(400, 'Missing voucherRoot.');
+  }
+  if (!stateRoot) {
+    throw new HttpError(400, 'Missing stateRoot.');
+  }
+  if (voucherCount <= 0) {
+    throw new HttpError(400, 'voucherCount must be greater than zero.');
+  }
+  if (parseBaseUnits(maxVoucherAmountBaseUnits) > parseBaseUnits(amountBaseUnits)) {
+    throw new HttpError(400, 'maxVoucherAmountBaseUnits exceeds escrow balance.');
+  }
+  if (Date.parse(expiresAt) <= Date.parse(createdAt)) {
+    throw new HttpError(400, 'expiresAt must be after createdAt.');
+  }
+
+  return {
+    version,
+    escrowId,
+    chain,
+    network,
+    senderAddress,
+    assetId,
+    assetContract: assetContract ?? undefined,
+    amountBaseUnits,
+    collateralBaseUnits,
+    voucherRoot,
+    voucherCount,
+    maxVoucherAmountBaseUnits,
+    createdAt,
+    expiresAt,
+    stateRoot,
+    settlementContract: settlementContract ?? undefined,
+  };
+}
+
+function validateOfflineProofBundleInput(body: unknown): OfflineProofBundleInput {
+  if (typeof body !== 'object' || body == null) {
+    throw new HttpError(400, 'Invalid offline proof bundle payload.');
+  }
+  const input = body as Record<string, unknown>;
+  const version = typeof input.version === 'number'
+    ? Math.trunc(input.version)
+    : 1;
+  const escrowId = sanitizeString(input.escrowId);
+  const voucherId = sanitizeString(input.voucherId);
+  const voucherRoot = sanitizeString(input.voucherRoot);
+  const voucherProof = sanitizeStringArray(input.voucherProof);
+  const escrowStateRoot = sanitizeString(input.escrowStateRoot);
+  const escrowProof = sanitizeStringArray(input.escrowProof);
+  const finalizedAt = normalizeIsoDateString(input.finalizedAt, 'Missing finalizedAt.');
+  const proofWindowExpiresAt = normalizeIsoDateString(
+    input.proofWindowExpiresAt,
+    'Missing proofWindowExpiresAt.',
+  );
+
+  if (version !== 1) {
+    throw new HttpError(400, 'Unsupported offline proof bundle version.');
+  }
+  if (!escrowId || !voucherId) {
+    throw new HttpError(400, 'Missing escrowId or voucherId.');
+  }
+  if (!voucherRoot || !escrowStateRoot) {
+    throw new HttpError(400, 'Missing voucherRoot or escrowStateRoot.');
+  }
+  if (voucherProof.length === 0 || escrowProof.length === 0) {
+    throw new HttpError(400, 'Missing voucherProof or escrowProof.');
+  }
+  if (
+    voucherProof.length > offlineMaxProofNodeCount ||
+    escrowProof.length > offlineMaxProofNodeCount
+  ) {
+    throw new HttpError(400, 'Offline proof bundle is too large.');
+  }
+  if (Date.parse(proofWindowExpiresAt) <= Date.parse(finalizedAt)) {
+    throw new HttpError(400, 'proofWindowExpiresAt must be after finalizedAt.');
+  }
+
+  return {
+    version,
+    escrowId,
+    voucherId,
+    voucherRoot,
+    voucherProof,
+    escrowStateRoot,
+    escrowProof,
+    finalizedAt,
+    proofWindowExpiresAt,
+  };
+}
+
+function validateOfflineVoucherInput(body: unknown): OfflineVoucherInput {
+  if (typeof body !== 'object' || body == null) {
+    throw new HttpError(400, 'Invalid offline voucher payload.');
+  }
+  const input = body as Record<string, unknown>;
+  const version = typeof input.version === 'number'
+    ? Math.trunc(input.version)
+    : 1;
+  const escrowId = sanitizeString(input.escrowId);
+  const voucherId = sanitizeString(input.voucherId);
+  const amountBaseUnits = normalizeRequiredBaseUnits(
+    input.amountBaseUnits,
+    'Missing amountBaseUnits.',
+  );
+  const expiryAt = normalizeIsoDateString(input.expiryAt, 'Missing expiryAt.');
+  const nonce = sanitizeString(input.nonce);
+  const receiverAddress = sanitizeOptionalString(input.receiverAddress);
+
+  if (version !== 1) {
+    throw new HttpError(400, 'Unsupported offline voucher version.');
+  }
+  if (!escrowId || !voucherId) {
+    throw new HttpError(400, 'Missing escrowId or voucherId.');
+  }
+  if (!nonce) {
+    throw new HttpError(400, 'Missing nonce.');
+  }
+  if (parseBaseUnits(amountBaseUnits) <= 0n) {
+    throw new HttpError(400, 'Voucher amount must be greater than zero.');
+  }
+
+  return {
+    version,
+    escrowId,
+    voucherId,
+    amountBaseUnits,
+    expiryAt,
+    nonce,
+    receiverAddress: receiverAddress ?? undefined,
+  };
+}
+
+function validateOfflinePaymentInput(body: unknown): OfflinePaymentInput {
+  if (typeof body !== 'object' || body == null) {
+    throw new HttpError(400, 'Invalid offline payment payload.');
+  }
+  const input = body as Record<string, unknown>;
+  const version = typeof input.version === 'number'
+    ? Math.trunc(input.version)
+    : 1;
+  const txId = sanitizeString(input.txId);
+  const voucher = validateOfflineVoucherInput(input.voucher);
+  const proofBundle = validateOfflineProofBundleInput(input.proofBundle);
+  const senderAddress = sanitizeString(input.senderAddress);
+  const senderSignature = sanitizeString(input.senderSignature);
+  const transportHint = sanitizeString(input.transportHint);
+  const createdAt = normalizeIsoDateString(input.createdAt, 'Missing createdAt.');
+
+  if (version !== 1) {
+    throw new HttpError(400, 'Unsupported offline payment version.');
+  }
+  if (!txId) {
+    throw new HttpError(400, 'Missing txId.');
+  }
+  if (!senderAddress || !senderSignature) {
+    throw new HttpError(400, 'Missing senderAddress or senderSignature.');
+  }
+  if (!transportHint) {
+    throw new HttpError(400, 'Missing transportHint.');
+  }
+  if (voucher.voucherId !== proofBundle.voucherId || voucher.escrowId !== proofBundle.escrowId) {
+    throw new HttpError(400, 'Voucher and proof bundle do not match.');
+  }
+  if (Date.parse(voucher.expiryAt) > Date.parse(proofBundle.proofWindowExpiresAt)) {
+    throw new HttpError(400, 'Voucher expiry exceeds proof window.');
+  }
+
+  return {
+    version,
+    txId,
+    voucher,
+    proofBundle,
+    senderAddress,
+    senderSignature,
+    transportHint,
+    createdAt,
+  };
+}
+
+function validateOfflineRelayMessageInput(body: unknown): OfflineRelayMessageInput {
+  if (typeof body !== 'object' || body == null) {
+    throw new HttpError(400, 'Invalid offline relay message payload.');
+  }
+  const input = body as Record<string, unknown>;
+  const version = typeof input.version === 'number'
+    ? Math.trunc(input.version)
+    : 1;
+  const txId = sanitizeString(input.txId);
+  const payment = validateOfflinePaymentInput(input.payment);
+  const hopCount = typeof input.hopCount === 'number'
+    ? Math.trunc(input.hopCount)
+    : 0;
+  const priority = typeof input.priority === 'number'
+    ? Math.trunc(input.priority)
+    : 0;
+  const createdAt = normalizeIsoDateString(input.createdAt, 'Missing createdAt.');
+  const expiresAt = normalizeIsoDateString(input.expiresAt, 'Missing expiresAt.');
+
+  if (version !== 1) {
+    throw new HttpError(400, 'Unsupported offline relay message version.');
+  }
+  if (!txId) {
+    throw new HttpError(400, 'Missing txId.');
+  }
+  if (txId !== payment.txId) {
+    throw new HttpError(400, 'Relay txId does not match payment txId.');
+  }
+  if (hopCount < 0 || hopCount > 255) {
+    throw new HttpError(400, 'hopCount is out of range.');
+  }
+  if (Date.parse(expiresAt) <= Date.parse(createdAt)) {
+    throw new HttpError(400, 'expiresAt must be after createdAt.');
+  }
+
+  return {
+    version,
+    txId,
+    payment,
+    hopCount,
+    priority,
+    createdAt,
+    expiresAt,
+  };
+}
+
+function validateOfflineClaimInput(body: unknown): OfflineClaimInput {
+  if (typeof body !== 'object' || body == null) {
+    throw new HttpError(400, 'Invalid offline claim payload.');
+  }
+  const input = body as Record<string, unknown>;
+  const version = typeof input.version === 'number'
+    ? Math.trunc(input.version)
+    : 1;
+  const voucherId = sanitizeString(input.voucherId);
+  const txId = sanitizeString(input.txId);
+  const escrowId = sanitizeString(input.escrowId);
+  const claimerAddress = sanitizeString(input.claimerAddress);
+  const createdAt = normalizeIsoDateString(input.createdAt, 'Missing createdAt.');
+
+  if (version !== 1) {
+    throw new HttpError(400, 'Unsupported offline claim version.');
+  }
+  if (!voucherId || !txId || !escrowId || !claimerAddress) {
+    throw new HttpError(400, 'Missing voucherId, txId, escrowId, or claimerAddress.');
+  }
+
+  return {
+    version,
+    voucherId,
+    txId,
+    escrowId,
+    claimerAddress,
+    createdAt,
+  };
+}
+
+function validateOfflineClaimSettlementUpdateInput(
+  body: unknown,
+): OfflineClaimSettlementUpdateInput {
+  if (typeof body !== 'object' || body == null) {
+    throw new HttpError(400, 'Invalid offline claim settlement payload.');
+  }
+  const input = body as Record<string, unknown>;
+  const version = typeof input.version === 'number'
+    ? Math.trunc(input.version)
+    : 1;
+  const voucherId = sanitizeString(input.voucherId);
+  const txId = sanitizeString(input.txId);
+  const escrowId = sanitizeString(input.escrowId);
+  const status = sanitizeString(input.status) as OfflineClaimSettlementUpdateInput['status'];
+  const updatedAt = normalizeIsoDateString(input.updatedAt, 'Missing updatedAt.');
+  const settlementTransactionHash = sanitizeOptionalString(
+    input.settlementTransactionHash,
+  );
+  const errorMessage = sanitizeOptionalString(input.errorMessage);
+
+  if (version !== 1) {
+    throw new HttpError(400, 'Unsupported offline claim settlement version.');
+  }
+  if (!voucherId || !txId || !escrowId) {
+    throw new HttpError(400, 'Missing voucherId, txId, or escrowId.');
+  }
+  if (
+    status !== 'submitted_onchain' &&
+    status !== 'confirmed_onchain' &&
+    status !== 'invalid_rejected'
+  ) {
+    throw new HttpError(400, 'Unsupported offline claim settlement status.');
+  }
+
+  return {
+    version,
+    voucherId,
+    txId,
+    escrowId,
+    status,
+    updatedAt,
+    settlementTransactionHash: settlementTransactionHash ?? undefined,
+    errorMessage: errorMessage ?? undefined,
+  };
+}
+
 async function parseJsonBody(request: Request): Promise<unknown> {
   try {
     return await request.json();
@@ -1611,6 +2748,14 @@ function normalizeBaseUnits(value: unknown): string {
   return '0';
 }
 
+function normalizeRequiredBaseUnits(value: unknown, message: string): string {
+  const normalized = normalizeBaseUnits(value);
+  if (normalized === '0' && value !== '0' && value !== 0 && value !== 0n) {
+    throw new HttpError(400, message);
+  }
+  return normalized;
+}
+
 function parseBaseUnits(value: unknown): bigint {
   const normalized = normalizeBaseUnits(value);
   try {
@@ -1633,6 +2778,48 @@ function sanitizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function sanitizeOptionalString(value: unknown): string | null {
+  const normalized = sanitizeString(value);
+  return normalized.length > 0 ? normalized : null;
+}
+
+function sanitizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => sanitizeString(item))
+    .filter((item) => item.length > 0);
+}
+
+function normalizeIsoDateString(value: unknown, message: string): string {
+  const normalized = sanitizeString(value);
+  if (!normalized) {
+    throw new HttpError(400, message);
+  }
+  const timestamp = Date.parse(normalized);
+  if (!Number.isFinite(timestamp)) {
+    throw new HttpError(400, `${message} Timestamp is invalid.`);
+  }
+  return new Date(timestamp).toISOString();
+}
+
+function parseAppChain(value: unknown): AppChain {
+  const normalized = sanitizeString(value).toLowerCase();
+  if (normalized === 'ethereum' || normalized === 'base' || normalized === 'solana') {
+    return normalized;
+  }
+  throw new HttpError(400, 'Unsupported chain.');
+}
+
+function parseAppNetwork(value: unknown): AppNetwork {
+  const normalized = sanitizeString(value).toLowerCase();
+  if (normalized === 'testnet' || normalized === 'mainnet') {
+    return normalized;
+  }
+  throw new HttpError(400, 'Unsupported network.');
+}
+
 function tryParseJsonObject(raw: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -1650,6 +2837,49 @@ function extractPayloadData(
   return typeof payload.data === 'object' && payload.data != null
     ? payload.data as Record<string, unknown>
     : payload;
+}
+
+async function computeOfflinePaymentTxId(
+  payment: OfflinePaymentInput,
+): Promise<string> {
+  return sha256Hex(
+    canonicalJsonStringify({
+      version: payment.version,
+      voucher: payment.voucher,
+      proofBundle: payment.proofBundle,
+      senderAddress: payment.senderAddress,
+      senderSignature: payment.senderSignature,
+      transportHint: payment.transportHint,
+      createdAt: payment.createdAt,
+    }),
+  );
+}
+
+function canonicalJsonStringify(value: unknown): string {
+  return JSON.stringify(canonicalJsonValue(value));
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalJsonValue(entry));
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, canonicalJsonValue(entry)]);
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((part) => part.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 type FileverseDdocRecord = {
@@ -1881,6 +3111,36 @@ function fileverseReceiptKey(receiptId: string): string {
 
 function relayCapsuleKey(relayId: string): string {
   return `relay:${relayId}`;
+}
+
+function offlineEscrowKey(escrowId: string): string {
+  return `offline:escrow:${escrowId}`;
+}
+
+function offlineProofBundleKey(voucherId: string): string {
+  return `offline:proof:${voucherId}`;
+}
+
+function offlineRelayMessageKey(txId: string): string {
+  return `offline:relay:${txId}`;
+}
+
+function offlineClaimKey(voucherId: string): string {
+  return `offline:claim:${voucherId}`;
+}
+
+function laterIso(first?: string, second?: string): string | undefined {
+  if (!first || first.trim().length === 0) {
+    return second;
+  }
+  if (!second || second.trim().length === 0) {
+    return first;
+  }
+  return Date.parse(first) >= Date.parse(second) ? first : second;
+}
+
+function maxNumber(first: number, second: number): number {
+  return first >= second ? first : second;
 }
 
 function scopeKey(chain: AppChain, network: AppNetwork): string {

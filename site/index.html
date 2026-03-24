@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="BitSend lets two phones send crypto nearby first, then record the final result on-chain when either phone reconnects."
+    />
+    <title>BitSend | Pay Nearby. Finish Online Later.</title>
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oxanium:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
+      defer
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
+      defer
+    ></script>
+    <script src="config.js" defer></script>
+    <script src="script.js" defer></script>
+  </head>
+  <body class="marketing-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="page-backdrop" aria-hidden="true">
+      <div class="backdrop-grid"></div>
+      <div class="backdrop-floor"></div>
+      <div class="backdrop-circuit"></div>
+      <div class="backdrop-arcs"></div>
+      <div class="backdrop-panels"></div>
+      <div class="backdrop-orb backdrop-orb-gold"></div>
+      <div class="backdrop-orb backdrop-orb-green"></div>
+      <div class="backdrop-noise"></div>
+    </div>
+
+    <header class="site-header">
+      <a class="brand" href="#hero" aria-label="BitSend home">
+        <img
+          class="brand-logo"
+          src="assets/brand/logo_transparent.png"
+          alt="BitSend"
+        />
+        <span class="brand-wordmark">BitSend</span>
+      </a>
+
+      <nav class="site-nav" id="site-nav" aria-label="Primary">
+        <a href="#flow" data-nav-link="flow">Flow</a>
+        <a href="#chains" data-nav-link="chains">Chains</a>
+        <a href="#trust" data-nav-link="trust">Trust</a>
+      </nav>
+
+      <a class="button button-primary button-small" data-app-link href="/app/">
+        Enter App
+      </a>
+
+      <button
+        class="menu-toggle"
+        type="button"
+        aria-label="Open navigation menu"
+        aria-controls="site-nav"
+        aria-expanded="false"
+        data-menu-toggle
+      >
+        <svg
+          class="menu-toggle-icon menu-toggle-icon-menu"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path
+            d="M5 7.5H19M5 12H19M5 16.5H19"
+            fill="none"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.9"
+          />
+        </svg>
+        <svg
+          class="menu-toggle-icon menu-toggle-icon-close"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path
+            d="M7 7L17 17M17 7L7 17"
+            fill="none"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.9"
+          />
+        </svg>
+      </button>
+    </header>
+
+    <main id="main">
+      <section class="section section-hero" id="hero" data-section="hero">
+        <div class="section-shell hero-shell">
+          <div class="hero-copy">
+            <p class="eyebrow">Crypto payments for real life</p>
+
+            <h1 class="hero-title">
+              <span class="hero-title-line">Send nearby now.</span>
+              <span class="hero-title-line hero-title-line-accent">
+                Finish online later.
+              </span>
+            </h1>
+
+            <p class="lede">
+              Pay nearby now. BitSend finishes the payment and saves the
+              receipt when a phone comes back online.
+            </p>
+
+            <div class="hero-actions">
+              <a class="button button-primary" data-app-link href="/app/">
+                Enter App
+              </a>
+              <a class="button button-secondary" href="#flow">
+                See Flow
+              </a>
+            </div>
+          </div>
+
+          <div class="hero-stage" aria-hidden="true" data-tilt-stage>
+            <div class="stage-topbar">
+              <span class="stage-chip">BitSend transfer</span>
+              <span class="stage-chip stage-chip-live">Phone nearby</span>
+            </div>
+
+            <div class="stage-grid"></div>
+            <div class="stage-glow"></div>
+            <div class="stage-scanline"></div>
+
+            <div class="stage-towers">
+              <span class="stage-tower stage-tower-1"></span>
+              <span class="stage-tower stage-tower-2"></span>
+              <span class="stage-tower stage-tower-3"></span>
+              <span class="stage-tower stage-tower-4"></span>
+              <span class="stage-tower stage-tower-5"></span>
+              <span class="stage-tower stage-tower-6"></span>
+            </div>
+
+            <div class="hero-rings">
+              <span class="hero-ring hero-ring-1"></span>
+              <span class="hero-ring hero-ring-2"></span>
+              <span class="hero-ring hero-ring-3"></span>
+            </div>
+
+            <div class="hero-link"></div>
+            <div class="hero-beam"></div>
+
+            <div class="hero-device hero-device-left">
+              <div class="device-shell">
+                <span class="device-notch"></span>
+                <div class="device-screen">
+                  <span class="device-badge">Sender</span>
+                  <div class="device-bars">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                  <div class="device-dot"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="hero-device hero-device-right">
+              <div class="device-shell">
+                <span class="device-notch"></span>
+                <div class="device-screen">
+                  <span class="device-badge">Receiver</span>
+                  <div class="device-bars">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                  <div class="device-dot"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="hero-transfer">
+              <span class="transfer-spark"></span>
+              <strong>$24</strong>
+            </div>
+
+            <div class="hero-mini-card hero-mini-card-top">
+              <span>Direct link</span>
+              <strong>Bluetooth / hotspot</strong>
+            </div>
+            <div class="hero-mini-card hero-mini-card-bottom">
+              <span>Ends online</span>
+              <strong>5 supported chains</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-flow" id="flow" data-section="flow">
+        <div class="section-shell flow-shell">
+          <div class="section-heading flow-heading">
+            <div>
+              <p class="eyebrow">See the payment happen</p>
+              <h2>Scroll through the send.</h2>
+            </div>
+            <p class="section-copy">
+              BitSend starts with the two phones near each other, moves the
+              payment right away, then adds the final chain result when someone
+              gets back online.
+            </p>
+          </div>
+
+          <div class="story-scrollytelling" data-flow-pin>
+            <div class="story-copy-rail">
+              <article class="story-copy-step is-active" data-scene-copy="1">
+                <span class="story-step-number">01</span>
+                <h3>Find the other phone</h3>
+                <p>
+                  Open BitSend, spot the person next to you, and get ready to
+                  send.
+                </p>
+              </article>
+
+              <article class="story-copy-step" data-scene-copy="2">
+                <span class="story-step-number">02</span>
+                <h3>Send right away</h3>
+                <p>
+                  The payment moves directly from one phone to the other while
+                  you are still face to face.
+                </p>
+              </article>
+
+              <article class="story-copy-step" data-scene-copy="3">
+                <span class="story-step-number">03</span>
+                <h3>See the finished payment</h3>
+                <p>
+                  When either phone reconnects, BitSend adds the chain result
+                  and saves a clear receipt.
+                </p>
+              </article>
+            </div>
+
+            <div class="story-stage" aria-hidden="true" data-active-scene="1">
+              <div class="story-stage-bar">
+                <span class="stage-chip">Scene flow</span>
+                <span class="stage-chip stage-chip-live" data-scene-state>
+                  Looking nearby
+                </span>
+              </div>
+
+              <div class="story-grid"></div>
+              <div class="story-glow"></div>
+              <div class="story-city">
+                <span class="story-tower story-tower-1"></span>
+                <span class="story-tower story-tower-2"></span>
+                <span class="story-tower story-tower-3"></span>
+                <span class="story-tower story-tower-4"></span>
+                <span class="story-tower story-tower-5"></span>
+                <span class="story-tower story-tower-6"></span>
+              </div>
+
+              <div class="story-layer-stack">
+                <span class="story-layer story-layer-1"></span>
+                <span class="story-layer story-layer-2"></span>
+                <span class="story-layer story-layer-3"></span>
+              </div>
+
+              <div class="story-rings">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+
+              <div class="story-link-line"></div>
+              <div class="story-link-beam"></div>
+
+              <div class="story-device story-device-left">
+                <div class="device-shell">
+                  <span class="device-notch"></span>
+                  <div class="device-screen">
+                    <span class="device-badge">You</span>
+                    <div class="device-bars">
+                      <span></span>
+                      <span></span>
+                      <span></span>
+                    </div>
+                    <div class="device-dot"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="story-device story-device-right">
+                <div class="device-shell">
+                  <span class="device-notch"></span>
+                  <div class="device-screen">
+                    <span class="device-badge">Friend</span>
+                    <div class="device-bars">
+                      <span></span>
+                      <span></span>
+                      <span></span>
+                    </div>
+                    <div class="device-dot"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="story-transfer">
+                <span class="transfer-spark"></span>
+                <strong>$24</strong>
+              </div>
+
+              <div class="story-chain-ring"></div>
+
+              <div class="story-receipt">
+                <span class="receipt-label">Receipt ready</span>
+                <strong>$24 received</strong>
+                <p>Nearby payment done. Final chain result saved when online.</p>
+              </div>
+
+              <div class="story-stage-footer">
+                <span data-scene-meter>Scene 1 / 3</span>
+                <span>Local → Nearby → Online</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-feature-showcase">
+        <div class="section-shell">
+          <div class="section-heading section-heading-tight">
+            <div>
+              <p class="eyebrow">Feature intros</p>
+              <h2>Three parts. One clear payment.</h2>
+            </div>
+            <p class="section-copy">
+              BitSend is easy to explain because each step has one job: find
+              the phone, move the amount, save the result.
+            </p>
+          </div>
+
+          <div class="feature-showcase">
+            <div class="showcase-visual" aria-hidden="true">
+              <div class="showcase-shell">
+                <div class="showcase-grid"></div>
+                <div class="showcase-orbit"></div>
+                <div class="showcase-beam"></div>
+                <span class="showcase-spark showcase-spark-1"></span>
+                <span class="showcase-spark showcase-spark-2"></span>
+                <span class="showcase-spark showcase-spark-3"></span>
+
+                <div class="showcase-card showcase-card-1">
+                  <span class="feature-chip">Nearby</span>
+                  <strong>Phone found</strong>
+                  <p>See the right person before you send.</p>
+                </div>
+
+                <div class="showcase-card showcase-card-2">
+                  <span class="feature-chip">Transfer</span>
+                  <strong>Money moves now</strong>
+                  <p>Send while both people are still together.</p>
+                </div>
+
+                <div class="showcase-card showcase-card-3">
+                  <span class="feature-chip">Receipt</span>
+                  <strong>Result saved later</strong>
+                  <p>BitSend adds the final online result when it can.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="feature-intros">
+              <article class="feature-intro-card">
+                <span class="feature-chip">Nearby find</span>
+                <h3>Spot the other phone fast</h3>
+                <p>
+                  A clear nearby view helps both people confirm who is paying
+                  and who is receiving.
+                </p>
+              </article>
+
+              <article class="feature-intro-card">
+                <span class="feature-chip">Direct send</span>
+                <h3>Move the payment on the spot</h3>
+                <p>
+                  The send step is made for quick in-person payments, not slow
+                  setup screens.
+                </p>
+              </article>
+
+              <article class="feature-intro-card">
+                <span class="feature-chip">Later finish</span>
+                <h3>Keep the last step simple</h3>
+                <p>
+                  Once a phone gets back online, BitSend adds the chain result
+                  and keeps the receipt with it.
+                </p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-chains" id="chains" data-section="chains">
+        <div class="section-shell">
+          <div class="section-heading section-heading-tight">
+            <div>
+              <p class="eyebrow">5 rails</p>
+              <h2>Solana, Ethereum, Base, BNB Chain, Polygon.</h2>
+            </div>
+            <p class="section-copy">
+              One simple send flow. Pick the chain that fits the payment.
+            </p>
+          </div>
+
+          <div class="chains-grid">
+            <article class="chain-card">
+              <img src="assets/chains/solana.png" alt="" />
+              <h3>Solana</h3>
+              <p>Fast final result for people already using Solana.</p>
+            </article>
+            <article class="chain-card">
+              <img src="assets/chains/ethereum.svg" alt="" />
+              <h3>Ethereum</h3>
+              <p>Use Ethereum when the payment needs the main network.</p>
+            </article>
+            <article class="chain-card">
+              <img src="assets/chains/base.png" alt="" />
+              <h3>Base</h3>
+              <p>Keep the same BitSend flow on Base.</p>
+            </article>
+            <article class="chain-card">
+              <img src="assets/chains/bnb.svg" alt="" />
+              <h3>BNB Chain</h3>
+              <p>Another supported route for nearby sends.</p>
+            </article>
+            <article class="chain-card">
+              <img src="assets/chains/polygon.png" alt="" />
+              <h3>Polygon</h3>
+              <p>Use Polygon when lower network cost matters.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-feature-band">
+        <div class="feature-marquee" aria-hidden="true">
+          <div class="feature-marquee-track">
+            <span>Nearby send</span>
+            <span>Phone to phone</span>
+            <span>Finish later</span>
+            <span>Receipt saved</span>
+            <span>5 chains</span>
+            <span>Nearby send</span>
+            <span>Phone to phone</span>
+            <span>Finish later</span>
+            <span>Receipt saved</span>
+            <span>5 chains</span>
+          </div>
+        </div>
+
+        <div class="section-shell">
+          <div class="section-heading section-heading-tight">
+            <div>
+              <p class="eyebrow">More than one moment</p>
+              <h2>Built for quick sends, later decisions, and clean records.</h2>
+            </div>
+            <p class="section-copy">
+              The payment may start in seconds, but BitSend still leaves behind
+              a clear finish when the network is back.
+            </p>
+          </div>
+
+          <div class="utility-grid">
+            <article class="utility-card utility-card-dark">
+              <span class="utility-chip">Chain later</span>
+              <h3>Pick the final network when it makes sense</h3>
+              <p>
+                You do not need to front-load every choice before the two
+                people meet.
+              </p>
+              <div class="utility-path" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </article>
+
+            <article class="utility-card">
+              <span class="utility-chip">Receipt view</span>
+              <h3>See one clean payment history</h3>
+              <p>
+                Amount, time, and final chain result stay together in the same
+                record.
+              </p>
+              <div class="utility-lines" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </article>
+
+            <article class="utility-card">
+              <span class="utility-chip">Real world</span>
+              <h3>Made for markets, events, and quick meetups</h3>
+              <p>
+                BitSend keeps the actual send short, so people can pay and move
+                on.
+              </p>
+              <div class="utility-dots" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-trust" id="trust" data-section="trust">
+        <div class="section-shell">
+          <div class="section-heading section-heading-tight">
+            <div>
+              <p class="eyebrow">Receipt layer</p>
+              <h2>Simple on the surface. Clear after every send.</h2>
+            </div>
+            <p class="section-copy">
+              Keep the wallet on your phone, go online only when needed, and
+              save the payment record after the transfer.
+            </p>
+          </div>
+
+          <div class="trust-grid">
+            <article class="trust-card">
+              <h3>Wallet stays on your phone</h3>
+              <p>You stay in control from the first tap to the final result.</p>
+            </article>
+            <article class="trust-card">
+              <h3>Go online only when needed</h3>
+              <p>Send nearby first, then let BitSend finish online later.</p>
+            </article>
+            <article class="trust-card">
+              <h3>Keep a clear payment record</h3>
+              <p>Save the amount, time, and final chain result after each send.</p>
+            </article>
+          </div>
+
+          <div class="trust-cta">
+            <a class="button button-primary" data-app-link href="/app/">
+              Enter App
+            </a>
+            <a class="button button-secondary" href="research/">
+              Read Research
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-brand">
+        <img src="assets/brand/logo_transparent.png" alt="BitSend" />
+        <div class="footer-brand-copy">
+          <span class="footer-wordmark">BitSend</span>
+          <p>Pay nearby now. Add the final chain result later.</p>
+        </div>
+      </div>
+
+      <div class="footer-links">
+        <a href="about/">About</a>
+        <a href="research/">Research</a>
+        <a href="blog/">Blog</a>
+        <a href="toc/">Terms</a>
+        <a href="privacy/">Privacy</a>
+        <a href="legal/">Legal</a>
+        <a href="contact/">Contact</a>
+      </div>
+    </footer>
+  </body>
+</html>

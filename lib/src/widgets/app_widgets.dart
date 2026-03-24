@@ -5,7 +5,44 @@ import 'package:flutter/material.dart';
 import '../app/theme.dart';
 import '../models/app_models.dart';
 
-enum BitsendPrimaryTab { home, deposit, offline, pending, settings }
+enum BitsendPrimaryTab { home, assets, deposit, offline, pending, settings }
+
+enum BitsendLogoTone { lightSurface, darkSurface, transparent }
+
+class BitsendBrandLogo extends StatelessWidget {
+  const BitsendBrandLogo({
+    super.key,
+    this.tone = BitsendLogoTone.transparent,
+    this.height = 28,
+    this.fit = BoxFit.contain,
+  });
+
+  final BitsendLogoTone tone;
+  final double height;
+  final BoxFit fit;
+
+  String get _assetName => switch (tone) {
+    BitsendLogoTone.lightSurface => 'logo_white_background.png',
+    BitsendLogoTone.darkSurface => 'logo_black_background.png',
+    BitsendLogoTone.transparent => 'logo_transparent.png',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      _assetName,
+      height: height,
+      fit: fit,
+      filterQuality: FilterQuality.high,
+      errorBuilder: (BuildContext context, Object _, StackTrace? __) {
+        return Text(
+          'bitsend',
+          style: Theme.of(context).textTheme.titleMedium,
+        );
+      },
+    );
+  }
+}
 
 class BitsendPageScaffold extends StatelessWidget {
   const BitsendPageScaffold({
@@ -47,9 +84,14 @@ class BitsendPageScaffold extends StatelessWidget {
         primaryTab != null && onPrimaryTabSelected != null;
     final double keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final bool keyboardVisible = keyboardInset > 0;
+    final bool useInlineTitle = showBack && showHeader && header == null;
     final Widget? effectiveHeader = !showHeader
         ? null
-        : header ?? _PageHeader(title: title, subtitle: subtitle);
+        : header ??
+              _PageHeader(
+                title: useInlineTitle ? null : title,
+                subtitle: subtitle,
+              );
     final bool showBrandInChrome = !showBack && effectiveHeader == null;
     final bool hasActions = actions != null && actions!.isNotEmpty;
     final bool hasChrome = showBack || showBrandInChrome || hasActions;
@@ -84,6 +126,7 @@ class BitsendPageScaffold extends StatelessWidget {
             _PageChrome(
               showBack: showBack,
               showBrand: showBrandInChrome,
+              title: useInlineTitle ? title : null,
               actions: actions,
             ),
           SizedBox(
@@ -118,12 +161,12 @@ class BitsendPageScaffold extends StatelessWidget {
                 child: Container(
                   width: 220,
                   height: 220,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: AppColors.emeraldTint.withValues(alpha: 0.55),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.emeraldTint.withValues(alpha: 0.32),
+                    ),
                   ),
                 ),
-              ),
             ),
             Positioned(
               top: 140,
@@ -132,12 +175,12 @@ class BitsendPageScaffold extends StatelessWidget {
                 child: Container(
                   width: 180,
                   height: 180,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: AppColors.amberTint.withValues(alpha: 0.45),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.amberTint.withValues(alpha: 0.24),
+                    ),
                   ),
                 ),
-              ),
             ),
             SafeArea(
               bottom: false,
@@ -205,6 +248,9 @@ class BitsendPageScaffold extends StatelessWidget {
                                             _PageChrome(
                                               showBack: showBack,
                                               showBrand: showBrandInChrome,
+                                              title: useInlineTitle
+                                                  ? title
+                                                  : null,
                                               actions: actions,
                                             ),
                                           SizedBox(
@@ -317,19 +363,14 @@ class _PrimaryBottomNav extends StatelessWidget {
             label: 'Home',
           ),
           (
-            tab: BitsendPrimaryTab.deposit,
-            icon: Icons.south_west_rounded,
-            label: 'Deposit',
+            tab: BitsendPrimaryTab.assets,
+            icon: Icons.pie_chart_rounded,
+            label: 'Assets',
           ),
           (
             tab: BitsendPrimaryTab.offline,
             icon: Icons.account_balance_wallet_outlined,
             label: 'Offline',
-          ),
-          (
-            tab: BitsendPrimaryTab.pending,
-            icon: Icons.schedule_send_rounded,
-            label: 'Queue',
           ),
           (
             tab: BitsendPrimaryTab.settings,
@@ -470,11 +511,13 @@ class _PageChrome extends StatelessWidget {
   const _PageChrome({
     required this.showBack,
     required this.showBrand,
+    this.title,
     this.actions,
   });
 
   final bool showBack;
   final bool showBrand;
+  final String? title;
   final List<Widget>? actions;
 
   @override
@@ -483,18 +526,41 @@ class _PageChrome extends StatelessWidget {
     return Row(
       children: <Widget>[
         if (showBack)
-          IconButton(
-            onPressed: () => Navigator.of(context).maybePop(),
-            icon: const Icon(Icons.arrow_back_rounded),
-            tooltip: 'Back',
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              IconButton(
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: const Icon(Icons.arrow_back_rounded),
+                tooltip: 'Back',
+              ),
+              const SizedBox(width: 2),
+              const BitsendBrandLogo(
+                tone: BitsendLogoTone.transparent,
+                height: 48,
+              ),
+              if (title != null) ...<Widget>[
+                const SizedBox(width: 14),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 280),
+                  child: Semantics(
+                    header: true,
+                    namesRoute: true,
+                    child: Text(
+                      title!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleLarge,
+                    ),
+                  ),
+                ),
+              ],
+            ],
           )
         else if (showBrand)
-          Text(
-            'bitsend',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: AppColors.slate,
-              letterSpacing: 1.0,
-            ),
+          const BitsendBrandLogo(
+            tone: BitsendLogoTone.transparent,
+            height: 24,
           ),
         const Spacer(),
         if (actions != null && actions!.isNotEmpty)
@@ -510,7 +576,7 @@ class _PageChrome extends StatelessWidget {
 class _PageHeader extends StatelessWidget {
   const _PageHeader({required this.title, this.subtitle});
 
-  final String title;
+  final String? title;
   final String? subtitle;
 
   @override
@@ -521,16 +587,17 @@ class _PageHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Semantics(
-              header: true,
-              namesRoute: true,
-              child: Text(title, style: theme.textTheme.headlineSmall),
+          if (title != null)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Semantics(
+                header: true,
+                namesRoute: true,
+                child: Text(title!, style: theme.textTheme.headlineSmall),
+              ),
             ),
-          ),
           if (subtitle != null) ...<Widget>[
-            const SizedBox(height: 10),
+            SizedBox(height: title != null ? 10 : 0),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 620),
               child: Text(subtitle!, style: theme.textTheme.bodyMedium),

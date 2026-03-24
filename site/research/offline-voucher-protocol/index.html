@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="BitSend research note on the offline voucher protocol and deferred settlement design."
+    />
+    <title>BitSend | Offline Voucher Protocol</title>
+    <link rel="icon" type="image/png" href="../../favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oxanium:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../../styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js" defer></script>
+    <script src="../../config.js" defer></script>
+    <script src="../../script.js" defer></script>
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="page-backdrop" aria-hidden="true">
+      <div class="backdrop-grid"></div>
+      <div class="backdrop-floor"></div>
+      <div class="backdrop-circuit"></div>
+      <div class="backdrop-arcs"></div>
+      <div class="backdrop-panels"></div>
+      <div class="backdrop-orb backdrop-orb-gold"></div>
+      <div class="backdrop-orb backdrop-orb-green"></div>
+      <div class="backdrop-noise"></div>
+    </div>
+    <header class="site-header">
+      <a class="brand" href="../../" aria-label="BitSend home">
+        <img class="brand-logo" src="../../assets/brand/logo_transparent.png" alt="BitSend" />
+        <span class="brand-wordmark">BitSend</span>
+      </a>
+      <nav class="site-nav" id="site-nav" aria-label="Primary">
+        <a href="../../" data-nav-link="home">Home</a>
+        <a href="../../research/" data-nav-link="research" class="is-active" aria-current="page">Research</a>
+        <a href="../../blog/" data-nav-link="blog">Blog</a>
+        <a href="../../contact/" data-nav-link="contact">Contact</a>
+      </nav>
+      <a class="button button-primary button-small" data-app-link href="../../app/">Enter App</a>
+      <button class="menu-toggle" type="button" aria-label="Open navigation menu" aria-controls="site-nav" aria-expanded="false" data-menu-toggle>
+        <svg class="menu-toggle-icon menu-toggle-icon-menu" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7.5H19M5 12H19M5 16.5H19" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" /></svg>
+        <svg class="menu-toggle-icon menu-toggle-icon-close" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7L17 17M17 7L7 17" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" /></svg>
+      </button>
+    </header>
+    <main class="page-main" id="main">
+      <div class="page-shell editorial-shell">
+        <section class="page-hero">
+          <span class="page-kicker">Research article</span>
+          <h1 class="page-title">Offline voucher protocol v1</h1>
+          <p class="page-lede">
+            A system direction for replacing offline signed transaction handoff
+            with escrow-backed voucher claims that can be checked locally and
+            settled later.
+          </p>
+          <div class="page-actions">
+            <a class="button button-secondary" href="../../research/">Back to Research</a>
+            <a class="button button-primary" href="../../blog/payment-moment/">Related Product Note</a>
+          </div>
+        </section>
+
+        <section class="editorial-sections">
+          <article class="editorial-section">
+            <span class="editorial-section-label">Goal</span>
+            <h2>Bounded offline trust instead of pretending offline finality exists.</h2>
+            <p>
+              The main idea is to stop transporting fully signed blockchain
+              transactions offline and instead move toward escrow-backed voucher
+              claims. That changes the trust model. The receiver is no longer
+              trusting a transport payload alone. The receiver is checking a
+              claim against a committed escrow state.
+            </p>
+            <p>
+              This does not try to guarantee instant offline finality. It aims
+              for safer deferred settlement with bounded loss and clearer
+              verification rules.
+            </p>
+          </article>
+
+          <article class="editorial-section">
+            <span class="editorial-section-label">Core model</span>
+            <h2>An escrow commits to a limited voucher set.</h2>
+            <p>
+              In the proposed model, an escrow locks funds on-chain and commits
+              to a bounded set of vouchers. Each voucher carries the amount,
+              expiry window, nonce, and optional receiver binding. The receiver
+              verifies the voucher locally using proof data tied back to the
+              escrow commitment.
+            </p>
+            <ul>
+              <li>Sender signature must be valid.</li>
+              <li>Voucher inclusion proof must match the committed root.</li>
+              <li>Escrow proof must match finalized state.</li>
+              <li>Expiry and duplicate protections must still pass locally.</li>
+            </ul>
+          </article>
+
+          <article class="editorial-section">
+            <span class="editorial-section-label">System implications</span>
+            <h2>The backend helps, but it is not the trust anchor.</h2>
+            <p>
+              The worker can index escrow commitments, serve proof bundles,
+              relay messages, and deduplicate claims, but it is not the party
+              that makes a bad voucher trustworthy. The security comes from the
+              proofs, signature validity, expiry windows, and deterministic
+              claim handling.
+            </p>
+            <p>
+              That separation keeps the offline payment model aligned with
+              BitSend’s local-first direction instead of moving the trust burden
+              entirely into a service layer.
+            </p>
+            <div class="editorial-inline-links">
+              <a href="../../research/receipt-publishing-flow/">Next: Receipt publishing flow</a>
+              <a href="../../research/local-first-system/">See the system overview</a>
+            </div>
+          </article>
+        </section>
+      </div>
+    </main>
+    <footer class="site-footer">
+      <div class="footer-brand">
+        <img src="../../assets/brand/logo_transparent.png" alt="BitSend" />
+        <div class="footer-brand-copy">
+          <span class="footer-wordmark">BitSend</span>
+          <p>Pay nearby now. Add the final chain result later.</p>
+        </div>
+      </div>
+      <div class="footer-links">
+        <a href="../../about/">About</a>
+        <a href="../../research/">Research</a>
+        <a href="../../blog/">Blog</a>
+        <a href="../../toc/">Terms</a>
+        <a href="../../privacy/">Privacy</a>
+        <a href="../../legal/">Legal</a>
+        <a href="../../contact/">Contact</a>
+      </div>
+    </footer>
+  </body>
+</html>

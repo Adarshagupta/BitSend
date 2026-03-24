@@ -17,7 +17,7 @@ class HotspotTransportService {
   bool get isListening => _server != null;
 
   Future<void> start({
-    required EnvelopeHandler onEnvelope,
+    required TransportPayloadHandler onPayload,
     TransportActivityHandler? onActivity,
   }) async {
     if (_server != null) {
@@ -43,8 +43,9 @@ class HotspotTransportService {
           );
           final String body = await utf8.decoder.bind(request).join();
           final Map<String, dynamic> json = jsonDecode(body) as Map<String, dynamic>;
-          final OfflineEnvelope envelope = OfflineEnvelope.fromJson(json);
-          final TransportReceiveResult result = await onEnvelope(envelope);
+          final OfflineTransportPayload payload =
+              OfflineTransportPayload.fromJson(json);
+          final TransportReceiveResult result = await onPayload(payload);
           request.response.statusCode =
               result.accepted ? HttpStatus.ok : HttpStatus.conflict;
           request.response.headers.contentType = ContentType.json;
@@ -73,7 +74,7 @@ class HotspotTransportService {
 
   Future<void> send({
     required Uri endpoint,
-    required OfflineEnvelope envelope,
+    required OfflineTransportPayload payload,
   }) async {
     final Uri requestUri = endpoint.replace(path: '/v1/envelopes');
     http.Response? response;
@@ -88,7 +89,7 @@ class HotspotTransportService {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
               },
-              body: jsonEncode(envelope.toJson()),
+              body: jsonEncode(payload.toJson()),
             )
             .timeout(_requestTimeout);
         break;

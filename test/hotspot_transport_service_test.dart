@@ -17,10 +17,10 @@ void main() {
   });
 
   test('delivers an envelope to a listening hotspot receiver', () async {
-    OfflineEnvelope? received;
+    OfflineTransportPayload? received;
     await service.start(
-      onEnvelope: (OfflineEnvelope envelope) async {
-        received = envelope;
+      onPayload: (OfflineTransportPayload payload) async {
+        received = payload;
         return const TransportReceiveResult(
           accepted: true,
           message: 'Stored successfully.',
@@ -31,16 +31,16 @@ void main() {
     final OfflineEnvelope envelope = _sampleEnvelope();
     await service.send(
       endpoint: Uri.parse('http://127.0.0.1:${HotspotTransportService.port}'),
-      envelope: envelope,
+      payload: OfflineTransportPayload.envelope(envelope),
     );
 
-    expect(received?.transferId, envelope.transferId);
-    expect(received?.receiverAddress, envelope.receiverAddress);
+    expect(received?.envelope?.transferId, envelope.transferId);
+    expect(received?.envelope?.receiverAddress, envelope.receiverAddress);
   });
 
   test('surfaces receiver rejection messages cleanly', () async {
     await service.start(
-      onEnvelope: (_) async => const TransportReceiveResult(
+      onPayload: (_) async => const TransportReceiveResult(
         accepted: false,
         message: 'Signed transfer is not addressed to this wallet.',
       ),
@@ -49,7 +49,7 @@ void main() {
     expect(
       () => service.send(
         endpoint: Uri.parse('http://127.0.0.1:${HotspotTransportService.port}'),
-        envelope: _sampleEnvelope(),
+        payload: OfflineTransportPayload.envelope(_sampleEnvelope()),
       ),
       throwsA(
         isA<HttpException>().having(
@@ -65,7 +65,7 @@ void main() {
     expect(
       () => service.send(
         endpoint: Uri.parse('http://127.0.0.1:1'),
-        envelope: _sampleEnvelope(),
+        payload: OfflineTransportPayload.envelope(_sampleEnvelope()),
       ),
       throwsA(
         isA<HttpException>().having(

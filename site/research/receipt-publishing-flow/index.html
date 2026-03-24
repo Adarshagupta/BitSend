@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="BitSend research article on receipt publishing, archive links, and later provider completion."
+    />
+    <title>BitSend | Receipt Publishing Flow</title>
+    <link rel="icon" type="image/png" href="../../favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oxanium:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../../styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js" defer></script>
+    <script src="../../config.js" defer></script>
+    <script src="../../script.js" defer></script>
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="page-backdrop" aria-hidden="true">
+      <div class="backdrop-grid"></div>
+      <div class="backdrop-floor"></div>
+      <div class="backdrop-circuit"></div>
+      <div class="backdrop-arcs"></div>
+      <div class="backdrop-panels"></div>
+      <div class="backdrop-orb backdrop-orb-gold"></div>
+      <div class="backdrop-orb backdrop-orb-green"></div>
+      <div class="backdrop-noise"></div>
+    </div>
+    <header class="site-header">
+      <a class="brand" href="../../" aria-label="BitSend home">
+        <img class="brand-logo" src="../../assets/brand/logo_transparent.png" alt="BitSend" />
+        <span class="brand-wordmark">BitSend</span>
+      </a>
+      <nav class="site-nav" id="site-nav" aria-label="Primary">
+        <a href="../../" data-nav-link="home">Home</a>
+        <a href="../../research/" data-nav-link="research" class="is-active" aria-current="page">Research</a>
+        <a href="../../blog/" data-nav-link="blog">Blog</a>
+        <a href="../../contact/" data-nav-link="contact">Contact</a>
+      </nav>
+      <a class="button button-primary button-small" data-app-link href="../../app/">Enter App</a>
+      <button class="menu-toggle" type="button" aria-label="Open navigation menu" aria-controls="site-nav" aria-expanded="false" data-menu-toggle>
+        <svg class="menu-toggle-icon menu-toggle-icon-menu" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7.5H19M5 12H19M5 16.5H19" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" /></svg>
+        <svg class="menu-toggle-icon menu-toggle-icon-close" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7L17 17M17 7L7 17" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" /></svg>
+      </button>
+    </header>
+    <main class="page-main" id="main">
+      <div class="page-shell editorial-shell">
+        <section class="page-hero">
+          <span class="page-kicker">Research article</span>
+          <h1 class="page-title">Receipt publishing flow</h1>
+          <p class="page-lede">
+            How BitSend turns a finished transfer into an immediate archive
+            link first, and a richer finalized receipt later.
+          </p>
+          <div class="page-actions">
+            <a class="button button-secondary" href="../../research/">Back to Research</a>
+            <a class="button button-primary" href="../../blog/receipt-layer/">Related Blog Note</a>
+          </div>
+        </section>
+
+        <section class="editorial-sections">
+          <article class="editorial-section">
+            <span class="editorial-section-label">Current flow</span>
+            <h2>The first receipt response should already be useful.</h2>
+            <p>
+              The strongest product idea in the current receipt flow is speed
+              of usefulness. After a transfer is done, the user can save the
+              receipt and get a stable public archive link immediately, instead
+              of waiting for every downstream provider step to complete.
+            </p>
+          </article>
+
+          <article class="editorial-section">
+            <span class="editorial-section-label">Two-stage result</span>
+            <h2>Immediate archive first, provider completion second.</h2>
+            <p>
+              The backend returns a stable archive response right away. That
+              means the receipt is already shareable and stored. Later, if the
+              external provider finishes successfully, the same record can
+              upgrade into a stronger final state without breaking the user’s
+              flow.
+            </p>
+            <ul>
+              <li>The app captures and compresses the receipt image.</li>
+              <li>The backend creates an archive record immediately.</li>
+              <li>The provider sync continues in the background.</li>
+              <li>The UI can later refresh into the completed provider state.</li>
+            </ul>
+          </article>
+
+          <article class="editorial-section">
+            <span class="editorial-section-label">Why this matters</span>
+            <h2>Receipts support trust after the send without slowing the send itself.</h2>
+            <p>
+              A nearby payment flow should not feel blocked by post-payment
+              publishing. The receipt system has to add confidence after the
+              transfer, not turn the transfer itself into a waiting game.
+            </p>
+            <div class="editorial-inline-links">
+              <a href="../../research/local-first-system/">See the broader system view</a>
+              <a href="../../blog/receipt-layer/">Read the receipt design note</a>
+            </div>
+          </article>
+        </section>
+      </div>
+    </main>
+    <footer class="site-footer">
+      <div class="footer-brand">
+        <img src="../../assets/brand/logo_transparent.png" alt="BitSend" />
+        <div class="footer-brand-copy">
+          <span class="footer-wordmark">BitSend</span>
+          <p>Pay nearby now. Add the final chain result later.</p>
+        </div>
+      </div>
+      <div class="footer-links">
+        <a href="../../about/">About</a>
+        <a href="../../research/">Research</a>
+        <a href="../../blog/">Blog</a>
+        <a href="../../toc/">Terms</a>
+        <a href="../../privacy/">Privacy</a>
+        <a href="../../legal/">Legal</a>
+        <a href="../../contact/">Contact</a>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="BitSend legal hub with links to terms, privacy, and contact information."
+    />
+    <title>BitSend | Legal</title>
+    <link rel="icon" type="image/png" href="../favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oxanium:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../styles.css" />
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
+      defer
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
+      defer
+    ></script>
+    <script src="../config.js" defer></script>
+    <script src="../script.js" defer></script>
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="page-backdrop" aria-hidden="true">
+      <div class="backdrop-grid"></div>
+      <div class="backdrop-floor"></div>
+      <div class="backdrop-circuit"></div>
+      <div class="backdrop-arcs"></div>
+      <div class="backdrop-panels"></div>
+      <div class="backdrop-orb backdrop-orb-gold"></div>
+      <div class="backdrop-orb backdrop-orb-green"></div>
+      <div class="backdrop-noise"></div>
+    </div>
+
+    <header class="site-header">
+      <a class="brand" href="../" aria-label="BitSend home">
+        <img
+          class="brand-logo"
+          src="../assets/brand/logo_transparent.png"
+          alt="BitSend"
+        />
+        <span class="brand-wordmark">BitSend</span>
+      </a>
+
+      <nav class="site-nav" id="site-nav" aria-label="Primary">
+        <a href="../" data-nav-link="home">Home</a>
+        <a href="../about/" data-nav-link="about">About</a>
+        <a href="../legal/" data-nav-link="legal" class="is-active" aria-current="page">
+          Legal
+        </a>
+        <a href="../contact/" data-nav-link="contact">Contact</a>
+      </nav>
+
+      <a class="button button-primary button-small" data-app-link href="../app/">
+        Enter App
+      </a>
+
+      <button
+        class="menu-toggle"
+        type="button"
+        aria-label="Open navigation menu"
+        aria-controls="site-nav"
+        aria-expanded="false"
+        data-menu-toggle
+      >
+        <svg
+          class="menu-toggle-icon menu-toggle-icon-menu"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path
+            d="M5 7.5H19M5 12H19M5 16.5H19"
+            fill="none"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.9"
+          />
+        </svg>
+        <svg
+          class="menu-toggle-icon menu-toggle-icon-close"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path
+            d="M7 7L17 17M17 7L7 17"
+            fill="none"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.9"
+          />
+        </svg>
+      </button>
+    </header>
+
+    <main class="page-main" id="main">
+      <div class="page-shell">
+        <section class="page-hero">
+          <span class="page-kicker">Legal hub</span>
+          <h1 class="page-title">The core policy pages for BitSend.</h1>
+          <p class="page-lede">
+            This section brings together the current terms, privacy policy, and
+            contact information for BitSend. These pages keep the current public
+            policy set in one place.
+          </p>
+          <div class="page-actions">
+            <a class="button button-secondary" href="../toc/">Open Terms</a>
+            <a class="button button-secondary" href="../privacy/">Open Privacy</a>
+            <a class="button button-primary" href="../contact/">Open Contact</a>
+          </div>
+        </section>
+
+        <div class="legal-grid">
+          <article class="legal-card">
+            <span class="page-card-label">Terms</span>
+            <h3>Terms and conditions</h3>
+            <p>
+              Rules for using BitSend, responsibility for wallet control, fees,
+              and general risk disclosures.
+            </p>
+            <a href="../toc/">Read the terms</a>
+          </article>
+
+          <article class="legal-card">
+            <span class="page-card-label">Privacy</span>
+            <h3>Privacy policy</h3>
+            <p>
+              What BitSend stores on-device, what it sends to network
+              endpoints, and how privacy requests can be made.
+            </p>
+            <a href="../privacy/">Read the privacy policy</a>
+          </article>
+
+          <article class="legal-card">
+            <span class="page-card-label">Contact</span>
+            <h3>Support and reporting</h3>
+            <p>
+              General support, privacy requests, security reporting, and legal
+              questions all start from the contact page.
+            </p>
+            <a href="../contact/">Open contact details</a>
+          </article>
+        </div>
+
+        <div class="page-grid" style="margin-top: 1rem;">
+          <article class="page-card rich-copy">
+            <section>
+              <span class="page-card-label">Current policy set</span>
+              <h2>These pages define the public BitSend policy set for the site.</h2>
+              <p>
+                This legal section brings together the current BitSend terms,
+                privacy, and contact information in one public place. When
+                policy language changes, the site should be updated here as the
+                current source of truth for users.
+              </p>
+            </section>
+
+            <section>
+              <span class="page-card-label">What is covered</span>
+              <h2>Three core areas.</h2>
+              <ul>
+                <li>How BitSend may be used and what risks users accept.</li>
+                <li>What app and network data BitSend processes.</li>
+                <li>How users can reach the BitSend team for support, privacy, or legal questions.</li>
+              </ul>
+            </section>
+          </article>
+
+          <aside class="page-meta">
+            <div class="page-card page-card-dark">
+              <span class="page-card-label">Effective date</span>
+              <h3>March 20, 2026</h3>
+              <p>
+                The current public policy pages use this effective date across
+                privacy, terms, and contact materials.
+              </p>
+            </div>
+
+            <div class="page-card">
+              <span class="page-card-label">Policy pages</span>
+              <div class="page-link-list">
+                <a href="../toc/">Read terms and conditions</a>
+                <a href="../privacy/">Read privacy policy</a>
+                <a href="../contact/">Open contact details</a>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-brand">
+        <img src="../assets/brand/logo_transparent.png" alt="BitSend" />
+        <div class="footer-brand-copy">
+          <span class="footer-wordmark">BitSend</span>
+          <p>Pay nearby now. Add the final chain result later.</p>
+        </div>
+      </div>
+
+      <div class="footer-links">
+        <a href="../about/">About</a>
+        <a href="../research/">Research</a>
+        <a href="../blog/">Blog</a>
+        <a href="../toc/">Terms</a>
+        <a href="../privacy/">Privacy</a>
+        <a href="../legal/">Legal</a>
+        <a href="../contact/">Contact</a>
+      </div>
+    </footer>
+  </body>
+</html>

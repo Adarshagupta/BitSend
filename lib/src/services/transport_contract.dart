@@ -1,6 +1,7 @@
 import '../models/app_models.dart';
 
-typedef EnvelopeHandler = Future<TransportReceiveResult> Function(OfflineEnvelope envelope);
+typedef TransportPayloadHandler =
+    Future<TransportReceiveResult> Function(OfflineTransportPayload payload);
 typedef TransportActivityHandler =
     void Function(TransportActivityNotice notice);
 

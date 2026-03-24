@@ -1,60 +1,59 @@
 package com.bitsend.app.bitsend
 
-import android.graphics.Bitmap
-import io.flutter.embedding.engine.FlutterEngine
+import android.content.Intent
 import io.flutter.embedding.android.FlutterFragmentActivity
-import io.flutter.plugin.common.MethodCall
+import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
-import java.io.ByteArrayOutputStream
 
 class MainActivity : FlutterFragmentActivity() {
-    private var pairCaptureResult: MethodChannel.Result? = null
-    private lateinit var pairCaptureLauncher: ActivityResultLauncher<Void?>
+    private var pendingLaunchRoute: String? = null
+    private var widgetChannel: MethodChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-
-        pairCaptureLauncher = registerForActivityResult(
-            ActivityResultContracts.TakePicturePreview()
-        ) { bitmap: Bitmap? ->
-            val pendingResult = pairCaptureResult ?: return@registerForActivityResult
-            pairCaptureResult = null
-
-            if (bitmap == null) {
-                pendingResult.error(
-                    "capture_cancelled",
-                    "The pair photo capture was cancelled.",
-                    null
-                )
-                return@registerForActivityResult
-            }
-
-            val stream = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-            pendingResult.success(stream.toByteArray())
-        }
-
-        MethodChannel(
+        widgetChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            "bitsend/pair_camera"
-        ).setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
-            when (call.method) {
-                "capturePreview" -> {
-                    if (pairCaptureResult != null) {
-                        result.error(
-                            "capture_in_progress",
-                            "A pair photo capture is already running.",
-                            null
-                        )
-                        return@setMethodCallHandler
+            BitsendWidgetBridge.channelName,
+        ).apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "syncWidgets" -> {
+                        val payload = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                        BitsendWidgetBridge.syncWidgets(this@MainActivity, payload)
+                        result.success(null)
                     }
-                    pairCaptureResult = result
-                    pairCaptureLauncher.launch(null)
+
+                    "consumeLaunchRoute" -> {
+                        result.success(pendingLaunchRoute)
+                        pendingLaunchRoute = null
+                    }
+
+                    else -> result.notImplemented()
                 }
-                else -> result.notImplemented()
             }
         }
+        captureLaunchRoute(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureLaunchRoute(intent)
+        deliverPendingLaunchRoute()
+    }
+
+    private fun captureLaunchRoute(intent: Intent?) {
+        val route = intent?.getStringExtra(BitsendWidgetBridge.widgetRouteExtra)
+        if (route.isNullOrBlank()) {
+            return
+        }
+        pendingLaunchRoute = route
+    }
+
+    private fun deliverPendingLaunchRoute() {
+        val route = pendingLaunchRoute ?: return
+        val channel = widgetChannel ?: return
+        channel.invokeMethod("widgetLaunchRoute", route)
+        pendingLaunchRoute = null
     }
 }

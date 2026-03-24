@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="BitSend privacy policy for device data, permissions, network requests, and privacy rights."
+    />
+    <title>BitSend | Privacy Policy</title>
+    <link rel="icon" type="image/png" href="../favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oxanium:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../styles.css" />
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
+      defer
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
+      defer
+    ></script>
+    <script src="../config.js" defer></script>
+    <script src="../script.js" defer></script>
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="page-backdrop" aria-hidden="true">
+      <div class="backdrop-grid"></div>
+      <div class="backdrop-floor"></div>
+      <div class="backdrop-circuit"></div>
+      <div class="backdrop-arcs"></div>
+      <div class="backdrop-panels"></div>
+      <div class="backdrop-orb backdrop-orb-gold"></div>
+      <div class="backdrop-orb backdrop-orb-green"></div>
+      <div class="backdrop-noise"></div>
+    </div>
+
+    <header class="site-header">
+      <a class="brand" href="../" aria-label="BitSend home">
+        <img
+          class="brand-logo"
+          src="../assets/brand/logo_transparent.png"
+          alt="BitSend"
+        />
+        <span class="brand-wordmark">BitSend</span>
+      </a>
+
+      <nav class="site-nav" id="site-nav" aria-label="Primary">
+        <a href="../" data-nav-link="home">Home</a>
+        <a href="../about/" data-nav-link="about">About</a>
+        <a href="../legal/" data-nav-link="legal" class="is-active" aria-current="page">
+          Legal
+        </a>
+        <a href="../contact/" data-nav-link="contact">Contact</a>
+      </nav>
+
+      <a class="button button-primary button-small" data-app-link href="../app/">
+        Enter App
+      </a>
+
+      <button
+        class="menu-toggle"
+        type="button"
+        aria-label="Open navigation menu"
+        aria-controls="site-nav"
+        aria-expanded="false"
+        data-menu-toggle
+      >
+        <svg
+          class="menu-toggle-icon menu-toggle-icon-menu"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path
+            d="M5 7.5H19M5 12H19M5 16.5H19"
+            fill="none"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.9"
+          />
+        </svg>
+        <svg
+          class="menu-toggle-icon menu-toggle-icon-close"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path
+            d="M7 7L17 17M17 7L7 17"
+            fill="none"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.9"
+          />
+        </svg>
+      </button>
+    </header>
+
+    <main class="page-main" id="main">
+      <div class="page-shell">
+        <section class="page-hero">
+          <span class="page-kicker">Privacy policy</span>
+          <h1 class="page-title">How BitSend handles device and network data.</h1>
+          <p class="page-lede">
+            Effective date: March 20, 2026. BitSend is designed as a
+            non-custodial mobile wallet app. This page explains what the app
+            stores on-device, what it sends to online endpoints when needed,
+            and how privacy questions can be raised.
+          </p>
+          <div class="page-actions">
+            <a class="button button-secondary" href="../toc/">Read Terms</a>
+            <a class="button button-primary" href="../contact/">Privacy Contact</a>
+          </div>
+        </section>
+
+        <div class="page-grid">
+          <article class="page-card rich-copy">
+            <section>
+              <h2>Overview</h2>
+              <p>
+                This policy applies to BitSend users and to related backend
+                endpoints used by the app. By using BitSend, you agree to this
+                privacy policy.
+              </p>
+            </section>
+
+            <section>
+              <h2>Information stored on your device</h2>
+              <p>BitSend may store local app data such as:</p>
+              <ul>
+                <li>Wallet metadata and wallet addresses.</li>
+                <li>Local transfer queue and activity history.</li>
+                <li>App settings, endpoint selections, and preferences.</li>
+                <li>Security state used for unlock and biometric checks.</li>
+              </ul>
+              <p>
+                Sensitive secrets are intended to stay on-device and use
+                platform security features where available.
+              </p>
+            </section>
+
+            <section>
+              <h2>Permissions and device access</h2>
+              <p>BitSend may ask for permissions when a feature needs them:</p>
+              <ul>
+                <li>Camera for QR address and transfer scans.</li>
+                <li>Nearby devices and Bluetooth for local discovery and transfer.</li>
+                <li>Microphone for ultrasonic receive workflows.</li>
+                <li>Network and Wi-Fi state for connectivity-aware behavior.</li>
+                <li>Biometric capability for device authentication.</li>
+              </ul>
+            </section>
+
+            <section>
+              <h2>Network requests</h2>
+              <p>
+                When you use connected or managed features, BitSend may send
+                request data to blockchain RPC endpoints, optional managed
+                backend endpoints, or optional relay and receipt endpoints.
+              </p>
+              <ul>
+                <li>Wallet addresses and chain or network parameters.</li>
+                <li>Signed payloads needed to complete operations.</li>
+                <li>Request metadata required for online settlement.</li>
+              </ul>
+            </section>
+
+            <section>
+              <h2>How information is used</h2>
+              <ul>
+                <li>Operate wallet, transfer, receive, and settlement features.</li>
+                <li>Authenticate access to app functions.</li>
+                <li>Maintain local history, queue, and settings.</li>
+                <li>Troubleshoot failures and improve reliability.</li>
+                <li>Meet security, fraud-prevention, or legal obligations when required.</li>
+              </ul>
+            </section>
+
+            <section>
+              <h2>Data sharing and retention</h2>
+              <p>BitSend does not sell personal data.</p>
+              <ul>
+                <li>Data may be shared with infrastructure providers you use.</li>
+                <li>Optional backend and receipt providers may process request data.</li>
+                <li>Legal authorities may receive data when required by law.</li>
+                <li>On-device data remains until you remove it or uninstall the app.</li>
+                <li>External endpoint retention follows the policies of those operators.</li>
+              </ul>
+            </section>
+
+            <section>
+              <h2>Security, rights, and updates</h2>
+              <p>
+                BitSend applies technical safeguards, but no system is fully
+                secure. Users remain responsible for securing their devices and
+                backup materials.
+              </p>
+              <p>
+                Depending on your jurisdiction, you may have rights to request
+                access, correction, deletion, or objection. The latest version
+                of this policy will be kept on the BitSend site.
+              </p>
+            </section>
+
+            <section>
+              <h2>Children and international use</h2>
+              <p>
+                BitSend is not directed to children under 13, or the minimum
+                legal age in your jurisdiction. The app may be used globally
+                and network interactions may involve infrastructure outside your
+                country.
+              </p>
+            </section>
+          </article>
+
+          <aside class="page-meta">
+            <div class="page-card page-card-dark">
+              <span class="page-card-label">Quick summary</span>
+              <h3>Mostly local first.</h3>
+              <p>
+                BitSend stores core app state on your device and only sends
+                request data to network services when a connected feature needs
+                it.
+              </p>
+              <div class="page-chip-list">
+                <span class="page-chip">On-device state</span>
+                <span class="page-chip">Contextual permissions</span>
+                <span class="page-chip">No ad SDK focus</span>
+              </div>
+            </div>
+
+            <div class="page-card">
+              <span class="page-card-label">Privacy requests</span>
+              <div class="page-link-list">
+                <a href="../contact/">Open contact and support</a>
+                <a href="../legal/">Open legal and policy pages</a>
+              </div>
+              <div class="page-note">
+                <p>
+                  When you contact the BitSend team, include your request type,
+                  relevant wallet context, and jurisdiction.
+                </p>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-brand">
+        <img src="../assets/brand/logo_transparent.png" alt="BitSend" />
+        <div class="footer-brand-copy">
+          <span class="footer-wordmark">BitSend</span>
+          <p>Pay nearby now. Add the final chain result later.</p>
+        </div>
+      </div>
+
+      <div class="footer-links">
+        <a href="../about/">About</a>
+        <a href="../research/">Research</a>
+        <a href="../blog/">Blog</a>
+        <a href="../toc/">Terms</a>
+        <a href="../privacy/">Privacy</a>
+        <a href="../legal/">Legal</a>
+        <a href="../contact/">Contact</a>
+      </div>
+    </footer>
+  </body>
+</html>

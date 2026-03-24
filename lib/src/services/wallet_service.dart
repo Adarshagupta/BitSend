@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:bip39/bip39.dart' as bip39;
@@ -8,6 +9,7 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:solana/solana.dart';
 import 'package:wallet/wallet.dart' as hd_wallet;
+import 'package:web3dart/crypto.dart' as web3_crypto;
 import 'package:web3dart/web3dart.dart';
 
 import '../models/app_models.dart';
@@ -18,19 +20,23 @@ class WalletService {
 
   static const String _walletMnemonicKey = 'wallet_mnemonic';
   static const String _walletModeKey = 'wallet_mode';
+  static const String _walletEvmAccountStrategyKey =
+      'wallet_evm_account_strategy';
+  static const String _offlineWalletVersionKey = 'offline_wallet_version';
+  static const String _deviceBoundOfflineWalletVersion = 'device_bound_v1';
   static const String _legacySolanaRpcEndpointKey = 'rpc_endpoint_solana';
   static const String _legacyEthereumRpcEndpointKey = 'rpc_endpoint_ethereum';
-  static const int _solanaMainAccountIndex = 0;
-  static const int _solanaOfflineAccountIndex = 1;
-  static const int _ethereumMainAccountIndex = 0;
-  static const int _ethereumOfflineAccountIndex = 1;
-  static const int _baseMainAccountIndex = 2;
-  static const int _baseOfflineAccountIndex = 3;
-
   final FlutterSecureStorage _storage;
 
   Future<WalletProfile?> loadWallet({
     ChainKind chain = ChainKind.solana,
+  }) async {
+    return loadWalletForSlot(chain: chain, slot: 0);
+  }
+
+  Future<WalletProfile?> loadWalletForSlot({
+    ChainKind chain = ChainKind.solana,
+    int slot = 0,
   }) async {
     final String? mnemonic = await _storage.read(key: _walletMnemonicKey);
     if (mnemonic == null || mnemonic.isEmpty) {
@@ -41,17 +47,31 @@ class WalletService {
     final WalletSetupMode mode = modeValue == WalletSetupMode.restored.name
         ? WalletSetupMode.restored
         : WalletSetupMode.created;
+    final EvmAccountStrategy evmAccountStrategy =
+        await _loadEvmAccountStrategy(mode: mode);
     return _profileFromMnemonic(
       mnemonic,
       mode,
       chain: chain,
-      account: _defaultAccountIndexFor(chain: chain, offline: false),
+      account: accountIndexForSlot(
+        chain: chain,
+        slot: slot,
+        offline: false,
+        evmAccountStrategy: evmAccountStrategy,
+      ),
     );
   }
 
   Future<WalletProfile?> loadOfflineWallet({
     ChainKind chain = ChainKind.solana,
   }) async {
+    return loadOfflineWalletForSlot(chain: chain, slot: 0);
+  }
+
+  Future<WalletProfile?> loadOfflineWalletForSlot({
+    ChainKind chain = ChainKind.solana,
+    int slot = 0,
+  }) async {
     final String? mnemonic = await _storage.read(key: _walletMnemonicKey);
     if (mnemonic == null || mnemonic.isEmpty) {
       return null;
@@ -60,11 +80,15 @@ class WalletService {
     final WalletSetupMode mode = modeValue == WalletSetupMode.restored.name
         ? WalletSetupMode.restored
         : WalletSetupMode.created;
-    return _profileFromMnemonic(
-      mnemonic,
-      mode,
+    await _ensureOfflineWalletKey(
       chain: chain,
-      account: _defaultAccountIndexFor(chain: chain, offline: true),
+      slot: slot,
+      mnemonic: mnemonic,
+    );
+    return _loadOfflineProfileFromStoredKey(
+      chain: chain,
+      slot: slot,
+      mode: mode,
     );
   }
 
@@ -85,8 +109,20 @@ class WalletService {
     String mnemonic,
     WalletSetupMode mode,
   ) async {
+    await _deleteAllOfflineWalletKeys();
     await _storage.write(key: _walletMnemonicKey, value: mnemonic);
     await _storage.write(key: _walletModeKey, value: mode.name);
+    await _storage.write(
+      key: _walletEvmAccountStrategyKey,
+      value: defaultEvmAccountStrategyForMode(mode).name,
+    );
+    await _storage.write(
+      key: _offlineWalletVersionKey,
+      value: _deviceBoundOfflineWalletVersion,
+    );
+    for (final ChainKind chain in ChainKind.values) {
+      await _generateAndStoreOfflineWalletKey(chain: chain, slot: 0);
+    }
     return _profileFromMnemonic(
       mnemonic,
       mode,
@@ -116,6 +152,8 @@ class WalletService {
         );
       case ChainKind.ethereum:
       case ChainKind.base:
+      case ChainKind.bnb:
+      case ChainKind.polygon:
         final EthPrivateKey credentials = _ethereumCredentialsFromMnemonic(
           mnemonic,
           account: account,
@@ -140,27 +178,74 @@ class WalletService {
     return Ed25519HDKeyPair.fromMnemonic(mnemonic, account: account);
   }
 
-  Future<Ed25519HDKeyPair> loadOfflineSigningKeyPair() =>
-      loadSigningKeyPair(account: 1);
+  Future<Ed25519HDKeyPair> loadOfflineSigningKeyPair({int slot = 0}) async {
+    final String? mnemonic = await _storage.read(key: _walletMnemonicKey);
+    if (mnemonic == null || mnemonic.isEmpty) {
+      throw const FormatException('Wallet not initialized yet.');
+    }
+    await _ensureOfflineWalletKey(
+      chain: ChainKind.solana,
+      slot: slot,
+      mnemonic: mnemonic,
+    );
+    final String? encoded = await _storage.read(
+      key: _offlineWalletKey(ChainKind.solana, slot),
+    );
+    if (encoded == null || encoded.isEmpty) {
+      throw const FormatException('Offline wallet is unavailable on this device.');
+    }
+    return Ed25519HDKeyPair.fromPrivateKeyBytes(
+      privateKey: base64Decode(encoded),
+    );
+  }
 
   Future<EthPrivateKey> loadEvmSigningCredentials({
     required ChainKind chain,
     int? account,
     bool offline = false,
+    int slot = 0,
   }) async {
     if (!chain.isEvm) {
       throw FormatException(
         '${chain.label} does not use EVM signing credentials.',
       );
     }
+    if (offline) {
+      final String? mnemonic = await _storage.read(key: _walletMnemonicKey);
+      if (mnemonic == null || mnemonic.isEmpty) {
+        throw const FormatException('Wallet not initialized yet.');
+      }
+      await _ensureOfflineWalletKey(
+        chain: chain,
+        slot: slot,
+        mnemonic: mnemonic,
+      );
+      final String? encoded = await _storage.read(
+        key: _offlineWalletKey(chain, slot),
+      );
+      if (encoded == null || encoded.isEmpty) {
+        throw const FormatException(
+          'Offline wallet is unavailable on this device.',
+        );
+      }
+      return EthPrivateKey.fromHex(encoded);
+    }
     final String? mnemonic = await _storage.read(key: _walletMnemonicKey);
     if (mnemonic == null || mnemonic.isEmpty) {
       throw const FormatException('Wallet not initialized yet.');
     }
+    final EvmAccountStrategy evmAccountStrategy =
+        await _loadEvmAccountStrategy();
     return _ethereumCredentialsFromMnemonic(
       mnemonic,
       account:
-          account ?? _defaultAccountIndexFor(chain: chain, offline: offline),
+          account ??
+          accountIndexForSlot(
+            chain: chain,
+            slot: slot,
+            offline: offline,
+            evmAccountStrategy: evmAccountStrategy,
+          ),
     );
   }
 
@@ -174,7 +259,10 @@ class WalletService {
   }
 
   Future<EthPrivateKey> loadEthereumOfflineSigningCredentials() {
-    return loadEthereumSigningCredentials(account: 1);
+    return loadEvmSigningCredentials(
+      chain: ChainKind.ethereum,
+      offline: true,
+    );
   }
 
   Future<EthPrivateKey> loadBaseSigningCredentials({int? account}) {
@@ -210,91 +298,39 @@ class WalletService {
       ChainKind.solana => _storage.read(key: _legacySolanaRpcEndpointKey),
       ChainKind.ethereum => _storage.read(key: _legacyEthereumRpcEndpointKey),
       ChainKind.base => null,
+      ChainKind.bnb => null,
+      ChainKind.polygon => null,
     };
   }
 
   Future<WalletBackupExport> exportWalletBackup() async {
-    final WalletProfile? solanaWallet = await loadWallet(
-      chain: ChainKind.solana,
-    );
-    final WalletProfile? solanaOfflineWallet = await loadOfflineWallet(
-      chain: ChainKind.solana,
-    );
-    final WalletProfile? ethereumWallet = await loadWallet(
-      chain: ChainKind.ethereum,
-    );
-    final WalletProfile? ethereumOfflineWallet = await loadOfflineWallet(
-      chain: ChainKind.ethereum,
-    );
-    final WalletProfile? baseWallet = await loadWallet(chain: ChainKind.base);
-    final WalletProfile? baseOfflineWallet = await loadOfflineWallet(
-      chain: ChainKind.base,
-    );
-    if (solanaWallet == null ||
-        solanaOfflineWallet == null ||
-        ethereumWallet == null ||
-        ethereumOfflineWallet == null ||
-        baseWallet == null ||
-        baseOfflineWallet == null) {
+    final EvmAccountStrategy evmAccountStrategy =
+        await _loadEvmAccountStrategy();
+    final Map<ChainKind, WalletProfile?> wallets = <ChainKind, WalletProfile?>{
+      for (final ChainKind chain in ChainKind.values)
+        chain: await loadWallet(chain: chain),
+    };
+    if (wallets.values.any((WalletProfile? wallet) => wallet == null)) {
       throw const FormatException('Create or restore a wallet first.');
     }
-
-    final WalletBackupAccount solanaMainAccount = await _buildBackupAccount(
-      chain: ChainKind.solana,
-      role: 'main',
-      accountIndex: _defaultAccountIndexFor(
-        chain: ChainKind.solana,
-        offline: false,
-      ),
-      address: solanaWallet.address,
-    );
-    final WalletBackupAccount solanaOfflineAccount = await _buildBackupAccount(
-      chain: ChainKind.solana,
-      role: 'offline',
-      accountIndex: _defaultAccountIndexFor(
-        chain: ChainKind.solana,
-        offline: true,
-      ),
-      address: solanaOfflineWallet.address,
-    );
-    final WalletBackupAccount ethereumMainAccount = await _buildBackupAccount(
-      chain: ChainKind.ethereum,
-      role: 'main',
-      accountIndex: _defaultAccountIndexFor(
-        chain: ChainKind.ethereum,
-        offline: false,
-      ),
-      address: ethereumWallet.address,
-    );
-    final WalletBackupAccount ethereumOfflineAccount =
+    final List<WalletBackupAccount> mainAccounts = <WalletBackupAccount>[];
+    for (final ChainKind chain in ChainKind.values) {
+      final WalletProfile wallet = wallets[chain]!;
+      mainAccounts.add(
         await _buildBackupAccount(
-          chain: ChainKind.ethereum,
-          role: 'offline',
-          accountIndex: _defaultAccountIndexFor(
-            chain: ChainKind.ethereum,
-            offline: true,
+          chain: chain,
+          role: 'main',
+          accountIndex: accountIndexForSlot(
+            chain: chain,
+            slot: 0,
+            offline: false,
+            evmAccountStrategy: evmAccountStrategy,
           ),
-          address: ethereumOfflineWallet.address,
-        );
-    final WalletBackupAccount baseMainAccount = await _buildBackupAccount(
-      chain: ChainKind.base,
-      role: 'main',
-      accountIndex: _defaultAccountIndexFor(
-        chain: ChainKind.base,
-        offline: false,
-      ),
-      address: baseWallet.address,
-    );
-    final WalletBackupAccount baseOfflineAccount = await _buildBackupAccount(
-      chain: ChainKind.base,
-      role: 'offline',
-      accountIndex: _defaultAccountIndexFor(
-        chain: ChainKind.base,
-        offline: true,
-      ),
-      address: baseOfflineWallet.address,
-    );
-
+          address: wallet.address,
+        ),
+      );
+    }
+    final WalletProfile primaryWallet = wallets[ChainKind.solana]!;
     final DateTime now = DateTime.now().toUtc();
     final String fileName = 'bitsend-wallet-backup-${_timestamp(now)}.json';
     final Directory baseDirectory = await _resolveBackupDirectory();
@@ -307,24 +343,19 @@ class WalletService {
     final JsonEncoder encoder = const JsonEncoder.withIndent('  ');
     final String payload = encoder.convert(<String, dynamic>{
       'version': 1,
-      'chains': <String>[
-        ChainKind.solana.name,
-        ChainKind.ethereum.name,
-        ChainKind.base.name,
-      ],
+      'chains': ChainKind.values
+          .map((ChainKind chain) => chain.name)
+          .toList(growable: false),
       'exportedAtUtc': now.toIso8601String(),
-      'walletMode': solanaWallet.mode.name,
-      'recoveryPhrase': solanaWallet.seedPhrase,
-      'accounts': <Map<String, dynamic>>[
-        solanaMainAccount.toJson(),
-        solanaOfflineAccount.toJson(),
-        ethereumMainAccount.toJson(),
-        ethereumOfflineAccount.toJson(),
-        baseMainAccount.toJson(),
-        baseOfflineAccount.toJson(),
-      ],
+      'walletMode': primaryWallet.mode.name,
+      'evmAccountStrategy': evmAccountStrategy.name,
+      'recoveryPhrase': primaryWallet.seedPhrase,
+      'accounts': mainAccounts
+          .map((WalletBackupAccount account) => account.toJson())
+          .toList(growable: false),
       'notes': <String>[
-        'This file contains the recovery phrase and all derived private keys.',
+        'This file contains the recovery phrase and the main-wallet private keys.',
+        'The offline wallet is device-bound and is not included in this backup.',
         'Store it offline and delete any temporary copies after moving it to safe storage.',
       ],
     });
@@ -336,8 +367,11 @@ class WalletService {
   Future<void> clearAll() async {
     await _storage.delete(key: _walletMnemonicKey);
     await _storage.delete(key: _walletModeKey);
+    await _storage.delete(key: _walletEvmAccountStrategyKey);
+    await _storage.delete(key: _offlineWalletVersionKey);
     await _storage.delete(key: _legacySolanaRpcEndpointKey);
     await _storage.delete(key: _legacyEthereumRpcEndpointKey);
+    await _deleteAllOfflineWalletKeys();
     for (final ChainKind chain in ChainKind.values) {
       for (final ChainNetwork network in ChainNetwork.values) {
         await _storage.delete(key: _rpcEndpointKey(chain, network));
@@ -371,6 +405,8 @@ class WalletService {
         }
       case ChainKind.ethereum:
       case ChainKind.base:
+      case ChainKind.bnb:
+      case ChainKind.polygon:
         return WalletBackupAccount(
           chain: chain,
           role: role,
@@ -387,18 +423,218 @@ class WalletService {
     }
   }
 
-  int _defaultAccountIndexFor({
+  EvmAccountStrategy defaultEvmAccountStrategyForMode(WalletSetupMode mode) {
+    return mode == WalletSetupMode.restored
+        ? EvmAccountStrategy.compatibleUnified
+        : EvmAccountStrategy.legacySeparated;
+  }
+
+  int accountIndexForSlot({
     required ChainKind chain,
+    required int slot,
     required bool offline,
+    EvmAccountStrategy evmAccountStrategy =
+        EvmAccountStrategy.legacySeparated,
   }) {
-    return switch ((chain, offline)) {
-      (ChainKind.solana, false) => _solanaMainAccountIndex,
-      (ChainKind.solana, true) => _solanaOfflineAccountIndex,
-      (ChainKind.ethereum, false) => _ethereumMainAccountIndex,
-      (ChainKind.ethereum, true) => _ethereumOfflineAccountIndex,
-      (ChainKind.base, false) => _baseMainAccountIndex,
-      (ChainKind.base, true) => _baseOfflineAccountIndex,
+    final int normalizedSlot = slot < 0 ? 0 : slot;
+    if (chain == ChainKind.solana) {
+      final int offset = normalizedSlot * 2;
+      return offline ? offset + 1 : offset;
+    }
+
+    final int legacyOffset = switch (chain) {
+      ChainKind.solana => normalizedSlot * 2,
+      ChainKind.ethereum => normalizedSlot * 4,
+      ChainKind.base => normalizedSlot * 4 + 2,
+      ChainKind.bnb => 1000 + normalizedSlot * 4,
+      ChainKind.polygon => 1000 + normalizedSlot * 4 + 2,
     };
+    if (offline) {
+      return legacyOffset + 1;
+    }
+    return switch (evmAccountStrategy) {
+      EvmAccountStrategy.legacySeparated => legacyOffset,
+      EvmAccountStrategy.compatibleUnified => normalizedSlot,
+    };
+  }
+
+  Future<void> _ensureOfflineWalletKey({
+    required ChainKind chain,
+    required int slot,
+    required String mnemonic,
+  }) async {
+    final String storageKey = _offlineWalletKey(chain, slot);
+    final String? existing = await _storage.read(key: storageKey);
+    if (existing != null && existing.isNotEmpty) {
+      return;
+    }
+    final String? version = await _storage.read(key: _offlineWalletVersionKey);
+    if (version == _deviceBoundOfflineWalletVersion) {
+      await _generateAndStoreOfflineWalletKey(chain: chain, slot: slot);
+      return;
+    }
+    await _migrateLegacyOfflineWalletKey(
+      chain: chain,
+      slot: slot,
+      mnemonic: mnemonic,
+    );
+  }
+
+  Future<void> _generateAndStoreOfflineWalletKey({
+    required ChainKind chain,
+    required int slot,
+  }) async {
+    switch (chain) {
+      case ChainKind.solana:
+        final Ed25519HDKeyPair keyPair = await Ed25519HDKeyPair.random();
+        final Ed25519HDKeyPairData keyData = await keyPair.extract();
+        try {
+          await _storage.write(
+            key: _offlineWalletKey(chain, slot),
+            value: base64Encode(keyData.bytes),
+          );
+        } finally {
+          keyData.destroy();
+        }
+        return;
+      case ChainKind.ethereum:
+      case ChainKind.base:
+      case ChainKind.bnb:
+      case ChainKind.polygon:
+        final EthPrivateKey credentials = EthPrivateKey.createRandom(
+          Random.secure(),
+        );
+        await _storage.write(
+          key: _offlineWalletKey(chain, slot),
+          value: web3_crypto.bytesToHex(
+            credentials.privateKey,
+            include0x: true,
+          ),
+        );
+        return;
+    }
+  }
+
+  Future<void> _migrateLegacyOfflineWalletKey({
+    required ChainKind chain,
+    required int slot,
+    required String mnemonic,
+  }) async {
+    switch (chain) {
+      case ChainKind.solana:
+        final Ed25519HDKeyPair keyPair = await Ed25519HDKeyPair.fromMnemonic(
+          mnemonic,
+          account: accountIndexForSlot(
+            chain: chain,
+            slot: slot,
+            offline: true,
+          ),
+        );
+        final Ed25519HDKeyPairData keyData = await keyPair.extract();
+        try {
+          await _storage.write(
+            key: _offlineWalletKey(chain, slot),
+            value: base64Encode(keyData.bytes),
+          );
+        } finally {
+          keyData.destroy();
+        }
+        return;
+      case ChainKind.ethereum:
+      case ChainKind.base:
+      case ChainKind.bnb:
+      case ChainKind.polygon:
+        await _storage.write(
+          key: _offlineWalletKey(chain, slot),
+          value: web3_crypto.bytesToHex(
+            _ethereumPrivateKeyBytesFromMnemonic(
+              mnemonic,
+              account: accountIndexForSlot(
+                chain: chain,
+                slot: slot,
+                offline: true,
+              ),
+            ),
+            include0x: true,
+          ),
+        );
+        return;
+    }
+  }
+
+  Future<WalletProfile?> _loadOfflineProfileFromStoredKey({
+    required ChainKind chain,
+    required int slot,
+    required WalletSetupMode mode,
+  }) async {
+    final String? encoded = await _storage.read(key: _offlineWalletKey(chain, slot));
+    if (encoded == null || encoded.isEmpty) {
+      return null;
+    }
+    switch (chain) {
+      case ChainKind.solana:
+        final Ed25519HDKeyPair keyPair = await Ed25519HDKeyPair.fromPrivateKeyBytes(
+          privateKey: base64Decode(encoded),
+        );
+        return WalletProfile(
+          chain: chain,
+          address: keyPair.address,
+          displayAddress: Formatters.shortAddress(keyPair.address),
+          seedPhrase: '',
+          mode: mode,
+        );
+      case ChainKind.ethereum:
+      case ChainKind.base:
+      case ChainKind.bnb:
+      case ChainKind.polygon:
+        final EthPrivateKey credentials = EthPrivateKey.fromHex(encoded);
+        final EthereumAddress address = await credentials.extractAddress();
+        final String addressHex = address.hexEip55;
+        return WalletProfile(
+          chain: chain,
+          address: addressHex,
+          displayAddress: Formatters.shortAddress(addressHex),
+          seedPhrase: '',
+          mode: mode,
+        );
+    }
+  }
+
+  Future<EvmAccountStrategy> _loadEvmAccountStrategy({
+    WalletSetupMode? mode,
+  }) async {
+    final String? stored = await _storage.read(key: _walletEvmAccountStrategyKey);
+    if (stored == EvmAccountStrategy.compatibleUnified.name) {
+      return EvmAccountStrategy.compatibleUnified;
+    }
+    if (stored == EvmAccountStrategy.legacySeparated.name) {
+      return EvmAccountStrategy.legacySeparated;
+    }
+    final WalletSetupMode effectiveMode = mode ?? await _loadWalletMode();
+    final EvmAccountStrategy fallback = defaultEvmAccountStrategyForMode(
+      effectiveMode,
+    );
+    await _storage.write(
+      key: _walletEvmAccountStrategyKey,
+      value: fallback.name,
+    );
+    return fallback;
+  }
+
+  Future<WalletSetupMode> _loadWalletMode() async {
+    final String? modeValue = await _storage.read(key: _walletModeKey);
+    return modeValue == WalletSetupMode.restored.name
+        ? WalletSetupMode.restored
+        : WalletSetupMode.created;
+  }
+
+  Future<void> _deleteAllOfflineWalletKeys() async {
+    final Map<String, String> all = await _storage.readAll();
+    for (final String key in all.keys) {
+      if (key.startsWith('offline_wallet_key_')) {
+        await _storage.delete(key: key);
+      }
+    }
   }
 
   EthPrivateKey _ethereumCredentialsFromMnemonic(
@@ -501,5 +737,10 @@ class WalletService {
 
   String _rpcEndpointKey(ChainKind chain, ChainNetwork network) {
     return 'rpc_endpoint_${chain.name}_${network.name}';
+  }
+
+  String _offlineWalletKey(ChainKind chain, int slot) {
+    final int normalizedSlot = slot < 0 ? 0 : slot;
+    return 'offline_wallet_key_${chain.name}_$normalizedSlot';
   }
 }

@@ -19,11 +19,16 @@ import '../services/ble_transport_service.dart';
 import '../services/device_auth_service.dart';
 import '../services/ethereum_service.dart';
 import '../services/fileverse_client_service.dart';
+import '../services/home_widget_service.dart';
 import '../services/hotspot_transport_service.dart';
 import '../services/local_store.dart';
+import '../services/offline_voucher_client_service.dart';
+import '../services/offline_voucher_service.dart';
+import '../services/price_service.dart';
 import '../services/relay_client_service.dart';
 import '../services/relay_crypto_service.dart';
 import '../services/solana_service.dart';
+import '../services/swap_service.dart';
 import '../services/transport_contract.dart';
 import '../services/ultrasonic_transport_service.dart';
 import '../services/wallet_service.dart';
@@ -32,8 +37,17 @@ const double minimumFundingSol = 0.05;
 const int solFeeHeadroomLamports = 10000;
 const Duration blockhashFreshnessWindow = Duration(seconds: 75);
 const Duration ethereumContextFreshnessWindow = Duration(minutes: 5);
+const Duration readinessAutoRetryDelay = Duration(seconds: 30);
+const Duration solanaReadinessAutoRefreshLead = Duration(seconds: 15);
+const Duration evmReadinessAutoRefreshLead = Duration(minutes: 1);
 const Duration realtimeSettlementPollInterval = Duration(seconds: 2);
 const int realtimeSettlementPollAttempts = 12;
+const Duration offlineVoucherClaimReceiptPollDelay = Duration(seconds: 15);
+const Duration offlineVoucherClaimRetryBaseDelay = Duration(seconds: 20);
+const Duration offlineVoucherClaimRetryMaxDelay = Duration(minutes: 10);
+const int offlineVoucherClaimSponsorThreshold = 3;
+const int erc20DiscoveryChunkSize = 100000;
+const int erc20InitialDiscoveryLookbackBlocks = 2000000;
 const String defaultSolanaTestnetRpcEndpoint = 'https://api.devnet.solana.com';
 const String defaultSolanaMainnetRpcEndpoint =
     'https://api.mainnet-beta.solana.com';
@@ -43,9 +57,18 @@ const String defaultEthereumMainnetRpcEndpoint =
     'https://ethereum-rpc.publicnode.com';
 const String defaultBaseTestnetRpcEndpoint = 'https://sepolia.base.org';
 const String defaultBaseMainnetRpcEndpoint = 'https://mainnet.base.org';
+const String defaultBnbTestnetRpcEndpoint =
+    'https://bsc-testnet-dataseed.bnbchain.org';
+const String defaultBnbMainnetRpcEndpoint = 'https://bsc-dataseed.bnbchain.org';
+const String defaultPolygonTestnetRpcEndpoint = 'https://polygon-amoy.drpc.org';
+const String defaultPolygonMainnetRpcEndpoint = 'https://polygon.drpc.org';
 const String legacyLocalBitGoBackendEndpoint = 'http://127.0.0.1:8788';
 const String defaultBitGoBackendEndpoint =
     'https://bitsend-bitgo-backend.blueadarsh1.workers.dev';
+const String defaultZeroExSwapApiKey = String.fromEnvironment(
+  'ZERO_EX_API_KEY',
+  defaultValue: '',
+);
 
 class BitsendAppState extends ChangeNotifier {
   BitsendAppState({
@@ -60,7 +83,12 @@ class BitsendAppState extends ChangeNotifier {
     DeviceAuthService? deviceAuthService,
     BitGoClientService? bitGoClientService,
     FileverseClientService? fileverseClientService,
+    PriceService? priceService,
+    SwapService? swapService,
+    HomeScreenWidgetService? homeScreenWidgetService,
     RelayClientService? relayClientService,
+    OfflineVoucherClientService? offlineVoucherClientService,
+    OfflineVoucherService? offlineVoucherService,
     RelayCryptoService? relayCryptoService,
     UltrasonicTransportService? ultrasonicTransportService,
     Uuid? uuid,
@@ -84,9 +112,17 @@ class BitsendAppState extends ChangeNotifier {
        _fileverseClientService =
            fileverseClientService ??
            FileverseClientService(endpoint: defaultBitGoBackendEndpoint),
+       _priceService = priceService ?? PriceService(),
+       _swapService = swapService ?? SwapService(),
+       _homeScreenWidgetService =
+           homeScreenWidgetService ?? HomeScreenWidgetService(),
        _relayClientService =
            relayClientService ??
            RelayClientService(endpoint: defaultBitGoBackendEndpoint),
+       _offlineVoucherClientService =
+           offlineVoucherClientService ??
+           OfflineVoucherClientService(endpoint: defaultBitGoBackendEndpoint),
+       _offlineVoucherService = offlineVoucherService ?? OfflineVoucherService(),
        _relayCryptoService = relayCryptoService ?? RelayCryptoService(),
        _ultrasonicTransportService =
            ultrasonicTransportService ?? UltrasonicTransportService(),
@@ -104,13 +140,20 @@ class BitsendAppState extends ChangeNotifier {
   final DeviceAuthService _deviceAuthService;
   final BitGoClientService _bitGoClientService;
   final FileverseClientService _fileverseClientService;
+  final PriceService _priceService;
+  SwapService? _swapService;
+  final HomeScreenWidgetService _homeScreenWidgetService;
   final RelayClientService _relayClientService;
+  final OfflineVoucherClientService _offlineVoucherClientService;
+  final OfflineVoucherService _offlineVoucherService;
   final RelayCryptoService _relayCryptoService;
   final UltrasonicTransportService _ultrasonicTransportService;
   final Uuid _uuid;
   final DateTime Function() _clock;
 
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  StreamSubscription<String>? _homeWidgetLaunchRouteSubscription;
+  Timer? _autoReadinessRefreshTimer;
 
   bool _initialized = false;
   bool _initializing = false;
@@ -136,6 +179,8 @@ class BitsendAppState extends ChangeNotifier {
   final Map<ChainKind, WalletProfile?> _wallets = <ChainKind, WalletProfile?>{};
   final Map<ChainKind, WalletProfile?> _offlineWallets =
       <ChainKind, WalletProfile?>{};
+  final Map<ChainKind, int> _selectedAccountSlots = <ChainKind, int>{};
+  final Map<ChainKind, int> _accountCounts = <ChainKind, int>{};
   final Map<String, WalletEngine> _walletEngines = <String, WalletEngine>{};
   final Map<String, BitGoWalletSummary?> _bitgoWallets =
       <String, BitGoWalletSummary?>{};
@@ -147,6 +192,18 @@ class BitsendAppState extends ChangeNotifier {
   int _offlineBalanceLamports = 0;
   final Map<String, int> _mainBalances = <String, int>{};
   final Map<String, int> _offlineBalances = <String, int>{};
+  final Map<String, int> _mainTrackedAssetBalances = <String, int>{};
+  final Map<String, int> _offlineTrackedAssetBalances = <String, int>{};
+  final List<SendContact> _contacts = <SendContact>[];
+  final List<TokenAllowanceEntry> _allowanceEntries =
+      <TokenAllowanceEntry>[];
+  final Map<String, Map<String, TrackedAssetDefinition>>
+      _discoveredTrackedAssets =
+      <String, Map<String, TrackedAssetDefinition>>{};
+  final Map<String, int> _erc20DiscoveryHighWaterMarks = <String, int>{};
+  final Map<String, List<NftHolding>> _nftHoldingsByScope =
+      <String, List<NftHolding>>{};
+  final Map<String, double> _usdPrices = <String, double>{};
   final Map<String, String> _rpcEndpoints = <String, String>{
     'solana:testnet': defaultSolanaTestnetRpcEndpoint,
     'solana:mainnet': defaultSolanaMainnetRpcEndpoint,
@@ -154,9 +211,15 @@ class BitsendAppState extends ChangeNotifier {
     'ethereum:mainnet': defaultEthereumMainnetRpcEndpoint,
     'base:testnet': defaultBaseTestnetRpcEndpoint,
     'base:mainnet': defaultBaseMainnetRpcEndpoint,
+    'bnb:testnet': defaultBnbTestnetRpcEndpoint,
+    'bnb:mainnet': defaultBnbMainnetRpcEndpoint,
+    'polygon:testnet': defaultPolygonTestnetRpcEndpoint,
+    'polygon:mainnet': defaultPolygonMainnetRpcEndpoint,
   };
   String _rpcEndpoint = defaultEthereumTestnetRpcEndpoint;
   String _bitgoEndpoint = defaultBitGoBackendEndpoint;
+  String _swapApiKey = defaultZeroExSwapApiKey;
+  int? _swapSlippageBps;
   SendDraft _sendDraft = const SendDraft();
   TransportKind _receiveTransport = TransportKind.hotspot;
   String? _lastSentTransferId;
@@ -165,10 +228,20 @@ class BitsendAppState extends ChangeNotifier {
   List<ReceiverDiscoveryItem> _bleReceivers = <ReceiverDiscoveryItem>[];
   bool _bleDiscovering = false;
   bool _ultrasonicListenerRunning = false;
+  bool _autoRefreshingReadiness = false;
   PendingRelaySession? _activeUltrasonicSession;
   final Map<String, PendingRelaySession> _pendingRelaySessions =
       <String, PendingRelaySession>{};
+  final Map<String, List<OfflineVoucherEscrowSession>>
+      _offlineVoucherEscrowSessionsByScope =
+      <String, List<OfflineVoucherEscrowSession>>{};
+  final Map<String, String> _offlineVoucherSettlementContracts =
+      <String, String>{};
+  final Map<String, OfflineVoucherClaimAttempt> _offlineVoucherClaimAttempts =
+      <String, OfflineVoucherClaimAttempt>{};
   bool _realtimeSettlementSyncRunning = false;
+  bool _offlineVoucherClaimSyncRunning = false;
+  String? _pendingHomeWidgetRoute;
 
   bool get initialized => _initialized;
   bool get initializing => _initializing;
@@ -176,11 +249,11 @@ class BitsendAppState extends ChangeNotifier {
   String? get statusMessage => _statusMessage;
   bool get deviceAuthAvailable => _deviceAuthAvailable;
   bool get deviceAuthHasBiometricOption => _deviceAuthHasBiometricOption;
+  bool get requiresBiometricSetup =>
+      hasWallet && !_deviceAuthHasBiometricOption;
   bool get requiresDeviceUnlock =>
-      hasWallet && _deviceAuthAvailable && !_deviceUnlocked;
-  String get deviceUnlockMethodLabel => _deviceAuthHasBiometricOption
-      ? 'fingerprint or phone passcode'
-      : 'phone passcode';
+      hasWallet && _deviceAuthHasBiometricOption && !_deviceUnlocked;
+  String get deviceUnlockMethodLabel => 'biometric unlock';
   ChainKind get activeChain => _activeChain;
   ChainNetwork get activeNetwork => _activeNetwork;
   WalletEngine get activeWalletEngine => _activeWalletEngine;
@@ -198,11 +271,39 @@ class BitsendAppState extends ChangeNotifier {
   bool get ultrasonicPermissionsGranted => _ultrasonicPermissionsGranted;
   bool get ultrasonicSupported => _ultrasonicSupported;
   bool get ultrasonicListenerRunning => _ultrasonicListenerRunning;
+  bool get autoRefreshingReadiness => _autoRefreshingReadiness;
   PendingRelaySession? get activeUltrasonicSession => _activeUltrasonicSession;
   List<PendingRelaySession> get pendingRelaySessions =>
       List<PendingRelaySession>.unmodifiable(
         _pendingRelaySessions.values.toList(growable: false),
       );
+  List<OfflineVoucherClaimAttempt> get pendingOfflineVoucherClaims =>
+      List<OfflineVoucherClaimAttempt>.unmodifiable(
+        _offlineVoucherClaimAttempts.values.toList(growable: false)
+          ..sort(
+            (OfflineVoucherClaimAttempt a, OfflineVoucherClaimAttempt b) =>
+                a.nextAttemptAt.compareTo(b.nextAttemptAt),
+          ),
+      );
+  List<OfflineVoucherEscrowSession> get offlineVoucherEscrowSessionsForActiveScope =>
+      List<OfflineVoucherEscrowSession>.unmodifiable(
+        (_offlineVoucherEscrowSessionsByScope[_activeScopeKey] ??
+                const <OfflineVoucherEscrowSession>[])
+            .where(
+              (OfflineVoucherEscrowSession session) =>
+                  !session.isRefunded &&
+                  session.commitment.expiresAt.isAfter(_clock().toUtc()),
+            )
+            .toList(growable: false)
+          ..sort(
+            (
+              OfflineVoucherEscrowSession a,
+              OfflineVoucherEscrowSession b,
+            ) => a.commitment.expiresAt.compareTo(b.commitment.expiresAt),
+          ),
+      );
+  String get offlineVoucherSettlementContractAddress =>
+      _offlineVoucherSettlementContracts[_activeScopeKey] ?? '';
   bool get hasOfflineReadyBlockhash => _activeWalletEngine == WalletEngine.bitgo
       ? true
       : _activeChain == ChainKind.solana
@@ -230,6 +331,16 @@ class BitsendAppState extends ChangeNotifier {
       : _estimatedEthereumFeeHeadroom();
   double get estimatedSendFeeHeadroomSol =>
       _activeChain.amountFromBaseUnits(estimatedSendFeeHeadroomBaseUnits);
+  int get estimatedOnlineSendFeeHeadroomBaseUnits =>
+      _activeChain == ChainKind.solana
+      ? solFeeHeadroomLamports
+      : _activeChain.isEvm
+      ? (_activeChain.fallbackFeeHeadroomBaseUnits *
+                _sendDraft.gasSpeed.multiplier)
+            .round()
+      : _activeChain.fallbackFeeHeadroomBaseUnits;
+  double get estimatedOnlineSendFeeHeadroomSol =>
+      _activeChain.amountFromBaseUnits(estimatedOnlineSendFeeHeadroomBaseUnits);
   double get maxSendAmountSol {
     if (_activeWalletEngine == WalletEngine.bitgo) {
       return mainBalanceSol;
@@ -241,9 +352,72 @@ class BitsendAppState extends ChangeNotifier {
     }
     return _activeChain.amountFromBaseUnits(maximumBaseUnits);
   }
+  double get maxOnlineSendAmountSol {
+    final int maximumBaseUnits =
+        _mainBalanceLamports - estimatedOnlineSendFeeHeadroomBaseUnits;
+    if (maximumBaseUnits <= 0) {
+      return 0;
+    }
+    return _activeChain.amountFromBaseUnits(maximumBaseUnits);
+  }
+  double? get portfolioUsdTotal {
+    if (!hasWallet) {
+      return 0;
+    }
+    final Iterable<AssetPortfolioHolding> positiveHoldings = portfolioHoldings
+        .where((AssetPortfolioHolding holding) => holding.totalBalance > 0);
+    if (positiveHoldings.isEmpty) {
+      return 0;
+    }
+    double total = 0;
+    bool hasAnyPricedHolding = false;
+    for (final AssetPortfolioHolding holding in positiveHoldings) {
+      final double? price = _usdPriceForHolding(holding);
+      if (price == null) {
+        continue;
+      }
+      hasAnyPricedHolding = true;
+      total += holding.totalBalance * price;
+    }
+    return hasAnyPricedHolding ? total : null;
+  }
+
+  double? get activeScopeUsdTotal {
+    if (!hasWallet) {
+      return 0;
+    }
+    final Iterable<AssetPortfolioHolding> positiveHoldings = portfolioHoldings
+        .where(
+          (AssetPortfolioHolding holding) =>
+              holding.chain == _activeChain &&
+              holding.network == _activeNetwork &&
+              holding.totalBalance > 0,
+        );
+    if (positiveHoldings.isEmpty) {
+      return 0;
+    }
+    double total = 0;
+    bool hasAnyPricedHolding = false;
+    for (final AssetPortfolioHolding holding in positiveHoldings) {
+      final double? price = _usdPriceForHolding(holding);
+      if (price == null) {
+        continue;
+      }
+      hasAnyPricedHolding = true;
+      total += holding.totalBalance * price;
+    }
+    return hasAnyPricedHolding ? total : null;
+  }
 
   String get rpcEndpoint => _rpcEndpoint;
   String get bitgoEndpoint => _bitgoEndpoint;
+  String get swapApiKey => _swapApiKey;
+  bool get hasSwapApiKey => _swapApiKey.trim().isNotEmpty;
+  int? get swapSlippageBps => _swapSlippageBps;
+  bool get swapSupportedOnActiveScope =>
+      _activeWalletEngine == WalletEngine.local &&
+      _activeChain.isEvm &&
+      _activeNetwork.isMainnet;
   String? get localIp => _localIp;
   String? get localEndpoint => _localIp == null
       ? null
@@ -251,6 +425,8 @@ class BitsendAppState extends ChangeNotifier {
   String? get announcementMessage => _announcementMessage;
   int get announcementSerial => _announcementSerial;
   SendDraft get sendDraft => _sendDraft;
+  int get activeAccountSlot => _selectedAccountSlots[_activeChain] ?? 0;
+  int get accountCountForActiveChain => _accountCounts[_activeChain] ?? 1;
   TransportKind get receiveTransport => _receiveTransport;
   List<ReceiverDiscoveryItem> get bleReceivers =>
       List<ReceiverDiscoveryItem>.unmodifiable(_bleReceivers);
@@ -263,6 +439,44 @@ class BitsendAppState extends ChangeNotifier {
       _ultrasonicListenerRunning;
   bool get hotspotListenerRunning => _hotspotTransportService.isListening;
   bool get bleListenerRunning => _bleTransportService.isListening;
+  List<SendContact> get contactsForActiveScope => List<SendContact>.unmodifiable(
+    _contacts
+        .where(
+          (SendContact contact) =>
+              contact.chain == _activeChain &&
+              contact.network == _activeNetwork,
+        )
+        .toList(growable: false),
+  );
+  List<TokenAllowanceEntry> get allowanceEntriesForActiveScope =>
+      List<TokenAllowanceEntry>.unmodifiable(
+        _allowanceEntries
+            .where(
+              (TokenAllowanceEntry entry) =>
+                  entry.chain == _activeChain &&
+                  entry.network == _activeNetwork &&
+                  entry.ownerAddress == (_wallet?.address ?? ''),
+            )
+            .toList(growable: false)
+          ..sort(
+            (TokenAllowanceEntry a, TokenAllowanceEntry b) =>
+                b.updatedAt.compareTo(a.updatedAt),
+          ),
+      );
+  List<NftHolding> get nftHoldingsForActiveScope =>
+      List<NftHolding>.unmodifiable(
+        _nftHoldingsByScope[_activeScopeKey] ?? const <NftHolding>[],
+      );
+  List<TrackedAssetDefinition> get trackedAssetsForActiveScope =>
+      List<TrackedAssetDefinition>.unmodifiable(
+        _trackedAssetsForScope(_activeChain, _activeNetwork),
+      );
+  List<TrackedAssetDefinition> get tokenAssetsForActiveScope =>
+      List<TrackedAssetDefinition>.unmodifiable(
+        _trackedAssetsForScope(_activeChain, _activeNetwork)
+            .where((TrackedAssetDefinition asset) => !asset.isNative)
+            .toList(growable: false),
+      );
 
   HomeStatus get homeStatus => HomeStatus(
     hasInternet: _hasInternet,
@@ -321,7 +535,244 @@ class BitsendAppState extends ChangeNotifier {
     bitgoWallet: _bitgoWallet,
   );
 
-  List<PendingTransfer> get pendingTransfers {
+  List<AssetPortfolioHolding> get portfolioHoldings {
+    if (_activeWalletEngine == WalletEngine.bitgo) {
+      final WalletSummary summary = walletSummary;
+      if ((summary.primaryAddress == null || summary.primaryAddress!.isEmpty) &&
+          summary.balanceSol <= 0) {
+        return const <AssetPortfolioHolding>[];
+      }
+      return <AssetPortfolioHolding>[
+        AssetPortfolioHolding(
+          chain: summary.chain,
+          network: summary.network,
+          totalBalance: summary.balanceSol,
+          mainBalance: summary.balanceSol,
+          protectedBalance: 0,
+          spendableBalance: 0,
+          reservedBalance: 0,
+          assetId:
+              '${summary.chain.name}:${summary.network.name}:native',
+          symbol: summary.chain.assetDisplayLabel,
+          displayName: summary.chain.label,
+          assetDecimals: summary.chain.decimals,
+          mainAddress: summary.primaryAddress,
+        ),
+      ];
+    }
+
+    final List<AssetPortfolioHolding> allHoldings = <AssetPortfolioHolding>[];
+    for (final ChainKind chain in ChainKind.values) {
+      final String scopeKey = _scopeKey(chain, _activeNetwork);
+      final WalletProfile? mainWallet = _wallets[chain];
+      final WalletProfile? protectedWallet = _offlineWallets[chain];
+      final int mainBalanceBaseUnits = _mainBalances[scopeKey] ?? 0;
+      final int protectedBalanceBaseUnits = _offlineBalances[scopeKey] ?? 0;
+      final int reservedBalanceBaseUnits = _reservedOfflineBaseUnitsFor(
+        chain: chain,
+        network: _activeNetwork,
+        protectedAddress: protectedWallet?.address,
+      );
+      final double totalBalance = chain.amountFromBaseUnits(
+        mainBalanceBaseUnits + protectedBalanceBaseUnits,
+      );
+      if (mainWallet == null &&
+          protectedWallet == null &&
+          totalBalance <= 0 &&
+          reservedBalanceBaseUnits <= 0) {
+        continue;
+      }
+      final List<TrackedAssetDefinition> scopedAssets = _trackedAssetsForScope(
+        chain,
+        _activeNetwork,
+      );
+      final TrackedAssetDefinition nativeAsset = scopedAssets.firstWhere(
+        (TrackedAssetDefinition asset) => asset.isNative,
+      );
+      allHoldings.add(
+        AssetPortfolioHolding(
+          chain: chain,
+          network: _activeNetwork,
+          totalBalance: totalBalance,
+          mainBalance: chain.amountFromBaseUnits(mainBalanceBaseUnits),
+          protectedBalance: chain.amountFromBaseUnits(
+            protectedBalanceBaseUnits,
+          ),
+          spendableBalance: chain.amountFromBaseUnits(
+            max(protectedBalanceBaseUnits - reservedBalanceBaseUnits, 0),
+          ),
+          reservedBalance: chain.amountFromBaseUnits(reservedBalanceBaseUnits),
+          assetId: nativeAsset.id,
+          symbol: nativeAsset.symbol,
+          displayName: nativeAsset.displayName,
+          assetDecimals: nativeAsset.decimals,
+          mainAddress: mainWallet?.address,
+          protectedAddress: protectedWallet?.address,
+        ),
+      );
+
+      for (final TrackedAssetDefinition asset in scopedAssets.where(
+        (TrackedAssetDefinition asset) => !asset.isNative,
+      )) {
+        final int mainTokenBalanceBaseUnits =
+            _mainTrackedAssetBalances[asset.id] ?? 0;
+        final int protectedTokenBalanceBaseUnits =
+            _offlineTrackedAssetBalances[asset.id] ?? 0;
+        final double tokenTotalBalance = asset.amountFromBaseUnits(
+          mainTokenBalanceBaseUnits + protectedTokenBalanceBaseUnits,
+        );
+        if (tokenTotalBalance <= 0) {
+          continue;
+        }
+        allHoldings.add(
+          AssetPortfolioHolding(
+            chain: chain,
+            network: _activeNetwork,
+            totalBalance: tokenTotalBalance,
+            mainBalance: asset.amountFromBaseUnits(mainTokenBalanceBaseUnits),
+            protectedBalance: asset.amountFromBaseUnits(
+              protectedTokenBalanceBaseUnits,
+            ),
+            spendableBalance: asset.amountFromBaseUnits(
+              protectedTokenBalanceBaseUnits,
+            ),
+            reservedBalance: 0,
+            assetId: asset.id,
+            symbol: asset.symbol,
+            displayName: asset.displayName,
+            assetDecimals: asset.decimals,
+            contractAddress: asset.contractAddress,
+            isNative: false,
+            mainAddress: mainWallet?.address,
+            protectedAddress: protectedWallet?.address,
+          ),
+        );
+      }
+    }
+
+    final List<AssetPortfolioHolding> visibleHoldings = allHoldings
+        .where(
+          (AssetPortfolioHolding holding) =>
+              holding.totalBalance > 0 || holding.chain == _activeChain,
+        )
+        .toList(growable: false);
+    final List<AssetPortfolioHolding> sorted = (
+      visibleHoldings.isNotEmpty ? visibleHoldings : allHoldings
+    ).toList(growable: false)
+      ..sort((AssetPortfolioHolding a, AssetPortfolioHolding b) {
+        final int amountCompare = b.totalBalance.compareTo(a.totalBalance);
+        if (amountCompare != 0) {
+          return amountCompare;
+        }
+        return a.chain.label.compareTo(b.chain.label);
+      });
+    return List<AssetPortfolioHolding>.unmodifiable(sorted);
+  }
+
+  TrackedAssetDefinition get currentSendAssetDefinition =>
+      _sendAssetDefinitionForDraft(_sendDraft);
+
+  AssetPortfolioHolding get currentSendAssetHolding =>
+      _holdingForTrackedAsset(currentSendAssetDefinition);
+
+  List<AssetPortfolioHolding> get availableSendAssetHoldings {
+    final List<TrackedAssetDefinition> assets = _trackedAssetsForScope(
+      _sendDraft.chain,
+      _sendDraft.network,
+    );
+    final bool tokenSendingEnabled =
+        _sendDraft.walletEngine == WalletEngine.local &&
+        _sendDraft.transport == TransportKind.online &&
+        _sendDraft.chain.isEvm;
+    final List<AssetPortfolioHolding> holdings = <AssetPortfolioHolding>[];
+    for (final TrackedAssetDefinition asset in assets) {
+      if (!tokenSendingEnabled && !asset.isNative) {
+        continue;
+      }
+      if (!asset.isNative &&
+          (_mainTrackedAssetBalances[asset.id] ?? 0) <= 0 &&
+          asset.id != currentSendAssetDefinition.id) {
+        continue;
+      }
+      holdings.add(_holdingForTrackedAsset(asset));
+    }
+    holdings.sort((AssetPortfolioHolding a, AssetPortfolioHolding b) {
+      if (a.isNative != b.isNative) {
+        return a.isNative ? -1 : 1;
+      }
+      final int balanceCompare = b.mainBalance.compareTo(a.mainBalance);
+      if (balanceCompare != 0) {
+        return balanceCompare;
+      }
+      return a.resolvedSymbol.compareTo(b.resolvedSymbol);
+    });
+    return List<AssetPortfolioHolding>.unmodifiable(holdings);
+  }
+
+  double get sourceBalanceForCurrentSendAsset {
+    final TrackedAssetDefinition asset = currentSendAssetDefinition;
+    if (!asset.isNative) {
+      return asset.amountFromBaseUnits(_mainTrackedAssetBalances[asset.id] ?? 0);
+    }
+    if (_sendDraft.walletEngine == WalletEngine.bitgo) {
+      return mainBalanceSol;
+    }
+    if (_sendDraft.transport == TransportKind.online) {
+      return mainBalanceSol;
+    }
+    return offlineSpendableBalanceSol;
+  }
+
+  double get maxSendAmountForCurrentAsset {
+    final TrackedAssetDefinition asset = currentSendAssetDefinition;
+    if (asset.isNative) {
+      if (_sendDraft.walletEngine == WalletEngine.bitgo) {
+        return mainBalanceSol;
+      }
+      return _sendDraft.transport == TransportKind.online
+          ? maxOnlineSendAmountSol
+          : maxSendAmountSol;
+    }
+    if (_sendDraft.walletEngine != WalletEngine.local ||
+        _sendDraft.transport != TransportKind.online) {
+      return 0;
+    }
+    if (_mainBalanceLamports <= estimatedOnlineSendFeeHeadroomBaseUnits) {
+      return 0;
+    }
+    return asset.amountFromBaseUnits(_mainTrackedAssetBalances[asset.id] ?? 0);
+  }
+
+  double? _usdPriceForHolding(AssetPortfolioHolding holding) {
+    return _usdPrices[holding.resolvedSymbol.toUpperCase()];
+  }
+
+  double? usdPriceForHolding(AssetPortfolioHolding holding) {
+    return _usdPriceForHolding(holding);
+  }
+
+  Future<void> _refreshPortfolioUsdPrices() async {
+    if (!_hasInternet) {
+      return;
+    }
+    final Set<String> symbols = portfolioHoldings
+        .where((AssetPortfolioHolding holding) => holding.totalBalance > 0)
+        .map((AssetPortfolioHolding holding) => holding.resolvedSymbol.toUpperCase())
+        .toSet();
+    if (symbols.isEmpty) {
+      return;
+    }
+    try {
+      final Map<String, double> prices = await _priceService.fetchUsdPrices(
+        symbols,
+      );
+      _usdPrices.addAll(prices);
+    } catch (_) {
+      // Keep the last known price cache if live refresh fails.
+    }
+  }
+
+  List<PendingTransfer> get transferHistory {
     final List<PendingTransfer> sorted =
         List<PendingTransfer>.from(_pendingTransfers)..sort(
           (PendingTransfer a, PendingTransfer b) =>
@@ -329,6 +780,11 @@ class BitsendAppState extends ChangeNotifier {
         );
     return sorted;
   }
+
+  List<PendingTransfer> get pendingTransfers => transferHistory
+      .where((PendingTransfer transfer) => transfer.isVisibleInPendingQueue)
+      .toList(growable: false);
+  String? get pendingHomeWidgetRoute => _pendingHomeWidgetRoute;
 
   PendingTransfer? get lastSentTransfer =>
       _lastSentTransferId == null ? null : transferById(_lastSentTransferId!);
@@ -341,16 +797,29 @@ class BitsendAppState extends ChangeNotifier {
     if (!hasWallet) {
       return '/onboarding/welcome';
     }
-    if (requiresDeviceUnlock) {
+    if (requiresBiometricSetup || requiresDeviceUnlock) {
       return '/unlock';
     }
     return '/home';
   }
 
   String get _activeScopeKey => _scopeKey(_activeChain, _activeNetwork);
+  String get _activeReadinessScopeKey =>
+      '${_activeScopeKey}:account_$activeAccountSlot';
 
   String _scopeKey(ChainKind chain, ChainNetwork network) {
     return '${chain.name}:${network.name}';
+  }
+
+  SwapService get _effectiveSwapService {
+    return _swapService ??= SwapService(apiKey: _swapApiKey);
+  }
+
+  int? _normalizeSwapSlippageBps(int? value) {
+    if (value == null || value <= 0) {
+      return null;
+    }
+    return value.clamp(30, 10000);
   }
 
   String _defaultRpcEndpointFor(ChainKind chain, ChainNetwork network) {
@@ -365,7 +834,97 @@ class BitsendAppState extends ChangeNotifier {
         defaultEthereumMainnetRpcEndpoint,
       (ChainKind.base, ChainNetwork.testnet) => defaultBaseTestnetRpcEndpoint,
       (ChainKind.base, ChainNetwork.mainnet) => defaultBaseMainnetRpcEndpoint,
+      (ChainKind.bnb, ChainNetwork.testnet) => defaultBnbTestnetRpcEndpoint,
+      (ChainKind.bnb, ChainNetwork.mainnet) => defaultBnbMainnetRpcEndpoint,
+      (ChainKind.polygon, ChainNetwork.testnet) =>
+        defaultPolygonTestnetRpcEndpoint,
+      (ChainKind.polygon, ChainNetwork.mainnet) =>
+        defaultPolygonMainnetRpcEndpoint,
     };
+  }
+
+  void _handleHomeWidgetRoute(String route) {
+    final String normalized = route.trim();
+    if (normalized.isEmpty) {
+      return;
+    }
+    _pendingHomeWidgetRoute = normalized;
+    notifyListeners();
+  }
+
+  String _homeWidgetStatusTone(WalletSummary summary) {
+    if (!hasWallet) {
+      return 'muted';
+    }
+    if (summary.walletEngine == WalletEngine.bitgo) {
+      return 'info';
+    }
+    if (summary.offlineBalanceSol <= 0) {
+      return 'warning';
+    }
+    if (summary.readyForOffline) {
+      return 'ready';
+    }
+    return 'warning';
+  }
+
+  HomeScreenWidgetSnapshot _buildHomeWidgetSnapshot() {
+    final WalletSummary summary = walletSummary;
+    final bool usingBitGo = summary.walletEngine == WalletEngine.bitgo;
+    final double totalNativeBalance = usingBitGo
+        ? summary.balanceSol
+        : summary.balanceSol + summary.offlineBalanceSol;
+    final double? scopeUsdTotal = activeScopeUsdTotal;
+    final String primaryValue = scopeUsdTotal == null
+        ? Formatters.asset(totalNativeBalance, summary.chain)
+        : Formatters.usd(scopeUsdTotal);
+    final String supportingLabel = !hasWallet
+        ? 'Open Bitsend to finish setup'
+        : 'Est. ${summary.chain.label} value';
+    final String primaryDetail = hasWallet
+        ? 'Main ${Formatters.asset(summary.balanceSol, summary.chain)}'
+        : 'Main --';
+    final String secondaryDetail = !hasWallet
+        ? 'Offline --'
+        : usingBitGo
+        ? 'Available ${Formatters.asset(summary.balanceSol, summary.chain)}'
+        : 'Can send ${Formatters.asset(summary.offlineAvailableSol, summary.chain)}';
+    final String walletLabel = !hasWallet
+        ? 'Set up a wallet to use quick actions.'
+        : usingBitGo
+        ? (summary.primaryDisplayLabel ??
+              Formatters.shortAddress(summary.primaryAddress ?? ''))
+        : summary.offlineWalletAddress == null
+        ? 'Offline signer unavailable'
+        : 'Signer ${Formatters.shortAddress(summary.offlineWalletAddress!)}';
+    final String statusLabel = !hasWallet
+        ? 'Set up'
+        : usingBitGo
+        ? 'BitGo'
+        : summary.offlineBalanceSol <= 0
+        ? 'Needs funds'
+        : summary.readyForOffline
+        ? 'Ready'
+        : 'Syncing';
+    return HomeScreenWidgetSnapshot(
+      chainLabel: summary.chain.label,
+      networkLabel: summary.network.shortLabelFor(summary.chain),
+      primaryValue: primaryValue,
+      supportingLabel: supportingLabel,
+      primaryDetail: primaryDetail,
+      secondaryDetail: secondaryDetail,
+      statusLabel: statusLabel,
+      statusTone: _homeWidgetStatusTone(summary),
+      walletLabel: walletLabel,
+    );
+  }
+
+  Future<void> _syncHomeScreenWidgets() async {
+    await _homeScreenWidgetService.syncSnapshot(_buildHomeWidgetSnapshot());
+  }
+
+  void clearPendingHomeWidgetRoute() {
+    _pendingHomeWidgetRoute = null;
   }
 
   Future<void> initialize() async {
@@ -389,7 +948,19 @@ class BitsendAppState extends ChangeNotifier {
       }
       _bitGoClientService.endpoint = _bitgoEndpoint;
       _fileverseClientService.endpoint = _bitgoEndpoint;
+      final String? savedSwapApiKey = await _store.loadSetting<String>(
+        'swap_api_key',
+      );
+      _swapApiKey =
+          savedSwapApiKey == null || savedSwapApiKey.trim().isEmpty
+          ? defaultZeroExSwapApiKey
+          : savedSwapApiKey.trim();
+      _swapSlippageBps = _normalizeSwapSlippageBps(
+        await _store.loadSetting<int>('swap_slippage_bps'),
+      );
+      _effectiveSwapService.apiKey = _swapApiKey;
       _relayClientService.endpoint = _bitgoEndpoint;
+      _offlineVoucherClientService.endpoint = _bitgoEndpoint;
       await _refreshBitGoBackendHealth(allowFailure: true);
       for (final ChainKind chain in ChainKind.values) {
         for (final ChainNetwork network in ChainNetwork.values) {
@@ -413,6 +984,7 @@ class BitsendAppState extends ChangeNotifier {
       _activeNetwork = savedNetworkName == null
           ? ChainNetwork.testnet
           : ChainNetwork.values.byName(savedNetworkName);
+      await _loadAccountPreferences();
       await _loadWalletEngineForActiveScope();
       await _reloadWalletProfiles();
       await _refreshDeviceAuthSupport(lockWallet: true);
@@ -425,9 +997,21 @@ class BitsendAppState extends ChangeNotifier {
       await _loadCachedReadinessForActiveScope();
       _pendingTransfers = await _store.loadTransfers();
       await _loadPendingRelaySessions();
+      await _loadOfflineVoucherEscrowSessions();
+      await _loadOfflineVoucherSettlementContracts();
+      await _loadOfflineVoucherClaimAttempts();
+      await _loadContacts();
+      await _loadAllowanceEntries();
+      await _loadDiscoveredTrackedAssets();
+      await _loadErc20DiscoveryHighWaterMarks();
       await _refreshLocalPermissions();
       _ultrasonicSupported = await _ultrasonicTransportService.isSupported() ||
           (!kIsWeb && defaultTargetPlatform == TargetPlatform.android);
+      _homeWidgetLaunchRouteSubscription ??= _homeScreenWidgetService
+          .launchRoutes
+          .listen(_handleHomeWidgetRoute);
+      _pendingHomeWidgetRoute ??=
+          await _homeScreenWidgetService.consumePendingLaunchRoute();
 
       _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
         _,
@@ -436,6 +1020,7 @@ class BitsendAppState extends ChangeNotifier {
       });
 
       _initialized = true;
+      await _syncHomeScreenWidgets();
       unawaited(_runStartupNetworkSync());
     } finally {
       _initializing = false;
@@ -444,40 +1029,89 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   Future<void> createWallet() async {
+    await _ensureMandatoryBiometricSetup(
+      action:
+          'Set up fingerprint or face unlock on this device before creating a Bitsend wallet.',
+    );
     await _walletService.createWallet();
     await _reloadWalletProfiles();
-    await _refreshDeviceAuthSupport(lockWallet: false);
+    await _refreshDeviceAuthSupport(lockWallet: true);
     _applyActiveChainSnapshot();
+    await _syncHomeScreenWidgets();
+    notifyListeners();
+    final bool unlocked = await authenticateDevice(
+      reason: 'Confirm biometric unlock to finish setting up Bitsend.',
+      forcePrompt: true,
+    );
+    if (!unlocked) {
+      throw const FormatException(
+        'Biometric unlock is required to finish setting up Bitsend.',
+      );
+    }
     notifyListeners();
   }
 
   Future<void> restoreWallet(String seedPhrase) async {
+    await _ensureMandatoryBiometricSetup(
+      action:
+          'Set up fingerprint or face unlock on this device before restoring a Bitsend wallet.',
+    );
     await _walletService.restoreWallet(seedPhrase);
     await _reloadWalletProfiles();
-    await _refreshDeviceAuthSupport(lockWallet: false);
+    if (_activeNetwork != ChainNetwork.mainnet) {
+      _activeNetwork = ChainNetwork.mainnet;
+      await _loadWalletEngineForActiveScope();
+      _sendDraft = _sendDraft.copyWith(
+        chain: _activeChain,
+        network: _activeNetwork,
+        walletEngine: _activeWalletEngine,
+        assetId: _defaultSendAssetIdFor(_activeChain, _activeNetwork),
+        amountSol: 0,
+        clearReceiver: true,
+      );
+      await _store.saveSetting('active_network', _activeNetwork.name);
+    }
+    await _refreshDeviceAuthSupport(lockWallet: true);
     _applyActiveChainSnapshot();
+    await _syncHomeScreenWidgets();
+    notifyListeners();
+    final bool unlocked = await authenticateDevice(
+      reason: 'Confirm biometric unlock to finish restoring Bitsend.',
+      forcePrompt: true,
+    );
+    if (!unlocked) {
+      throw const FormatException(
+        'Biometric unlock is required to finish restoring Bitsend.',
+      );
+    }
     notifyListeners();
   }
 
   Future<void> _refreshDeviceAuthSupport({required bool lockWallet}) async {
     if (!hasWallet) {
-      _deviceAuthAvailable = false;
-      _deviceAuthHasBiometricOption = false;
+      final DeviceAuthSupport support = await _deviceAuthService.loadSupport();
+      _deviceAuthAvailable = support.isAvailable;
+      _deviceAuthHasBiometricOption = support.hasBiometricOption;
       _deviceUnlocked = true;
       return;
     }
     final DeviceAuthSupport support = await _deviceAuthService.loadSupport();
     _deviceAuthAvailable = support.isAvailable;
     _deviceAuthHasBiometricOption = support.hasBiometricOption;
-    _deviceUnlocked = !_deviceAuthAvailable || !lockWallet;
+    _deviceUnlocked = !_deviceAuthHasBiometricOption || !lockWallet;
   }
 
   Future<bool> authenticateDevice({
     String? reason,
     bool forcePrompt = false,
   }) async {
-    if (!hasWallet || !_deviceAuthAvailable) {
+    if (!hasWallet) {
       return true;
+    }
+    if (!_deviceAuthHasBiometricOption) {
+      throw const FormatException(
+        'Bitsend requires fingerprint or face unlock on this device. Set it up in system settings to continue.',
+      );
     }
     if (_deviceUnlocked && !forcePrompt) {
       return true;
@@ -485,9 +1119,7 @@ class BitsendAppState extends ChangeNotifier {
     final bool unlocked = await _deviceAuthService.authenticate(
       reason:
           reason ??
-          (_deviceAuthHasBiometricOption
-              ? 'Unlock Bitsend with your fingerprint or phone passcode.'
-              : 'Unlock Bitsend with your phone passcode.'),
+          'Unlock Bitsend with fingerprint or face unlock.',
     );
     if (unlocked) {
       _deviceUnlocked = true;
@@ -497,11 +1129,28 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   void lockWalletForSession() {
-    if (!hasWallet || !_deviceAuthAvailable) {
+    if (!hasWallet || !_deviceAuthHasBiometricOption) {
       return;
     }
     _deviceUnlocked = false;
     notifyListeners();
+  }
+
+  Future<void> _ensureMandatoryBiometricSetup({
+    required String action,
+  }) async {
+    final DeviceAuthSupport support = await _deviceAuthService.loadSupport();
+    _deviceAuthAvailable = support.isAvailable;
+    _deviceAuthHasBiometricOption = support.hasBiometricOption;
+    if (!support.hasBiometricOption) {
+      _deviceUnlocked = false;
+      notifyListeners();
+      throw FormatException(action);
+    }
+  }
+
+  Future<bool> openSystemSettings() {
+    return openAppSettings();
   }
 
   Future<void> setActiveChain(ChainKind chain) async {
@@ -521,6 +1170,7 @@ class BitsendAppState extends ChangeNotifier {
       chain: chain,
       network: _activeNetwork,
       walletEngine: _activeWalletEngine,
+      assetId: _defaultSendAssetIdFor(chain, _activeNetwork),
       amountSol: 0,
       clearReceiver: true,
     );
@@ -532,6 +1182,7 @@ class BitsendAppState extends ChangeNotifier {
     if (_wallet != null) {
       await refreshWalletData();
     } else {
+      await _syncHomeScreenWidgets();
       notifyListeners();
     }
   }
@@ -553,6 +1204,7 @@ class BitsendAppState extends ChangeNotifier {
       chain: _activeChain,
       network: network,
       walletEngine: _activeWalletEngine,
+      assetId: _defaultSendAssetIdFor(_activeChain, network),
       amountSol: 0,
       clearReceiver: true,
     );
@@ -564,6 +1216,7 @@ class BitsendAppState extends ChangeNotifier {
     if (_wallet != null) {
       await refreshWalletData();
     } else {
+      await _syncHomeScreenWidgets();
       notifyListeners();
     }
   }
@@ -585,6 +1238,7 @@ class BitsendAppState extends ChangeNotifier {
       chain: _activeChain,
       network: _activeNetwork,
       walletEngine: engine,
+      assetId: _defaultSendAssetIdFor(_activeChain, _activeNetwork),
       amountSol: 0,
       clearReceiver: true,
     );
@@ -594,15 +1248,86 @@ class BitsendAppState extends ChangeNotifier {
     if (_wallet != null) {
       await refreshWalletData();
     } else {
+      await _syncHomeScreenWidgets();
+      notifyListeners();
+    }
+  }
+
+  Future<List<WalletAccountSummary>> loadAccountSummariesForActiveChain() async {
+    final int total = accountCountForActiveChain;
+    final List<WalletAccountSummary> summaries = <WalletAccountSummary>[];
+    for (int slot = 0; slot < total; slot += 1) {
+      final WalletProfile? mainWallet = await _walletService.loadWalletForSlot(
+        chain: _activeChain,
+        slot: slot,
+      );
+      final WalletProfile? protectedWallet =
+          await _walletService.loadOfflineWalletForSlot(
+            chain: _activeChain,
+            slot: slot,
+          );
+      summaries.add(
+        WalletAccountSummary(
+          chain: _activeChain,
+          slotIndex: slot,
+          mainWallet: mainWallet,
+          protectedWallet: protectedWallet,
+          selected: slot == activeAccountSlot,
+        ),
+      );
+    }
+    return summaries;
+  }
+
+  Future<void> switchActiveAccountSlot(int slot) async {
+    final int normalized = slot < 0 ? 0 : slot;
+    final int maxCount = accountCountForActiveChain;
+    if (normalized >= maxCount || normalized == activeAccountSlot) {
+      return;
+    }
+    _selectedAccountSlots[_activeChain] = normalized;
+    await _saveAccountPreferences();
+    _nftHoldingsByScope.remove(_activeScopeKey);
+    await _reloadWalletProfiles();
+    _applyActiveChainSnapshot();
+    await _loadCachedReadinessForActiveScope();
+    _syncActiveUltrasonicSessionForScope();
+    if (_wallet != null) {
+      await refreshWalletData();
+    } else {
+      await _syncHomeScreenWidgets();
+      notifyListeners();
+    }
+  }
+
+  Future<void> addAccountForActiveChain() async {
+    final int nextSlot = accountCountForActiveChain;
+    _accountCounts[_activeChain] = nextSlot + 1;
+    _selectedAccountSlots[_activeChain] = nextSlot;
+    await _saveAccountPreferences();
+    _nftHoldingsByScope.remove(_activeScopeKey);
+    await _reloadWalletProfiles();
+    _applyActiveChainSnapshot();
+    await _loadCachedReadinessForActiveScope();
+    _syncActiveUltrasonicSessionForScope();
+    if (_wallet != null) {
+      await refreshWalletData();
+    } else {
+      await _syncHomeScreenWidgets();
       notifyListeners();
     }
   }
 
   Future<void> _reloadWalletProfiles() async {
     for (final ChainKind chain in ChainKind.values) {
-      _wallets[chain] = await _walletService.loadWallet(chain: chain);
-      _offlineWallets[chain] = await _walletService.loadOfflineWallet(
+      final int slot = _selectedAccountSlots[chain] ?? 0;
+      _wallets[chain] = await _walletService.loadWalletForSlot(
         chain: chain,
+        slot: slot,
+      );
+      _offlineWallets[chain] = await _walletService.loadOfflineWalletForSlot(
+        chain: chain,
+        slot: slot,
       );
     }
   }
@@ -627,6 +1352,7 @@ class BitsendAppState extends ChangeNotifier {
     _bitGoClientService.endpoint = _bitgoEndpoint;
     _fileverseClientService.endpoint = _bitgoEndpoint;
     _relayClientService.endpoint = _bitgoEndpoint;
+    _scheduleAutoReadinessRefresh();
   }
 
   Future<void> _loadWalletEngineForActiveScope() async {
@@ -636,6 +1362,42 @@ class BitsendAppState extends ChangeNotifier {
         ? WalletEngine.bitgo
         : WalletEngine.local;
     _walletEngines[_activeScopeKey] = _activeWalletEngine;
+  }
+
+  Future<void> _loadAccountPreferences() async {
+    final Map<String, dynamic>? rawSlots = await _store
+        .loadSetting<Map<String, dynamic>>(_selectedAccountSlotsKey);
+    final Map<String, dynamic>? rawCounts = await _store
+        .loadSetting<Map<String, dynamic>>(_accountCountsKey);
+    _selectedAccountSlots.clear();
+    _accountCounts.clear();
+    for (final ChainKind chain in ChainKind.values) {
+      final int slot = rawSlots == null
+          ? 0
+          : _parseFlexibleInt(rawSlots[chain.name]);
+      final int count = rawCounts == null
+          ? 1
+          : _parseFlexibleInt(rawCounts[chain.name]);
+      _selectedAccountSlots[chain] = slot < 0 ? 0 : slot;
+      _accountCounts[chain] = count <= 0 ? 1 : count;
+    }
+  }
+
+  Future<void> _saveAccountPreferences() async {
+    await _store.saveSetting(
+      _selectedAccountSlotsKey,
+      <String, int>{
+        for (final ChainKind chain in ChainKind.values)
+          chain.name: _selectedAccountSlots[chain] ?? 0,
+      },
+    );
+    await _store.saveSetting(
+      _accountCountsKey,
+      <String, int>{
+        for (final ChainKind chain in ChainKind.values)
+          chain.name: _accountCounts[chain] ?? 1,
+      },
+    );
   }
 
   Future<WalletBackupExport> exportWalletBackup() {
@@ -648,9 +1410,13 @@ class BitsendAppState extends ChangeNotifier {
   Future<void> refreshWalletData() async {
     if (_activeWalletEngine == WalletEngine.bitgo) {
       await _refreshBitGoWalletData();
+      await _refreshPortfolioUsdPrices();
+      await _syncHomeScreenWidgets();
+      notifyListeners();
       return;
     }
     if (_wallet == null) {
+      _scheduleAutoReadinessRefresh();
       return;
     }
 
@@ -674,6 +1440,12 @@ class BitsendAppState extends ChangeNotifier {
       }
       _mainBalances[_activeScopeKey] = _mainBalanceLamports;
       _offlineBalances[_activeScopeKey] = _offlineBalanceLamports;
+      await _refreshTrackedAssetBalancesForChain(
+        chain: _activeChain,
+        network: _activeNetwork,
+        wallet: _wallet,
+        offlineWallet: _offlineWallet,
+      );
       _hasDevnet = true;
       _hasInternet = true;
       _statusMessage = null;
@@ -684,11 +1456,75 @@ class BitsendAppState extends ChangeNotifier {
           await _clearCachedBlockhash();
         }
       }
+      await _refreshPortfolioUsdPrices();
     } catch (error) {
       _hasDevnet = false;
       _hasInternet = false;
       _statusMessage = error.toString();
     }
+    _scheduleAutoReadinessRefresh();
+    await _syncHomeScreenWidgets();
+    notifyListeners();
+  }
+
+  Future<void> refreshPortfolioBalances() async {
+    if (_activeWalletEngine == WalletEngine.bitgo) {
+      await refreshWalletData();
+      return;
+    }
+
+    final List<ChainKind> chains = ChainKind.values.where((ChainKind chain) {
+      final String scopeKey = _scopeKey(chain, _activeNetwork);
+      return _wallets[chain] != null ||
+          _offlineWallets[chain] != null ||
+          (_mainBalances[scopeKey] ?? 0) > 0 ||
+          (_offlineBalances[scopeKey] ?? 0) > 0;
+    }).toList(growable: false);
+    if (chains.isEmpty) {
+      return;
+    }
+
+    bool refreshedAny = false;
+    String? firstFailure;
+    for (final ChainKind chain in chains) {
+      final WalletProfile? mainWallet = _wallets[chain];
+      final WalletProfile? protectedWallet = _offlineWallets[chain];
+      try {
+        final (int mainBalanceBaseUnits, int protectedBalanceBaseUnits) =
+            await _fetchBalancesForChain(
+              chain: chain,
+              network: _activeNetwork,
+              wallet: mainWallet,
+              offlineWallet: protectedWallet,
+            );
+        final String scopeKey = _scopeKey(chain, _activeNetwork);
+        _mainBalances[scopeKey] = mainBalanceBaseUnits;
+        _offlineBalances[scopeKey] = protectedBalanceBaseUnits;
+        await _refreshTrackedAssetBalancesForChain(
+          chain: chain,
+          network: _activeNetwork,
+          wallet: mainWallet,
+          offlineWallet: protectedWallet,
+        );
+        refreshedAny = true;
+      } catch (error) {
+        firstFailure ??= error.toString();
+      }
+    }
+
+    if (refreshedAny) {
+      _hasDevnet = true;
+      _hasInternet = true;
+      _statusMessage = null;
+      await _refreshPortfolioUsdPrices();
+    } else if (firstFailure != null) {
+      _hasDevnet = false;
+      _hasInternet = false;
+      _statusMessage = firstFailure;
+    }
+
+    _applyActiveChainSnapshot();
+    await _syncHomeScreenWidgets();
     notifyListeners();
   }
 
@@ -738,6 +1574,227 @@ class BitsendAppState extends ChangeNotifier {
     );
   }
 
+  Future<(int mainBalanceBaseUnits, int protectedBalanceBaseUnits)>
+  _fetchBalancesForChain({
+    required ChainKind chain,
+    required ChainNetwork network,
+    required WalletProfile? wallet,
+    required WalletProfile? offlineWallet,
+  }) async {
+    final String endpoint =
+        _rpcEndpoints[_scopeKey(chain, network)] ??
+        _defaultRpcEndpointFor(chain, network);
+    if (chain == ChainKind.solana) {
+      final SolanaService service = SolanaService(rpcEndpoint: endpoint)
+        ..network = network;
+      return (
+        wallet == null ? 0 : await service.getBalanceLamports(wallet.address),
+        offlineWallet == null
+            ? 0
+            : await service.getBalanceLamports(offlineWallet.address),
+      );
+    }
+
+    final EthereumService service = EthereumService(rpcEndpoint: endpoint)
+      ..chain = chain
+      ..network = network;
+    return (
+      wallet == null ? 0 : await service.getBalanceBaseUnits(wallet.address),
+      offlineWallet == null
+          ? 0
+          : await service.getBalanceBaseUnits(offlineWallet.address),
+    );
+  }
+
+  Future<void> _refreshTrackedAssetBalancesForChain({
+    required ChainKind chain,
+    required ChainNetwork network,
+    required WalletProfile? wallet,
+    required WalletProfile? offlineWallet,
+  }) async {
+    if (chain == ChainKind.solana) {
+      return;
+    }
+    final String endpoint =
+        _rpcEndpoints[_scopeKey(chain, network)] ??
+        _defaultRpcEndpointFor(chain, network);
+    final EthereumService service = EthereumService(rpcEndpoint: endpoint)
+      ..chain = chain
+      ..network = network;
+    await _discoverTrackedAssetsForChain(
+      chain: chain,
+      network: network,
+      wallet: wallet,
+      offlineWallet: offlineWallet,
+      service: service,
+    );
+    final List<TrackedAssetDefinition> tokenAssets = _trackedAssetsForScope(
+      chain,
+      network,
+    ).where((TrackedAssetDefinition asset) => !asset.isNative).toList(
+      growable: false,
+    );
+    if (tokenAssets.isEmpty) {
+      return;
+    }
+
+    for (final TrackedAssetDefinition asset in tokenAssets) {
+      try {
+        final int mainBalanceBaseUnits = wallet == null
+            ? 0
+            : await service.getTokenBalanceBaseUnits(
+                ownerAddress: wallet.address,
+                contractAddress: asset.contractAddress!,
+              );
+        final int protectedBalanceBaseUnits = offlineWallet == null
+            ? 0
+            : await service.getTokenBalanceBaseUnits(
+                ownerAddress: offlineWallet.address,
+                contractAddress: asset.contractAddress!,
+              );
+        _mainTrackedAssetBalances[asset.id] = mainBalanceBaseUnits;
+        _offlineTrackedAssetBalances[asset.id] = protectedBalanceBaseUnits;
+      } catch (_) {
+        _mainTrackedAssetBalances.putIfAbsent(asset.id, () => 0);
+        _offlineTrackedAssetBalances.putIfAbsent(asset.id, () => 0);
+      }
+    }
+  }
+
+  List<TrackedAssetDefinition> _trackedAssetsForScope(
+    ChainKind chain,
+    ChainNetwork network,
+  ) {
+    final Map<String, TrackedAssetDefinition> merged =
+        <String, TrackedAssetDefinition>{};
+    for (final TrackedAssetDefinition asset in trackedAssetsForScope(
+      chain,
+      network,
+    )) {
+      merged[trackedAssetLookupKey(asset)] = asset;
+    }
+    final Map<String, TrackedAssetDefinition>? discovered =
+        _discoveredTrackedAssets[_scopeKey(chain, network)];
+    if (discovered != null) {
+      for (final TrackedAssetDefinition asset in discovered.values) {
+        if (asset.isNative) {
+          continue;
+        }
+        merged.putIfAbsent(trackedAssetLookupKey(asset), () => asset);
+      }
+    }
+    return merged.values.toList(growable: false);
+  }
+
+  Future<void> _discoverTrackedAssetsForChain({
+    required ChainKind chain,
+    required ChainNetwork network,
+    required WalletProfile? wallet,
+    required WalletProfile? offlineWallet,
+    required EthereumService service,
+  }) async {
+    final List<String> ownerAddresses = <String>[
+      if (wallet != null) wallet.address,
+      if (offlineWallet != null &&
+          offlineWallet.address != wallet?.address)
+        offlineWallet.address,
+    ];
+    if (ownerAddresses.isEmpty) {
+      return;
+    }
+
+    final String scopeKey = _scopeKey(chain, network);
+    final Map<String, TrackedAssetDefinition> discoveredAssetsForScope =
+        _discoveredTrackedAssets.putIfAbsent(
+          scopeKey,
+          () => <String, TrackedAssetDefinition>{},
+        );
+    final Set<String> knownContracts = <String>{
+      for (final TrackedAssetDefinition asset in _trackedAssetsForScope(
+        chain,
+        network,
+      ))
+        if (!asset.isNative && asset.contractAddress != null)
+          asset.contractAddress!.trim().toLowerCase(),
+    };
+
+    bool assetsChanged = false;
+    bool cursorsChanged = false;
+    int? latestBlock;
+    for (final String ownerAddress in ownerAddresses) {
+      try {
+        latestBlock ??= await service.getBlockNumber();
+        final String cursorKey = _erc20DiscoveryCursorKey(
+          scopeKey,
+          ownerAddress,
+        );
+        final int fromBlock =
+            _erc20DiscoveryHighWaterMarks[cursorKey] == null
+            ? _initialErc20DiscoveryStartBlock(latestBlock!)
+            : _erc20DiscoveryHighWaterMarks[cursorKey]! + 1;
+        if (fromBlock > latestBlock!) {
+          continue;
+        }
+        final Set<String> discoveredContracts =
+            await service.discoverErc20Contracts(
+              ownerAddress: ownerAddress,
+              fromBlock: fromBlock,
+              toBlock: latestBlock,
+              chunkSize: erc20DiscoveryChunkSize,
+            );
+        for (final String contractAddress in discoveredContracts) {
+          final String normalized = contractAddress.trim().toLowerCase();
+          if (normalized.isEmpty || knownContracts.contains(normalized)) {
+            continue;
+          }
+          try {
+            final TrackedAssetDefinition asset = await service.describeErc20Asset(
+              contractAddress,
+            );
+            discoveredAssetsForScope[trackedAssetLookupKey(asset)] = asset;
+            knownContracts.add(normalized);
+            assetsChanged = true;
+          } catch (_) {
+            // Skip malformed token contracts and keep scanning others.
+          }
+        }
+        _erc20DiscoveryHighWaterMarks[cursorKey] = latestBlock!;
+        cursorsChanged = true;
+      } catch (_) {
+        // ERC-20 discovery is best-effort; keep known assets if scanning fails.
+      }
+    }
+
+    if (assetsChanged) {
+      await _saveDiscoveredTrackedAssets();
+    }
+    if (cursorsChanged) {
+      await _saveErc20DiscoveryHighWaterMarks();
+    }
+  }
+
+  int _reservedOfflineBaseUnitsFor({
+    required ChainKind chain,
+    required ChainNetwork network,
+    required String? protectedAddress,
+  }) {
+    if (protectedAddress == null || protectedAddress.isEmpty) {
+      return 0;
+    }
+    return _pendingTransfers
+        .where((PendingTransfer transfer) {
+          return transfer.senderAddress == protectedAddress &&
+              transfer.chain == chain &&
+              transfer.network == network &&
+              transfer.reservesOfflineFunds;
+        })
+        .fold<int>(
+          0,
+          (int total, PendingTransfer transfer) =>
+              total + transfer.amountLamports,
+        );
+  }
+
   Future<void> prepareForOffline() async {
     if (_activeWalletEngine == WalletEngine.bitgo) {
       throw const FormatException(
@@ -769,13 +1826,18 @@ class BitsendAppState extends ChangeNotifier {
     });
   }
 
-  Future<void> topUpOfflineWallet(double amountSol) async {
+  Future<void> topUpOfflineWallet(double amount, {String? assetId}) async {
     if (_activeWalletEngine == WalletEngine.bitgo) {
       throw const FormatException(
         'BitGo mode does not use the local offline wallet.',
       );
     }
-    await _runTask('Moving funds into the offline wallet...', () async {
+    final TrackedAssetDefinition asset = _sendAssetDefinitionFor(
+      chain: _activeChain,
+      network: _activeNetwork,
+      assetId: assetId ?? '',
+    );
+    await _runTask('Moving ${asset.symbol} into the offline wallet...', () async {
       if (_wallet == null || _offlineWallet == null) {
         throw const FormatException('Create or restore a wallet first.');
       }
@@ -786,54 +1848,70 @@ class BitsendAppState extends ChangeNotifier {
         );
       }
 
-      final int lamports = _activeChain.amountToBaseUnits(amountSol);
-      if (lamports <= 0) {
+      final int amountBaseUnits = asset.amountToBaseUnits(amount);
+      if (amountBaseUnits <= 0) {
         throw const FormatException('Enter an amount greater than zero.');
-      }
-      late final int feeHeadroom;
-      if (_activeChain == ChainKind.solana) {
-        _mainBalanceLamports = await _solanaService.getBalanceLamports(
-          _wallet!.address,
-        );
-        feeHeadroom = solFeeHeadroomLamports;
-      } else {
-        _mainBalanceLamports = await _ethereumService.getBalanceBaseUnits(
-          _wallet!.address,
-        );
-        final EthereumPreparedContext senderContext = await _ethereumService
-            .prepareTransferContext(_wallet!.address);
-        feeHeadroom =
-            senderContext.gasPriceWei * EthereumService.transferGasLimit;
-      }
-      _mainBalances[_activeScopeKey] = _mainBalanceLamports;
-      final int availableAfterFees = _mainBalanceLamports - feeHeadroom;
-      if (availableAfterFees <= 0 || lamports > availableAfterFees) {
-        final int safeAvailable = availableAfterFees > 0
-            ? availableAfterFees
-            : 0;
-        throw FormatException(
-          'Main wallet balance is too low after network fees. Available to move: ${Formatters.asset(_activeChain.amountFromBaseUnits(safeAvailable), _activeChain)}.',
-        );
       }
 
       if (_activeChain == ChainKind.solana) {
+        if (!asset.isNative) {
+          throw const FormatException(
+            'Solana offline top-up currently supports SOL only.',
+          );
+        }
+        _mainBalanceLamports = await _solanaService.getBalanceLamports(
+          _wallet!.address,
+        );
+        _mainBalances[_activeScopeKey] = _mainBalanceLamports;
+        final int availableAfterFees =
+            _mainBalanceLamports - solFeeHeadroomLamports;
+        if (availableAfterFees <= 0 || amountBaseUnits > availableAfterFees) {
+          final int safeAvailable = availableAfterFees > 0
+              ? availableAfterFees
+              : 0;
+          throw FormatException(
+            'Main wallet balance is too low after network fees. Available to move: ${Formatters.asset(_activeChain.amountFromBaseUnits(safeAvailable), _activeChain)}.',
+          );
+        }
         final Ed25519HDKeyPair sender = await _walletService
             .loadSigningKeyPair();
         final String signature = await _solanaService.sendTransferNow(
           sender: sender,
           receiverAddress: _offlineWallet!.address,
-          lamports: lamports,
+          lamports: amountBaseUnits,
         );
         await _solanaService.waitForConfirmation(signature);
         await _updateCachedBlockhash(await _solanaService.getFreshBlockhash());
-      } else {
+        await refreshWalletData();
+        return;
+      }
+
+      _mainBalanceLamports = await _ethereumService.getBalanceBaseUnits(
+        _wallet!.address,
+      );
+      _mainBalances[_activeScopeKey] = _mainBalanceLamports;
+      final EthereumPreparedContext senderContext = await _ethereumService
+          .prepareTransferContext(_wallet!.address);
+
+      if (asset.isNative) {
+        final int feeHeadroom =
+            senderContext.gasPriceWei * EthereumService.transferGasLimit;
+        final int availableAfterFees = _mainBalanceLamports - feeHeadroom;
+        if (availableAfterFees <= 0 || amountBaseUnits > availableAfterFees) {
+          final int safeAvailable = availableAfterFees > 0
+              ? availableAfterFees
+              : 0;
+          throw FormatException(
+            'Main wallet balance is too low after network fees. Available to move: ${Formatters.asset(_activeChain.amountFromBaseUnits(safeAvailable), _activeChain)}.',
+          );
+        }
         final EthPrivateKey sender = await _walletService
             .loadEvmSigningCredentials(chain: _activeChain);
         final String signature = await _ethereumService.sendTransferNow(
           sender: sender,
           senderAddress: _wallet!.address,
           receiverAddress: _offlineWallet!.address,
-          amountBaseUnits: lamports,
+          amountBaseUnits: amountBaseUnits,
         );
         await _ethereumService.waitForConfirmation(signature);
         await _updateCachedEthereumContext(
@@ -841,23 +1919,77 @@ class BitsendAppState extends ChangeNotifier {
             _offlineWallet!.address,
           ),
         );
+        await refreshWalletData();
+        return;
       }
+
+      if (!_activeChain.isEvm || asset.contractAddress == null) {
+        throw const FormatException(
+          'Token top-up is available only on supported EVM chains.',
+        );
+      }
+
+      final int mainTokenBalanceBaseUnits =
+          await _ethereumService.getTokenBalanceBaseUnits(
+            ownerAddress: _wallet!.address,
+            contractAddress: asset.contractAddress!,
+          );
+      _mainTrackedAssetBalances[asset.id] = mainTokenBalanceBaseUnits;
+      if (amountBaseUnits > mainTokenBalanceBaseUnits) {
+        throw FormatException(
+          'Amount exceeds the available ${asset.symbol} balance in the main wallet.',
+        );
+      }
+
+      final int gasLimit = await _ethereumService.estimateTokenTransferGas(
+        senderAddress: _wallet!.address,
+        receiverAddress: _offlineWallet!.address,
+        contractAddress: asset.contractAddress!,
+        amountBaseUnits: amountBaseUnits,
+      );
+      final int feeHeadroom = senderContext.gasPriceWei * gasLimit;
+      if (_mainBalanceLamports <= 0 || feeHeadroom > _mainBalanceLamports) {
+        throw FormatException(
+          'Not enough ${_activeChain.assetDisplayLabel} to cover network fees for the ${asset.symbol} transfer.',
+        );
+      }
+
+      final EthPrivateKey sender = await _walletService.loadEvmSigningCredentials(
+        chain: _activeChain,
+      );
+      final String signature = await _ethereumService.sendTokenTransferNow(
+        sender: sender,
+        senderAddress: _wallet!.address,
+        receiverAddress: _offlineWallet!.address,
+        contractAddress: asset.contractAddress!,
+        amountBaseUnits: amountBaseUnits,
+      );
+      await _ethereumService.waitForConfirmation(signature);
+      await _updateCachedEthereumContext(
+        await _ethereumService.prepareTransferContext(_offlineWallet!.address),
+      );
       await refreshWalletData();
     });
   }
 
   Future<void> requestBlePermissions() async {
     final Map<Permission, PermissionStatus> statuses = await <Permission>[
-      Permission.locationWhenInUse,
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.bluetoothAdvertise,
+      Permission.locationWhenInUse,
     ].request();
-    _localPermissionsGranted = statuses.values.every(
-      (PermissionStatus status) =>
-          status == PermissionStatus.granted ||
-          status == PermissionStatus.limited,
-    );
+    bool isAllowed(PermissionStatus status) {
+      return status == PermissionStatus.granted ||
+          status == PermissionStatus.limited;
+    }
+
+    _localPermissionsGranted =
+        <PermissionStatus>[
+          statuses[Permission.bluetoothScan] ?? PermissionStatus.denied,
+          statuses[Permission.bluetoothConnect] ?? PermissionStatus.denied,
+          statuses[Permission.bluetoothAdvertise] ?? PermissionStatus.denied,
+        ].every(isAllowed);
     notifyListeners();
   }
 
@@ -896,6 +2028,21 @@ class BitsendAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setOfflineVoucherSettlementContractAddress(String value) async {
+    final String trimmed = value.trim();
+    if (trimmed.isNotEmpty &&
+        (!_activeChain.isEvm || !_ethereumService.isValidAddress(trimmed))) {
+      throw const FormatException('Enter a valid EVM settlement contract address.');
+    }
+    if (trimmed.isEmpty) {
+      _offlineVoucherSettlementContracts.remove(_activeScopeKey);
+    } else {
+      _offlineVoucherSettlementContracts[_activeScopeKey] = trimmed;
+    }
+    await _saveOfflineVoucherSettlementContracts();
+    notifyListeners();
+  }
+
   Future<void> setBitGoEndpoint(String value) async {
     final String endpoint = _normalizeEndpoint(value);
     if (endpoint.isEmpty) {
@@ -907,6 +2054,7 @@ class BitsendAppState extends ChangeNotifier {
     _fileverseClientService.endpoint = endpoint;
     _fileverseClientService.clearSession();
     _relayClientService.endpoint = endpoint;
+    _offlineVoucherClientService.endpoint = endpoint;
     _bitgoBackendMode = BitGoBackendMode.unknown;
     await _store.saveSetting('bitgo_endpoint', endpoint);
     if (_activeWalletEngine == WalletEngine.bitgo) {
@@ -973,6 +2121,11 @@ class BitsendAppState extends ChangeNotifier {
       chain: _activeChain,
       network: _activeNetwork,
       transport: kind,
+      assetId: kind == TransportKind.online &&
+              _activeWalletEngine == WalletEngine.local &&
+              _activeChain.isEvm
+          ? _sendDraft.assetId
+          : _defaultSendAssetIdFor(_activeChain, _activeNetwork),
       clearReceiver: true,
     );
     notifyListeners();
@@ -988,14 +2141,766 @@ class BitsendAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> saveCurrentReceiverAsContact(String name) async {
+    final String trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      throw const FormatException('Contact name is required.');
+    }
+    final String address = _sendDraft.receiverAddress.trim();
+    if (address.isEmpty) {
+      throw const FormatException('Receiver address is required.');
+    }
+    final SendContact contact = SendContact(
+      id: '${_activeChain.name}:${_activeNetwork.name}:${address.toLowerCase()}',
+      name: trimmedName,
+      address: address,
+      chain: _activeChain,
+      network: _activeNetwork,
+      createdAt: _clock(),
+    );
+    _contacts.removeWhere((SendContact item) => item.id == contact.id);
+    _contacts.add(contact);
+    _contacts.sort((SendContact a, SendContact b) => a.name.compareTo(b.name));
+    await _saveContacts();
+    _sendDraft = _sendDraft.copyWith(receiverLabel: trimmedName);
+    notifyListeners();
+  }
+
+  void selectContact(SendContact contact) {
+    _sendDraft = _sendDraft.copyWith(
+      receiverAddress: contact.address,
+      receiverLabel: contact.name,
+    );
+    notifyListeners();
+  }
+
+  void setSendGasSpeed(GasSpeed gasSpeed) {
+    if (_sendDraft.gasSpeed == gasSpeed) {
+      return;
+    }
+    _sendDraft = _sendDraft.copyWith(gasSpeed: gasSpeed);
+    notifyListeners();
+  }
+
+  void selectSendAsset(String assetId) {
+    final TrackedAssetDefinition asset = _sendAssetDefinitionFor(
+      chain: _sendDraft.chain,
+      network: _sendDraft.network,
+      assetId: assetId,
+    );
+    final bool canUseToken =
+        asset.isNative ||
+        (_sendDraft.walletEngine == WalletEngine.local &&
+            _sendDraft.transport == TransportKind.online &&
+            _sendDraft.chain.isEvm);
+    _sendDraft = _sendDraft.copyWith(
+      assetId: canUseToken
+          ? asset.id
+          : _defaultSendAssetIdFor(_sendDraft.chain, _sendDraft.network),
+      amountSol: 0,
+    );
+    notifyListeners();
+  }
+
+  Future<TrackedAssetDefinition> importTrackedToken({
+    required String contractAddress,
+  }) async {
+    if (!_activeChain.isEvm) {
+      throw const FormatException('Token import is only available on EVM chains.');
+    }
+    final String endpoint =
+        _rpcEndpoints[_activeScopeKey] ??
+        _defaultRpcEndpointFor(_activeChain, _activeNetwork);
+    final EthereumService service = EthereumService(rpcEndpoint: endpoint)
+      ..chain = _activeChain
+      ..network = _activeNetwork;
+    final TrackedAssetDefinition asset = await service.describeErc20Asset(
+      contractAddress.trim(),
+    );
+    final String scopeKey = _activeScopeKey;
+    _discoveredTrackedAssets
+        .putIfAbsent(scopeKey, () => <String, TrackedAssetDefinition>{})[
+      trackedAssetLookupKey(asset)
+    ] = asset;
+    await _saveDiscoveredTrackedAssets();
+    await _refreshTrackedAssetBalancesForChain(
+      chain: _activeChain,
+      network: _activeNetwork,
+      wallet: _wallet,
+      offlineWallet: _offlineWallet,
+    );
+    await _refreshPortfolioUsdPrices();
+    selectSendAsset(asset.id);
+    return asset;
+  }
+
+  Future<TokenAllowanceEntry> refreshTokenAllowance({
+    required String assetId,
+    required String spenderAddress,
+    String spenderLabel = '',
+  }) async {
+    if (!_activeChain.isEvm) {
+      throw const FormatException('Approvals are only available on EVM chains.');
+    }
+    if (_wallet == null) {
+      throw const FormatException('Create or restore a wallet first.');
+    }
+    final TrackedAssetDefinition asset = _sendAssetDefinitionFor(
+      chain: _activeChain,
+      network: _activeNetwork,
+      assetId: assetId,
+    );
+    if (asset.isNative || asset.contractAddress == null) {
+      throw const FormatException('Choose an ERC-20 token to manage approvals.');
+    }
+    final String normalizedSpender = spenderAddress.trim();
+    if (!_ethereumService.isValidAddress(normalizedSpender)) {
+      throw const FormatException('Enter a valid spender address.');
+    }
+    final int allowanceBaseUnits = await _ethereumService
+        .getTokenAllowanceBaseUnits(
+          ownerAddress: _wallet!.address,
+          spenderAddress: normalizedSpender,
+          contractAddress: asset.contractAddress!,
+        );
+    final TokenAllowanceEntry entry = TokenAllowanceEntry(
+      id:
+          '${_activeChain.name}:${_activeNetwork.name}:${_wallet!.address.toLowerCase()}:${asset.contractAddress!.toLowerCase()}:${normalizedSpender.toLowerCase()}',
+      chain: _activeChain,
+      network: _activeNetwork,
+      ownerAddress: _wallet!.address,
+      assetId: asset.id,
+      tokenSymbol: asset.symbol,
+      tokenDisplayName: asset.displayName,
+      tokenDecimals: asset.decimals,
+      tokenContractAddress: asset.contractAddress!,
+      spenderAddress: normalizedSpender,
+      spenderLabel: spenderLabel.trim(),
+      allowanceBaseUnits: allowanceBaseUnits,
+      updatedAt: _clock(),
+    );
+    await _upsertAllowanceEntry(entry);
+    return entry;
+  }
+
+  Future<TokenAllowanceQuote> quoteTokenAllowance({
+    required String assetId,
+    required String spenderAddress,
+    required double amount,
+  }) async {
+    if (!_activeChain.isEvm) {
+      throw const FormatException('Approvals are only available on EVM chains.');
+    }
+    if (_wallet == null) {
+      throw const FormatException('Create or restore a wallet first.');
+    }
+    final TrackedAssetDefinition asset = _sendAssetDefinitionFor(
+      chain: _activeChain,
+      network: _activeNetwork,
+      assetId: assetId,
+    );
+    if (asset.isNative || asset.contractAddress == null) {
+      throw const FormatException('Choose an ERC-20 token to manage approvals.');
+    }
+    if (!_ethereumService.isValidAddress(spenderAddress.trim())) {
+      throw const FormatException('Enter a valid spender address.');
+    }
+    final int currentAllowance = await _ethereumService.getTokenAllowanceBaseUnits(
+      ownerAddress: _wallet!.address,
+      spenderAddress: spenderAddress.trim(),
+      contractAddress: asset.contractAddress!,
+    );
+    final int proposedAllowance = asset.amountToBaseUnits(amount);
+    final int fee;
+    if (_hasInternet) {
+      final EthereumPreparedContext context = await _ethereumService
+          .prepareTransferContext(_wallet!.address);
+      final int gasPriceWei = _applyGasSpeedToWei(context.gasPriceWei);
+      final int gasLimit = await _ethereumService.estimateTokenApprovalGas(
+        senderAddress: _wallet!.address,
+        spenderAddress: spenderAddress.trim(),
+        contractAddress: asset.contractAddress!,
+        amountBaseUnits: proposedAllowance,
+      );
+      fee = gasPriceWei * gasLimit;
+    } else {
+      fee = estimatedOnlineSendFeeHeadroomBaseUnits;
+    }
+    return TokenAllowanceQuote(
+      currentAllowanceBaseUnits: currentAllowance,
+      proposedAllowanceBaseUnits: proposedAllowance,
+      networkFeeBaseUnits: fee,
+      isEstimate: !_hasInternet,
+    );
+  }
+
+  Future<TokenAllowanceEntry> approveTokenAllowance({
+    required String assetId,
+    required String spenderAddress,
+    required double amount,
+    String spenderLabel = '',
+  }) {
+    final TrackedAssetDefinition asset = _sendAssetDefinitionFor(
+      chain: _activeChain,
+      network: _activeNetwork,
+      assetId: assetId,
+    );
+    return approveTokenAllowanceBaseUnits(
+      assetId: assetId,
+      spenderAddress: spenderAddress,
+      amountBaseUnits: asset.amountToBaseUnits(amount),
+      spenderLabel: spenderLabel,
+    );
+  }
+
+  Future<TokenAllowanceEntry> approveTokenAllowanceBaseUnits({
+    required String assetId,
+    required String spenderAddress,
+    required int amountBaseUnits,
+    String spenderLabel = '',
+  }) async {
+    if (!_activeChain.isEvm) {
+      throw const FormatException('Approvals are only available on EVM chains.');
+    }
+    if (_wallet == null) {
+      throw const FormatException('Create or restore a wallet first.');
+    }
+    if (!_hasInternet) {
+      throw const SocketException(
+        'Internet is required to submit an approval transaction.',
+      );
+    }
+    final TrackedAssetDefinition asset = _sendAssetDefinitionFor(
+      chain: _activeChain,
+      network: _activeNetwork,
+      assetId: assetId,
+    );
+    if (asset.isNative || asset.contractAddress == null) {
+      throw const FormatException('Choose an ERC-20 token to manage approvals.');
+    }
+    final EthPrivateKey signer = await _walletService.loadEvmSigningCredentials(
+      chain: _activeChain,
+      slot: activeAccountSlot,
+    );
+    final int gasPriceWei = _applyGasSpeedToWei(
+      (await _ethereumService.prepareTransferContext(_wallet!.address))
+          .gasPriceWei,
+    );
+    final String txHash = await _ethereumService.sendApproveNow(
+      sender: signer,
+      senderAddress: _wallet!.address,
+      spenderAddress: spenderAddress.trim(),
+      contractAddress: asset.contractAddress!,
+      amountBaseUnits: amountBaseUnits,
+      gasPriceWeiOverride: gasPriceWei,
+    );
+    await _ethereumService.waitForConfirmation(txHash);
+    final TokenAllowanceEntry entry = await refreshTokenAllowance(
+      assetId: assetId,
+      spenderAddress: spenderAddress,
+      spenderLabel: spenderLabel,
+    );
+    final TokenAllowanceEntry updated = entry.copyWith(
+      updatedAt: _clock(),
+      lastTransactionHash: txHash,
+      spenderLabel: spenderLabel.trim().isEmpty
+          ? entry.spenderLabel
+          : spenderLabel.trim(),
+    );
+    await _upsertAllowanceEntry(updated);
+    return updated;
+  }
+
+  Future<TokenAllowanceEntry> revokeTokenAllowance({
+    required String assetId,
+    required String spenderAddress,
+    String spenderLabel = '',
+  }) {
+    return approveTokenAllowance(
+      assetId: assetId,
+      spenderAddress: spenderAddress,
+      amount: 0,
+      spenderLabel: spenderLabel,
+    );
+  }
+
+  Future<void> removeAllowanceEntry(String entryId) async {
+    _allowanceEntries.removeWhere((TokenAllowanceEntry entry) => entry.id == entryId);
+    await _saveAllowanceEntries();
+    notifyListeners();
+  }
+
+  Future<SwapQuote> quoteSwap({
+    required String sellAssetId,
+    required String buyAssetId,
+    required double sellAmount,
+  }) async {
+    await _refreshConnectivityState();
+    final ({
+      TrackedAssetDefinition sellAsset,
+      TrackedAssetDefinition buyAsset,
+      int sellAmountBaseUnits,
+      int chainId
+    }) request = _resolveSwapRequest(
+      sellAssetId: sellAssetId,
+      buyAssetId: buyAssetId,
+      sellAmount: sellAmount,
+    );
+    final SwapQuote quote = await _effectiveSwapService.fetchPrice(
+      chainId: request.chainId,
+      sellTokenAddress: SwapService.tokenAddressForAsset(request.sellAsset),
+      buyTokenAddress: SwapService.tokenAddressForAsset(request.buyAsset),
+      sellAmountBaseUnits: request.sellAmountBaseUnits,
+      takerAddress: _wallet!.address,
+      slippageBps: _swapSlippageBps,
+    );
+    _validateSwapQuote(
+      quote: quote,
+      sellAsset: request.sellAsset,
+      sellAmountBaseUnits: request.sellAmountBaseUnits,
+    );
+    return quote;
+  }
+
+  Future<PendingTransfer> executeSwap({
+    required String sellAssetId,
+    required String buyAssetId,
+    required double sellAmount,
+  }) async {
+    await _refreshConnectivityState();
+    final ({
+      TrackedAssetDefinition sellAsset,
+      TrackedAssetDefinition buyAsset,
+      int sellAmountBaseUnits,
+      int chainId
+    }) request = _resolveSwapRequest(
+      sellAssetId: sellAssetId,
+      buyAssetId: buyAssetId,
+      sellAmount: sellAmount,
+    );
+    SwapQuote quote = await _effectiveSwapService.fetchQuote(
+      chainId: request.chainId,
+      sellTokenAddress: SwapService.tokenAddressForAsset(request.sellAsset),
+      buyTokenAddress: SwapService.tokenAddressForAsset(request.buyAsset),
+      sellAmountBaseUnits: request.sellAmountBaseUnits,
+      takerAddress: _wallet!.address,
+      slippageBps: _swapSlippageBps,
+    );
+    _validateSwapQuote(
+      quote: quote,
+      sellAsset: request.sellAsset,
+      sellAmountBaseUnits: request.sellAmountBaseUnits,
+    );
+    if (!request.sellAsset.isNative && quote.requiresAllowance) {
+      final String spenderAddress = quote.allowanceIssue!.spenderAddress;
+      await approveTokenAllowanceBaseUnits(
+        assetId: request.sellAsset.id,
+        spenderAddress: spenderAddress,
+        amountBaseUnits: request.sellAmountBaseUnits,
+        spenderLabel: '0x Swap',
+      );
+      quote = await _effectiveSwapService.fetchQuote(
+        chainId: request.chainId,
+        sellTokenAddress: SwapService.tokenAddressForAsset(request.sellAsset),
+        buyTokenAddress: SwapService.tokenAddressForAsset(request.buyAsset),
+        sellAmountBaseUnits: request.sellAmountBaseUnits,
+        takerAddress: _wallet!.address,
+        slippageBps: _swapSlippageBps,
+      );
+      _validateSwapQuote(
+        quote: quote,
+        sellAsset: request.sellAsset,
+        sellAmountBaseUnits: request.sellAmountBaseUnits,
+      );
+      if (quote.requiresAllowance) {
+        throw const FormatException(
+          'Token allowance is still not ready. Try again in a few seconds.',
+        );
+      }
+    }
+    final SwapTransactionRequest? transaction = quote.transaction;
+    if (transaction == null) {
+      throw const FormatException(
+        'The swap route did not return an executable transaction.',
+      );
+    }
+    final EthPrivateKey signer = await _walletService.loadEvmSigningCredentials(
+      chain: _activeChain,
+      slot: activeAccountSlot,
+    );
+    final String txHash = await _ethereumService.sendContractTransactionNow(
+      sender: signer,
+      senderAddress: _wallet!.address,
+      toAddress: transaction.toAddress,
+      dataHex: transaction.dataHex,
+      valueBaseUnits: transaction.valueBaseUnits,
+      gasLimit: transaction.gasLimit > 0 ? transaction.gasLimit : null,
+      gasPriceWeiOverride: transaction.gasPriceWei > 0
+          ? transaction.gasPriceWei
+          : null,
+    );
+    final DateTime createdAt = _clock();
+    final PendingTransfer transfer = PendingTransfer(
+      transferId: _uuid.v4(),
+      chain: _activeChain,
+      network: _activeNetwork,
+      walletEngine: WalletEngine.local,
+      direction: TransferDirection.outbound,
+      status: TransferStatus.broadcastSubmitted,
+      amountLamports: request.sellAmountBaseUnits,
+      senderAddress: _wallet!.address,
+      receiverAddress: transaction.toAddress,
+      transport: TransportKind.online,
+      createdAt: createdAt,
+      updatedAt: createdAt,
+      assetId: request.sellAsset.id,
+      assetSymbol: request.sellAsset.symbol,
+      assetDisplayName:
+          '${request.sellAsset.displayName} → ${request.buyAsset.displayName}',
+      assetDecimals: request.sellAsset.decimals,
+      assetContractAddress: request.sellAsset.contractAddress,
+      isNativeAsset: request.sellAsset.isNative,
+      remoteEndpoint:
+          '0x Swap • ${request.sellAsset.symbol} → ${request.buyAsset.symbol}',
+      transactionSignature: txHash,
+      explorerUrl: _ethereumService.explorerUrlFor(txHash).toString(),
+    );
+    await _persistTransfer(transfer);
+    _lastSentTransferId = transfer.transferId;
+    await refreshWalletData();
+    if (_hasInternet) {
+      unawaited(_startRealtimeSettlementSync());
+      unawaited(refreshSubmittedTransfers());
+    }
+    return transfer;
+  }
+
+  ({
+    TrackedAssetDefinition sellAsset,
+    TrackedAssetDefinition buyAsset,
+    int sellAmountBaseUnits,
+    int chainId
+  }) _resolveSwapRequest({
+    required String sellAssetId,
+    required String buyAssetId,
+    required double sellAmount,
+  }) {
+    if (!swapSupportedOnActiveScope) {
+      throw const FormatException(
+        'Swaps are available only in Local wallet mode on supported EVM mainnets.',
+      );
+    }
+    if (_wallet == null) {
+      throw const FormatException('Create or restore a wallet first.');
+    }
+    if (!_hasInternet) {
+      throw const SocketException(
+        'Internet is required to build and submit swap quotes.',
+      );
+    }
+    if (!hasSwapApiKey) {
+      throw const FormatException(
+        'Add your 0x API key in Settings before using swaps.',
+      );
+    }
+    final int? chainId = SwapService.supportedChainIdFor(
+      _activeChain,
+      _activeNetwork,
+    );
+    if (chainId == null) {
+      throw const FormatException(
+        'Swaps are not available on this chain or network yet.',
+      );
+    }
+    final TrackedAssetDefinition sellAsset = _sendAssetDefinitionFor(
+      chain: _activeChain,
+      network: _activeNetwork,
+      assetId: sellAssetId,
+    );
+    final TrackedAssetDefinition buyAsset = _sendAssetDefinitionFor(
+      chain: _activeChain,
+      network: _activeNetwork,
+      assetId: buyAssetId,
+    );
+    if (sellAsset.id == buyAsset.id) {
+      throw const FormatException('Choose two different assets to swap.');
+    }
+    final int sellAmountBaseUnits = sellAsset.amountToBaseUnits(sellAmount);
+    if (sellAmountBaseUnits <= 0) {
+      throw const FormatException('Enter an amount greater than zero.');
+    }
+    final AssetPortfolioHolding holding = _holdingForTrackedAsset(sellAsset);
+    if (sellAmount > holding.mainBalance) {
+      throw FormatException(
+        'Amount exceeds the available ${sellAsset.symbol} balance.',
+      );
+    }
+    return (
+      sellAsset: sellAsset,
+      buyAsset: buyAsset,
+      sellAmountBaseUnits: sellAmountBaseUnits,
+      chainId: chainId,
+    );
+  }
+
+  void _validateSwapQuote({
+    required SwapQuote quote,
+    required TrackedAssetDefinition sellAsset,
+    required int sellAmountBaseUnits,
+  }) {
+    if (!quote.liquidityAvailable) {
+      throw const FormatException(
+        'No on-chain liquidity is available for this pair right now.',
+      );
+    }
+    if (quote.balanceIssue != null) {
+      throw FormatException(
+        _swapBalanceErrorMessage(quote.balanceIssue!, sellAsset),
+      );
+    }
+    final int networkFeeBaseUnits = quote.totalNetworkFeeBaseUnits ?? 0;
+    if (!sellAsset.isNative && networkFeeBaseUnits > _mainBalanceLamports) {
+      throw FormatException(
+        'Not enough ${_activeChain.assetDisplayLabel} to cover swap gas.',
+      );
+    }
+    if (sellAsset.isNative &&
+        sellAmountBaseUnits + networkFeeBaseUnits > _mainBalanceLamports) {
+      throw FormatException(
+        'Not enough ${sellAsset.symbol} to cover the swap amount and gas.',
+      );
+    }
+  }
+
+  String _swapBalanceErrorMessage(
+    SwapBalanceIssue issue,
+    TrackedAssetDefinition sellAsset,
+  ) {
+    if (sellAsset.isNative) {
+      return 'Not enough ${sellAsset.symbol} for this swap.';
+    }
+    return 'Not enough ${sellAsset.symbol} in the main wallet for this swap.';
+  }
+
+  Future<void> refreshNftHoldings() async {
+    if (!_activeChain.isEvm || _wallet == null) {
+      _nftHoldingsByScope[_activeScopeKey] = const <NftHolding>[];
+      notifyListeners();
+      return;
+    }
+    if (!_hasInternet) {
+      throw const SocketException(
+        'Internet is required to refresh NFT holdings.',
+      );
+    }
+    final int latestBlock = await _ethereumService.getBlockNumber();
+    final List<NftHolding> holdings = await _ethereumService
+        .discoverErc721Holdings(
+          ownerAddress: _wallet!.address,
+          fromBlock: _initialErc20DiscoveryStartBlock(latestBlock),
+          toBlock: latestBlock,
+          chunkSize: erc20DiscoveryChunkSize,
+        );
+    _nftHoldingsByScope[_activeScopeKey] = holdings;
+    notifyListeners();
+  }
+
+  Future<DappSignResult> signDappRequest(DappSignRequest request) async {
+    if (!request.chain.isEvm) {
+      throw const FormatException('Dapp signing is only available on EVM chains.');
+    }
+    await setActiveChain(request.chain);
+    await setActiveNetwork(request.network);
+    if (_activeWalletEngine != WalletEngine.local) {
+      await setActiveWalletEngine(WalletEngine.local);
+    }
+    if (_wallet == null) {
+      throw const FormatException('Create or restore a wallet first.');
+    }
+    final EthPrivateKey signer = await _walletService.loadEvmSigningCredentials(
+      chain: _activeChain,
+      slot: activeAccountSlot,
+    );
+    return switch (request.method) {
+      DappRequestMethod.personalSign => DappSignResult(
+        request: request,
+        result: _ethereumService.signPersonalMessageHex(
+          signer: signer,
+          message: request.message ?? '',
+        ),
+        completedAt: _clock(),
+      ),
+      DappRequestMethod.ethSign => DappSignResult(
+        request: request,
+        result: _ethereumService.signPayloadHex(
+          signer: signer,
+          payload: _decodeDappPayloadBytes(request),
+        ),
+        completedAt: _clock(),
+      ),
+      DappRequestMethod.sendTransaction => DappSignResult(
+        request: request,
+        result: await _ethereumService.sendContractTransactionNow(
+          sender: signer,
+          senderAddress: _wallet!.address,
+          toAddress: request.toAddress!,
+          dataHex: request.dataHex,
+          valueBaseUnits: request.valueBaseUnits,
+          gasPriceWeiOverride: _applyGasSpeedToWei(
+            (await _ethereumService.prepareTransferContext(_wallet!.address))
+                .gasPriceWei,
+          ),
+        ),
+        completedAt: _clock(),
+        isTransaction: true,
+      ),
+    };
+  }
+
+  Future<SendQuote> quoteCurrentDraft({double? amountSol}) async {
+    final double requestedAmount = amountSol ?? _sendDraft.amountSol;
+    final TrackedAssetDefinition asset = _sendAssetDefinitionForDraft(_sendDraft);
+    final int amountBaseUnits = asset.amountToBaseUnits(requestedAmount);
+    if (amountBaseUnits <= 0) {
+      throw const FormatException('Enter an amount greater than zero.');
+    }
+    final bool directOnline =
+        _activeWalletEngine == WalletEngine.bitgo ||
+        _sendDraft.transport == TransportKind.online;
+    if (!directOnline) {
+      final int feeBaseUnits = estimatedSendFeeHeadroomBaseUnits;
+      return SendQuote(
+        amountBaseUnits: amountBaseUnits,
+        networkFeeBaseUnits: feeBaseUnits,
+        totalDebitBaseUnits: asset.isNative
+            ? amountBaseUnits + feeBaseUnits
+            : amountBaseUnits,
+        isEstimate: true,
+        note: 'No slippage on direct transfers.',
+      );
+    }
+
+    if (!asset.isNative) {
+      if (_activeWalletEngine == WalletEngine.bitgo) {
+        throw const FormatException(
+          'Token transfers are not available in BitGo mode yet.',
+        );
+      }
+      if (_activeChain == ChainKind.solana) {
+        throw const FormatException(
+          'Token transfers are not available on Solana yet.',
+        );
+      }
+      if (!_hasInternet) {
+        final int fallbackFee = estimatedOnlineSendFeeHeadroomBaseUnits;
+        return SendQuote(
+          amountBaseUnits: amountBaseUnits,
+          networkFeeBaseUnits: fallbackFee,
+          totalDebitBaseUnits: amountBaseUnits,
+          isEstimate: true,
+          note:
+              'Using fallback gas until the wallet is online. Network fee is paid in ${_activeChain.assetDisplayLabel}. No slippage on direct transfers.',
+        );
+      }
+      if (_wallet == null) {
+        throw const FormatException('Source wallet is unavailable.');
+      }
+      final EthereumPreparedContext context = await _ethereumService
+          .prepareTransferContext(_wallet!.address);
+      final int effectiveGasPrice = _applyGasSpeedToWei(context.gasPriceWei);
+      final int gasLimit = await _ethereumService.estimateTokenTransferGas(
+        senderAddress: _wallet!.address,
+        receiverAddress: _sendDraft.receiverAddress,
+        contractAddress: asset.contractAddress!,
+        amountBaseUnits: amountBaseUnits,
+      );
+      final int feeBaseUnits = effectiveGasPrice * gasLimit;
+      return SendQuote(
+        amountBaseUnits: amountBaseUnits,
+        networkFeeBaseUnits: feeBaseUnits,
+        totalDebitBaseUnits: amountBaseUnits,
+        note:
+            'Network fee is paid in ${_activeChain.assetDisplayLabel}. No slippage on direct transfers.',
+      );
+    }
+
+    if (_activeChain == ChainKind.solana) {
+      return SendQuote(
+        amountBaseUnits: amountBaseUnits,
+        networkFeeBaseUnits: solFeeHeadroomLamports,
+        totalDebitBaseUnits: amountBaseUnits + solFeeHeadroomLamports,
+        isEstimate: true,
+        note: 'No slippage on direct transfers.',
+      );
+    }
+
+    if (!_hasInternet) {
+      final int fallbackFee = estimatedOnlineSendFeeHeadroomBaseUnits;
+      return SendQuote(
+        amountBaseUnits: amountBaseUnits,
+        networkFeeBaseUnits: fallbackFee,
+        totalDebitBaseUnits: amountBaseUnits + fallbackFee,
+        isEstimate: true,
+        note: 'Using fallback gas until the wallet is online. No slippage on direct transfers.',
+      );
+    }
+
+    final String senderAddress = _activeWalletEngine == WalletEngine.bitgo
+        ? (_bitgoWallet?.address ?? _wallet?.address ?? '')
+        : _sendDraft.transport == TransportKind.online
+        ? (_wallet?.address ?? '')
+        : (_offlineWallet?.address ?? '');
+    if (senderAddress.isEmpty) {
+      throw const FormatException('Source wallet is unavailable.');
+    }
+    final EthereumPreparedContext context = await _ethereumService
+        .prepareTransferContext(senderAddress);
+    final int feeBaseUnits =
+        _applyGasSpeedToWei(context.gasPriceWei) *
+        EthereumService.transferGasLimit;
+    return SendQuote(
+      amountBaseUnits: amountBaseUnits,
+      networkFeeBaseUnits: feeBaseUnits,
+      totalDebitBaseUnits: amountBaseUnits + feeBaseUnits,
+      note: 'No slippage on direct transfers.',
+    );
+  }
+
   String? validateSendAmount(double amountSol) {
-    final int amountBaseUnits = _activeChain.amountToBaseUnits(amountSol);
+    final TrackedAssetDefinition asset = _sendAssetDefinitionForDraft(_sendDraft);
+    final int amountBaseUnits = asset.amountToBaseUnits(amountSol);
     if (amountBaseUnits <= 0) {
       return 'Enter an amount greater than zero.';
+    }
+    if (!asset.isNative) {
+      if (_activeWalletEngine == WalletEngine.bitgo) {
+        return 'Token send is not available in BitGo mode yet.';
+      }
+      if (_sendDraft.transport != TransportKind.online) {
+        return 'Token send is available only for Online transfers.';
+      }
+      if (!_activeChain.isEvm) {
+        return 'Token send is only available on EVM chains right now.';
+      }
+      final int tokenBalance = _mainTrackedAssetBalances[asset.id] ?? 0;
+      if (amountBaseUnits > tokenBalance) {
+        return 'Amount exceeds the available ${asset.symbol} balance.';
+      }
+      if (estimatedOnlineSendFeeHeadroomBaseUnits > _mainBalanceLamports) {
+        return 'Not enough ${_activeChain.assetDisplayLabel} to cover network fees.';
+      }
+      return null;
     }
     if (_activeWalletEngine == WalletEngine.bitgo) {
       if (amountBaseUnits > _mainBalanceLamports) {
         return 'Amount exceeds the available BitGo wallet balance.';
+      }
+      return null;
+    }
+    if (_sendDraft.transport == TransportKind.online) {
+      if (amountBaseUnits + estimatedOnlineSendFeeHeadroomBaseUnits >
+          _mainBalanceLamports) {
+        return 'Amount exceeds the available wallet balance after network fees.';
       }
       return null;
     }
@@ -1011,6 +2916,10 @@ class BitsendAppState extends ChangeNotifier {
       chain: _activeChain,
       network: _activeNetwork,
       walletEngine: _activeWalletEngine,
+      transport: _activeWalletEngine == WalletEngine.local && _hasInternet
+          ? TransportKind.online
+          : TransportKind.hotspot,
+      assetId: _defaultSendAssetIdFor(_activeChain, _activeNetwork),
     );
     notifyListeners();
   }
@@ -1032,6 +2941,7 @@ class BitsendAppState extends ChangeNotifier {
       await _importPendingRelayCapsules();
       await broadcastPendingTransfers();
       await refreshSubmittedTransfers();
+      await _processOfflineVoucherClaimQueue();
     } else if (_wallet != null) {
       notifyListeners();
     }
@@ -1099,6 +3009,29 @@ class BitsendAppState extends ChangeNotifier {
     return updated;
   }
 
+  bool _shouldUseOfflineVoucherSettlement({
+    required TrackedAssetDefinition asset,
+    required TransportKind transport,
+    required WalletEngine walletEngine,
+    required ChainKind chain,
+  }) {
+    return walletEngine == WalletEngine.local &&
+        transport != TransportKind.online &&
+        chain.isEvm &&
+        asset.isNative;
+  }
+
+  Future<TransportReceiveResult> _handleIncomingTransportPayload(
+    OfflineTransportPayload payload,
+  ) {
+    return switch (payload.kind) {
+      OfflineTransportPayloadKind.legacyEnvelope =>
+        _handleIncomingEnvelope(payload.envelope!),
+      OfflineTransportPayloadKind.voucherBundle =>
+        _handleIncomingVoucherBundle(payload.voucherBundle!),
+    };
+  }
+
   Future<void> scanBleReceivers() async {
     await requestBlePermissions();
     _bleDiscovering = true;
@@ -1112,9 +3045,13 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   Future<PendingTransfer> sendCurrentDraft() async {
-    if (_activeWalletEngine == WalletEngine.local &&
-        (_wallet == null || _offlineWallet == null)) {
+    if (_activeWalletEngine == WalletEngine.local && _wallet == null) {
       throw const FormatException('Create or restore a wallet first.');
+    }
+    if (_activeWalletEngine == WalletEngine.local &&
+        _sendDraft.transport != TransportKind.online &&
+        _offlineWallet == null) {
+      throw const FormatException('Create or restore the nearby send wallet first.');
     }
     if (_sendDraft.receiverAddress.isEmpty) {
       throw const FormatException('Receiver address is required.');
@@ -1135,14 +3072,14 @@ class BitsendAppState extends ChangeNotifier {
         _sendDraft.transport == TransportKind.ultrasonic &&
         _sendDraft.receiverSessionToken.isEmpty) {
       throw const FormatException(
-        'Scan the receiver pair code before sending.',
+        'Scan the receiver QR code before sending.',
       );
     }
     if (_activeWalletEngine == WalletEngine.local &&
         _sendDraft.transport == TransportKind.ultrasonic &&
         _sendDraft.receiverRelayId.isEmpty) {
       throw const FormatException(
-        'Receiver relay details are missing. Scan the pair code again.',
+        'Receiver relay details are missing. Scan the QR code again.',
       );
     }
     if (_activeChain.isEvm &&
@@ -1162,11 +3099,47 @@ class BitsendAppState extends ChangeNotifier {
             : 'Receiver address or ENS name is not valid.',
       );
     }
-    final int lamports = _activeChain.amountToBaseUnits(_sendDraft.amountSol);
-    if (lamports <= 0) {
+    final TrackedAssetDefinition asset = _sendAssetDefinitionForDraft(_sendDraft);
+    final int amountBaseUnits = asset.amountToBaseUnits(_sendDraft.amountSol);
+    if (amountBaseUnits <= 0) {
       throw const FormatException('Enter an amount greater than zero.');
     }
+    if (!asset.isNative) {
+      if (_activeWalletEngine == WalletEngine.bitgo) {
+        throw const FormatException(
+          'Token transfers are not available in BitGo mode yet.',
+        );
+      }
+      if (_sendDraft.transport != TransportKind.online) {
+        throw const FormatException(
+          'Token transfers are available only for Online transfers.',
+        );
+      }
+      if (!_activeChain.isEvm) {
+        throw const FormatException(
+          'Token transfers are available only on EVM chains right now.',
+        );
+      }
+    }
     await _refreshConnectivityState();
+    if (_activeWalletEngine == WalletEngine.local &&
+        _sendDraft.transport == TransportKind.online) {
+      return _sendCurrentDraftOnline(
+        amountBaseUnits: amountBaseUnits,
+        asset: asset,
+      );
+    }
+    if (_shouldUseOfflineVoucherSettlement(
+      asset: asset,
+      transport: _sendDraft.transport,
+      walletEngine: _activeWalletEngine,
+      chain: _activeChain,
+    )) {
+      return _sendCurrentDraftOfflineVoucher(
+        amountBaseUnits: amountBaseUnits,
+        asset: asset,
+      );
+    }
     if (_activeWalletEngine == WalletEngine.bitgo) {
       if (!_hasInternet) {
         throw const SocketException(
@@ -1195,7 +3168,7 @@ class BitsendAppState extends ChangeNotifier {
           'BitGo wallet is not configured for ${_activeNetwork.labelFor(_activeChain)}.',
         );
       }
-      if (lamports > _mainBalanceLamports) {
+      if (amountBaseUnits > _mainBalanceLamports) {
         throw const FormatException(
           'Amount exceeds the available BitGo wallet balance.',
         );
@@ -1209,7 +3182,7 @@ class BitsendAppState extends ChangeNotifier {
           network: _activeNetwork,
           walletId: wallet.walletId,
           receiverAddress: _sendDraft.receiverAddress,
-          amountBaseUnits: lamports,
+          amountBaseUnits: amountBaseUnits,
           clientTransferId: transferId,
         );
       } catch (error) {
@@ -1230,13 +3203,14 @@ class BitsendAppState extends ChangeNotifier {
         walletEngine: WalletEngine.bitgo,
         direction: TransferDirection.outbound,
         status: status,
-        amountLamports: lamports,
+        amountLamports: amountBaseUnits,
         senderAddress: wallet.address,
         receiverAddress: _sendDraft.receiverAddress,
         transport: _sendDraft.transport,
         createdAt: createdAt,
         updatedAt: snapshot.updatedAt ?? createdAt,
         remoteEndpoint: switch (_sendDraft.transport) {
+          TransportKind.online => 'Direct on-chain',
           TransportKind.hotspot => _sendDraft.receiverEndpoint.isEmpty
               ? 'Address discovery'
               : _sendDraft.receiverEndpoint,
@@ -1244,7 +3218,7 @@ class BitsendAppState extends ChangeNotifier {
               ? 'BLE discovery'
               : _sendDraft.receiverPeripheralName,
           TransportKind.ultrasonic => _sendDraft.receiverRelayId.isEmpty
-              ? 'Bitsend Pair session'
+              ? 'Ultrasonic session'
               : _sendDraft.receiverRelayId,
         },
         transactionSignature: snapshot.transactionSignature,
@@ -1271,18 +3245,18 @@ class BitsendAppState extends ChangeNotifier {
       DateTime createdAt,
       OfflineEnvelope envelope,
       ValidatedTransactionDetails details
-    ) = await _prepareSignedLocalEnvelope(lamports: lamports);
+    ) = await _prepareSignedLocalEnvelope(lamports: amountBaseUnits);
 
     if (_sendDraft.transport == TransportKind.hotspot) {
       final Uri endpoint = Uri.parse(_sendDraft.receiverEndpoint);
       await _hotspotTransportService.send(
         endpoint: endpoint,
-        envelope: envelope,
+        payload: OfflineTransportPayload.envelope(envelope),
       );
     } else if (_sendDraft.transport == TransportKind.ble) {
       await _bleTransportService.send(
         peripheralId: _sendDraft.receiverPeripheralId,
-        envelope: envelope,
+        payload: OfflineTransportPayload.envelope(envelope),
       );
     } else {
       await _ultrasonicTransportService.send(
@@ -1297,7 +3271,7 @@ class BitsendAppState extends ChangeNotifier {
       walletEngine: WalletEngine.local,
       direction: TransferDirection.outbound,
       status: TransferStatus.sentOffline,
-      amountLamports: lamports,
+      amountLamports: amountBaseUnits,
       senderAddress: _offlineWallet!.address,
       receiverAddress: _sendDraft.receiverAddress,
       transport: _sendDraft.transport,
@@ -1305,9 +3279,10 @@ class BitsendAppState extends ChangeNotifier {
       updatedAt: createdAt,
       envelope: envelope,
       remoteEndpoint: switch (_sendDraft.transport) {
+        TransportKind.online => 'Direct on-chain',
         TransportKind.hotspot => _sendDraft.receiverEndpoint,
         TransportKind.ble => _sendDraft.receiverPeripheralName,
-        TransportKind.ultrasonic => 'Bitsend Pair direct',
+        TransportKind.ultrasonic => 'Ultrasonic direct',
       },
       transactionSignature: details.transactionSignature,
     );
@@ -1322,6 +3297,342 @@ class BitsendAppState extends ChangeNotifier {
     return transfer;
   }
 
+  Future<PendingTransfer> _sendCurrentDraftOfflineVoucher({
+    required int amountBaseUnits,
+    required TrackedAssetDefinition asset,
+  }) async {
+    if (_wallet == null || _offlineWallet == null) {
+      throw const FormatException('Create or restore a wallet first.');
+    }
+    if (_sendDraft.transport == TransportKind.ultrasonic) {
+      throw const FormatException(
+        'Ultrasonic direct audio is not available for escrow voucher settlement yet. Use Hotspot or Bluetooth.',
+      );
+    }
+    if (!_activeChain.isEvm) {
+      throw const FormatException(
+        'Voucher settlement is only available on EVM chains right now.',
+      );
+    }
+    if (!asset.isNative) {
+      throw const FormatException(
+        'Voucher settlement is currently available only for the native asset.',
+      );
+    }
+
+    final OfflineVoucherEscrowSession session =
+        await _ensureOfflineVoucherEscrowSession(
+          amountBaseUnits: amountBaseUnits,
+          asset: asset,
+        );
+    final EthPrivateKey signer = await _walletService.loadEvmSigningCredentials(
+      chain: _activeChain,
+      offline: true,
+      slot: activeAccountSlot,
+    );
+    final DateTime createdAt = _clock().toUtc();
+    final String transferId = _uuid.v4();
+    final OfflineVoucherTransferBundle bundle =
+        _offlineVoucherService.composeTransferBundle(
+          session: session,
+          transferId: transferId,
+          amountBaseUnits: amountBaseUnits.toString(),
+          receiverAddress: _sendDraft.receiverAddress,
+          signer: signer,
+          transportKind: _sendDraft.transport,
+          createdAt: createdAt,
+        );
+
+    final OfflineTransportPayload payload =
+        OfflineTransportPayload.voucherBundle(bundle);
+    if (_sendDraft.transport == TransportKind.hotspot) {
+      await _hotspotTransportService.send(
+        endpoint: Uri.parse(_sendDraft.receiverEndpoint),
+        payload: payload,
+      );
+    } else if (_sendDraft.transport == TransportKind.ble) {
+      await _bleTransportService.send(
+        peripheralId: _sendDraft.receiverPeripheralId,
+        payload: payload,
+      );
+    } else {
+      throw const FormatException('Unsupported voucher transport.');
+    }
+
+    final OfflineVoucherEscrowSession reservedSession = session.copyWith(
+      inventory: _offlineVoucherService.reserveBundleEntries(
+        session: session,
+        bundle: bundle,
+      ),
+      availableAmountBaseUnits:
+          _offlineVoucherService
+              .reserveBundleEntries(session: session, bundle: bundle)
+              .where((OfflineVoucherInventoryEntry item) => item.isAvailable)
+              .fold<BigInt>(
+                BigInt.zero,
+                (
+                  BigInt total,
+                  OfflineVoucherInventoryEntry item,
+                ) => total + BigInt.parse(item.voucher.amountBaseUnits),
+              )
+              .toString(),
+    );
+    await _upsertOfflineVoucherEscrowSession(
+      _activeScopeKey,
+      reservedSession,
+    );
+
+    final PendingTransfer transfer = PendingTransfer(
+      transferId: transferId,
+      chain: _activeChain,
+      network: _activeNetwork,
+      walletEngine: WalletEngine.local,
+      direction: TransferDirection.outbound,
+      status: TransferStatus.sentOffline,
+      amountLamports: amountBaseUnits,
+      senderAddress: _offlineWallet!.address,
+      receiverAddress: _sendDraft.receiverAddress,
+      transport: _sendDraft.transport,
+      createdAt: createdAt,
+      updatedAt: createdAt,
+      assetId: asset.id,
+      assetSymbol: asset.symbol,
+      assetDisplayName: asset.displayName,
+      assetDecimals: asset.decimals,
+      assetContractAddress: asset.contractAddress,
+      isNativeAsset: asset.isNative,
+      remoteEndpoint: switch (_sendDraft.transport) {
+        TransportKind.online => 'Direct on-chain',
+        TransportKind.hotspot => _sendDraft.receiverEndpoint,
+        TransportKind.ble => _sendDraft.receiverPeripheralName,
+        TransportKind.ultrasonic => 'Ultrasonic direct',
+      },
+    );
+    await _persistTransfer(transfer);
+    _lastSentTransferId = transfer.transferId;
+    clearDraft();
+    return transfer;
+  }
+
+  Future<OfflineVoucherEscrowSession> _ensureOfflineVoucherEscrowSession({
+    required int amountBaseUnits,
+    required TrackedAssetDefinition asset,
+  }) async {
+    final List<OfflineVoucherEscrowSession> sessions =
+        offlineVoucherEscrowSessionsForActiveScope;
+    for (final OfflineVoucherEscrowSession session in sessions) {
+      if (session.assetContractAddress != asset.contractAddress) {
+        continue;
+      }
+      if (session.availableBaseUnits >= BigInt.from(amountBaseUnits)) {
+        return session;
+      }
+    }
+    if (!_hasInternet) {
+      throw const SocketException(
+        'Connect online once to mint offline voucher inventory before sending with the offline wallet.',
+      );
+    }
+    return _createOfflineVoucherEscrowSession(
+      minimumAmountBaseUnits: amountBaseUnits,
+      asset: asset,
+    );
+  }
+
+  Future<OfflineVoucherEscrowSession> _createOfflineVoucherEscrowSession({
+    required int minimumAmountBaseUnits,
+    required TrackedAssetDefinition asset,
+  }) async {
+    final String settlementContractAddress =
+        offlineVoucherSettlementContractAddress.trim();
+    if (settlementContractAddress.isEmpty) {
+      throw const FormatException(
+        'Set the offline settlement contract address for this chain before using secure offline vouchers.',
+      );
+    }
+    if (_offlineWallet == null) {
+      throw const FormatException('Offline wallet is unavailable.');
+    }
+    final EthereumPreparedContext context = await _ethereumService
+        .prepareTransferContext(_offlineWallet!.address);
+    final int gasReserve = _applyGasSpeedToWei(context.gasPriceWei) *
+        EthereumService.transferGasLimit *
+        2;
+    final int spendable = offlineSpendableLamports - gasReserve;
+    if (spendable <= 0 || minimumAmountBaseUnits > spendable) {
+      throw const FormatException(
+        'Offline wallet balance is too low to mint voucher inventory after keeping gas reserve.',
+      );
+    }
+
+    final DateTime createdAt = _clock().toUtc();
+    final DateTime expiryAt = createdAt.add(const Duration(hours: 24));
+    final OfflineVoucherEscrowSession draft =
+        _offlineVoucherService.issueEscrowSession(
+          chain: _activeChain,
+          network: _activeNetwork,
+          senderAddress: _offlineWallet!.address,
+          settlementContractAddress: settlementContractAddress,
+          assetContractAddress: asset.contractAddress,
+          escrowAmountBaseUnits: spendable.toString(),
+          spendableAmountBaseUnits: spendable.toString(),
+          gasReserveBaseUnits: gasReserve.toString(),
+          expiresAt: expiryAt,
+          createdAt: createdAt,
+        );
+    final EthPrivateKey signer = await _walletService.loadEvmSigningCredentials(
+      chain: _activeChain,
+      offline: true,
+      slot: activeAccountSlot,
+    );
+    final String txHash = await _ethereumService.createOfflineVoucherEscrowNow(
+      sender: signer,
+      senderAddress: _offlineWallet!.address,
+      contractAddress: settlementContractAddress,
+      escrowId: draft.commitment.escrowId,
+      assetContractAddress: asset.contractAddress,
+      amountBaseUnits: spendable,
+      expiryAt: expiryAt,
+      voucherRoot: draft.commitment.voucherRoot,
+    );
+    await _ethereumService.waitForConfirmation(txHash);
+
+    final OfflineVoucherEscrowSession session =
+        _offlineVoucherService.issueEscrowSession(
+          chain: _activeChain,
+          network: _activeNetwork,
+          senderAddress: _offlineWallet!.address,
+          settlementContractAddress: settlementContractAddress,
+          assetContractAddress: asset.contractAddress,
+          escrowAmountBaseUnits: spendable.toString(),
+          spendableAmountBaseUnits: spendable.toString(),
+          gasReserveBaseUnits: gasReserve.toString(),
+          expiresAt: expiryAt,
+          createdAt: createdAt,
+          escrowId: draft.commitment.escrowId,
+          creationTransactionHash: txHash,
+        );
+
+    await _offlineVoucherClientService.registerEscrow(session.commitment);
+    for (final OfflineVoucherInventoryEntry entry in session.inventory) {
+      await _offlineVoucherClientService.registerProofBundle(entry.proofBundle);
+    }
+    await _upsertOfflineVoucherEscrowSession(_activeScopeKey, session);
+    await refreshWalletData();
+    return session;
+  }
+
+  Future<PendingTransfer> _sendCurrentDraftOnline({
+    required int amountBaseUnits,
+    required TrackedAssetDefinition asset,
+  }) async {
+    if (_wallet == null) {
+      throw const FormatException('Create or restore a wallet first.');
+    }
+    if (!_hasInternet) {
+      throw const SocketException(
+        'Internet is required for a direct wallet transfer.',
+      );
+    }
+    final SendQuote quote = await quoteCurrentDraft(
+      amountSol: _sendDraft.amountSol,
+    );
+    if (asset.isNative && quote.totalDebitBaseUnits > _mainBalanceLamports) {
+      throw const FormatException(
+        'Amount exceeds the available wallet balance after network fees.',
+      );
+    }
+    if (!asset.isNative &&
+        (_mainTrackedAssetBalances[asset.id] ?? 0) < amountBaseUnits) {
+      throw FormatException(
+        'Amount exceeds the available ${asset.symbol} balance.',
+      );
+    }
+    if (quote.networkFeeBaseUnits > _mainBalanceLamports) {
+      throw FormatException(
+        'Not enough ${_activeChain.assetDisplayLabel} to cover network fees.',
+      );
+    }
+    final int? gasPriceWeiOverride = _activeChain.isEvm
+        ? _applyGasSpeedToWei(
+            (await _ethereumService.prepareTransferContext(_wallet!.address))
+                .gasPriceWei,
+          )
+        : null;
+
+    final String signature;
+    if (_activeChain == ChainKind.solana) {
+      final Ed25519HDKeyPair sender = await _walletService.loadSigningKeyPair();
+      signature = await _solanaService.sendTransferNow(
+        sender: sender,
+        receiverAddress: _sendDraft.receiverAddress,
+        lamports: amountBaseUnits,
+      );
+    } else if (asset.isNative) {
+      final EthPrivateKey sender = await _walletService.loadEvmSigningCredentials(
+        chain: _activeChain,
+      );
+      signature = await _ethereumService.sendTransferNow(
+        sender: sender,
+        senderAddress: _wallet!.address,
+        receiverAddress: _sendDraft.receiverAddress,
+        amountBaseUnits: amountBaseUnits,
+        gasPriceWeiOverride: gasPriceWeiOverride,
+      );
+    } else {
+      final EthPrivateKey sender = await _walletService.loadEvmSigningCredentials(
+        chain: _activeChain,
+      );
+      signature = await _ethereumService.sendTokenTransferNow(
+        sender: sender,
+        senderAddress: _wallet!.address,
+        receiverAddress: _sendDraft.receiverAddress,
+        contractAddress: asset.contractAddress!,
+        amountBaseUnits: amountBaseUnits,
+        gasPriceWeiOverride: gasPriceWeiOverride,
+      );
+    }
+
+    final DateTime createdAt = _clock();
+    final PendingTransfer transfer = PendingTransfer(
+      transferId: _uuid.v4(),
+      chain: _activeChain,
+      network: _activeNetwork,
+      walletEngine: WalletEngine.local,
+      direction: TransferDirection.outbound,
+      status: TransferStatus.broadcastSubmitted,
+      amountLamports: amountBaseUnits,
+      senderAddress: _wallet!.address,
+      receiverAddress: _sendDraft.receiverAddress,
+      transport: TransportKind.online,
+      createdAt: createdAt,
+      updatedAt: createdAt,
+      assetId: asset.id,
+      assetSymbol: asset.symbol,
+      assetDisplayName: asset.displayName,
+      assetDecimals: asset.decimals,
+      assetContractAddress: asset.contractAddress,
+      isNativeAsset: asset.isNative,
+      remoteEndpoint: 'Direct on-chain',
+      transactionSignature: signature,
+      explorerUrl:
+          (_activeChain == ChainKind.solana
+                  ? _solanaService.explorerUrlFor(signature)
+                  : _ethereumService.explorerUrlFor(signature))
+              .toString(),
+    );
+
+    await _persistTransfer(transfer);
+    _lastSentTransferId = transfer.transferId;
+    clearDraft();
+    await refreshWalletData();
+    if (_hasInternet) {
+      unawaited(_startRealtimeSettlementSync());
+      unawaited(refreshSubmittedTransfers());
+    }
+    return transfer;
+  }
+
   Future<PreparedRelayCapsule> prepareRelayCapsuleForCurrentDraft() async {
     if (_activeWalletEngine != WalletEngine.local) {
       throw const FormatException(
@@ -1330,14 +3641,25 @@ class BitsendAppState extends ChangeNotifier {
     }
     if (_sendDraft.transport != TransportKind.ultrasonic) {
       throw const FormatException(
-        'Browser relay is only available for Bitsend Pair sessions.',
+        'Browser relay is only available for ultrasonic sessions.',
+      );
+    }
+    final TrackedAssetDefinition asset = _sendAssetDefinitionForDraft(_sendDraft);
+    if (_shouldUseOfflineVoucherSettlement(
+      asset: asset,
+      transport: _sendDraft.transport,
+      walletEngine: _activeWalletEngine,
+      chain: _activeChain,
+    )) {
+      throw const FormatException(
+        'Browser relay is not available for secure offline voucher settlement. Use Hotspot or Bluetooth.',
       );
     }
     if (_sendDraft.receiverAddress.isEmpty ||
         _sendDraft.receiverSessionToken.isEmpty ||
         _sendDraft.receiverRelayId.isEmpty) {
       throw const FormatException(
-        'Scan the receiver pair code before creating a relay capsule.',
+        'Scan the receiver QR code before creating a relay capsule.',
       );
     }
     final int lamports = _activeChain.amountToBaseUnits(_sendDraft.amountSol);
@@ -1448,7 +3770,7 @@ class BitsendAppState extends ChangeNotifier {
     final ValidatedTransactionDetails details;
     if (_activeChain == ChainKind.solana) {
       final Ed25519HDKeyPair sender = await _walletService
-          .loadOfflineSigningKeyPair();
+          .loadOfflineSigningKeyPair(slot: activeAccountSlot);
       envelope = await _solanaService.createSignedEnvelope(
         sender: sender,
         receiverAddress: _sendDraft.receiverAddress,
@@ -1461,7 +3783,11 @@ class BitsendAppState extends ChangeNotifier {
       details = _solanaService.validateEnvelope(envelope);
     } else {
       final EthPrivateKey sender = await _walletService
-          .loadEvmSigningCredentials(chain: _activeChain, offline: true);
+          .loadEvmSigningCredentials(
+            chain: _activeChain,
+            offline: true,
+            slot: activeAccountSlot,
+          );
       envelope = await _ethereumService.createSignedEnvelope(
         sender: sender,
         senderAddress: _offlineWallet!.address,
@@ -1488,7 +3814,7 @@ class BitsendAppState extends ChangeNotifier {
     );
     if (packet.toBytes().length > UltrasonicTransferPacket.maximumEncodedLength) {
       throw const FormatException(
-        'Signed payload is too large for Bitsend Pair delivery. Use Relay via browser courier or BLE.',
+        'Signed payload is too large for ultrasonic delivery. Use browser relay or BLE.',
       );
     }
     return packet;
@@ -1500,14 +3826,14 @@ class BitsendAppState extends ChangeNotifier {
     if (!packet.isChecksumValid) {
       return const TransportReceiveResult(
         accepted: false,
-        message: 'Bitsend Pair packet checksum mismatch.',
+        message: 'Ultrasonic packet checksum mismatch.',
       );
     }
     final PendingRelaySession? session = _relaySessionForPacket(packet);
     if (session == null) {
       return const TransportReceiveResult(
         accepted: false,
-        message: 'Receiver session token does not match this Bitsend Pair packet.',
+        message: 'Receiver session token does not match this ultrasonic packet.',
       );
     }
     final OfflineEnvelope envelope = _buildEnvelopeFromUltrasonicPacket(packet);
@@ -1562,6 +3888,135 @@ class BitsendAppState extends ChangeNotifier {
     return sendCurrentDraft();
   }
 
+  Future<TransportReceiveResult> _handleIncomingVoucherBundle(
+    OfflineVoucherTransferBundle bundle,
+  ) async {
+    if (_wallet == null) {
+      return const TransportReceiveResult(
+        accepted: false,
+        message: 'Receiver wallet is not initialized.',
+      );
+    }
+    if (!bundle.chain.isEvm) {
+      return const TransportReceiveResult(
+        accepted: false,
+        message: 'Secure offline vouchers are available only on EVM chains in this build.',
+      );
+    }
+    if (bundle.chain != _activeChain || bundle.network != _activeNetwork) {
+      return TransportReceiveResult(
+        accepted: false,
+        message:
+            'Receiver is listening on ${_activeChain.networkLabelFor(_activeNetwork)}, but this voucher bundle is for ${bundle.chain.networkLabelFor(bundle.network)}.',
+      );
+    }
+    if (!bundle.isChecksumValid || !_offlineVoucherService.verifyTransferBundle(bundle)) {
+      return const TransportReceiveResult(
+        accepted: false,
+        message: 'Offline voucher bundle verification failed.',
+      );
+    }
+    if (bundle.receiverAddress.toLowerCase() != _wallet!.address.toLowerCase()) {
+      return const TransportReceiveResult(
+        accepted: false,
+        message: 'Voucher bundle is not addressed to this wallet.',
+      );
+    }
+    final DateTime now = _clock().toUtc();
+    if (bundle.payments.isEmpty) {
+      return const TransportReceiveResult(
+        accepted: false,
+        message: 'Offline voucher bundle is empty.',
+      );
+    }
+    for (final OfflineVoucherPayment payment in bundle.payments) {
+      if (!payment.isTxIdValid) {
+        return const TransportReceiveResult(
+          accepted: false,
+          message: 'Offline voucher payment integrity check failed.',
+        );
+      }
+      if (payment.voucher.expiryAt.isBefore(now)) {
+        return const TransportReceiveResult(
+          accepted: false,
+          message: 'Offline voucher has already expired.',
+        );
+      }
+      if (payment.proofBundle.isExpired) {
+        return const TransportReceiveResult(
+          accepted: false,
+          message: 'Offline voucher proof bundle has expired.',
+        );
+      }
+      final String? receiverAddress = payment.voucher.receiverAddress;
+      if (receiverAddress != null &&
+          receiverAddress.isNotEmpty &&
+          receiverAddress.toLowerCase() != bundle.receiverAddress.toLowerCase()) {
+        return const TransportReceiveResult(
+          accepted: false,
+          message: 'Offline voucher receiver binding does not match this wallet.',
+        );
+      }
+      final OfflineVoucherClaimAttempt? existingClaim =
+          _offlineVoucherClaimAttempts[payment.voucher.voucherId];
+      if (existingClaim != null) {
+        return const TransportReceiveResult(
+          accepted: true,
+          message: 'Already received.',
+        );
+      }
+    }
+    if (transferById(bundle.transferId) != null ||
+        await _store.findByTransferId(bundle.transferId) != null) {
+      return const TransportReceiveResult(
+        accepted: true,
+        message: 'Already received.',
+      );
+    }
+
+    final TransportKind transport = () {
+      final String normalized = bundle.transportHint.trim();
+      for (final TransportKind kind in TransportKind.values) {
+        if (kind.name == normalized) {
+          return kind;
+        }
+      }
+      return _receiveTransport;
+    }();
+    final TrackedAssetDefinition asset = _nativeAssetForScope(
+      bundle.chain,
+      bundle.network,
+    );
+    final PendingTransfer transfer = PendingTransfer(
+      transferId: bundle.transferId,
+      chain: bundle.chain,
+      network: bundle.network,
+      walletEngine: WalletEngine.local,
+      direction: TransferDirection.inbound,
+      status: TransferStatus.receivedPendingBroadcast,
+      amountLamports: int.parse(bundle.totalAmountBaseUnits),
+      senderAddress: bundle.senderAddress,
+      receiverAddress: bundle.receiverAddress,
+      transport: transport,
+      createdAt: bundle.createdAt,
+      updatedAt: _clock(),
+      assetId: asset.id,
+      assetSymbol: asset.symbol,
+      assetDisplayName: asset.displayName,
+      assetDecimals: asset.decimals,
+      assetContractAddress: asset.contractAddress,
+      isNativeAsset: asset.isNative,
+      remoteEndpoint: bundle.transportHint,
+    );
+    await _persistTransfer(transfer);
+    await queueOfflineVoucherTransferBundleForSettlement(bundle);
+    _lastReceivedTransferId = transfer.transferId;
+    return const TransportReceiveResult(
+      accepted: true,
+      message: 'Stored securely. Claim will be submitted when internet is available.',
+    );
+  }
+
   bool _shouldAutoFallbackBitGo(Object error) {
     if (error is SocketException || error is TimeoutException) {
       return true;
@@ -1577,7 +4032,7 @@ class BitsendAppState extends ChangeNotifier {
   Future<void> startReceiver() async {
     if (_activeWalletEngine == WalletEngine.bitgo) {
       throw const FormatException(
-        'BitGo mode does not use offline receive. Switch to Local mode to listen over hotspot, BLE, or Bitsend Pair.',
+        'BitGo mode does not use offline receive. Switch to Local mode to listen over hotspot, BLE, or ultrasonic.',
       );
     }
     if (_wallet == null) {
@@ -1589,7 +4044,7 @@ class BitsendAppState extends ChangeNotifier {
       await requestUltrasonicPermissions();
       if (!_ultrasonicPermissionsGranted) {
         throw const FormatException(
-          'Microphone access is required for Bitsend Pair receive.',
+          'Microphone access is required for ultrasonic receive.',
         );
       }
     }
@@ -1599,7 +4054,7 @@ class BitsendAppState extends ChangeNotifier {
       await _bleTransportService.stop();
       await _ultrasonicTransportService.stop();
       await _hotspotTransportService.start(
-        onEnvelope: _handleIncomingEnvelope,
+        onPayload: _handleIncomingTransportPayload,
         onActivity: _handleReceiverTransportActivity,
       );
     } else if (_receiveTransport == TransportKind.ble) {
@@ -1607,7 +4062,7 @@ class BitsendAppState extends ChangeNotifier {
       await _hotspotTransportService.stop();
       await _ultrasonicTransportService.stop();
       await _bleTransportService.start(
-        onEnvelope: _handleIncomingEnvelope,
+        onPayload: _handleIncomingTransportPayload,
         receiverChain: _activeChain,
         receiverNetwork: _activeNetwork,
         receiverDisplayAddress: _wallet!.displayAddress,
@@ -1626,11 +4081,25 @@ class BitsendAppState extends ChangeNotifier {
         );
       } catch (_) {
         _announce(
-          'Bitsend Pair is ready. Direct audio delivery is unavailable on this build, but the pair code can still be used for browser relay.',
+          'Ultrasonic receive is ready. Direct audio delivery is unavailable on this build, but the QR code can still be used for browser relay.',
         );
       }
       _ultrasonicListenerRunning = true;
     }
+    notifyListeners();
+  }
+
+  Future<void> setSwapApiKey(String value) async {
+    final String trimmed = value.trim();
+    _swapApiKey = trimmed.isEmpty ? defaultZeroExSwapApiKey : trimmed;
+    _effectiveSwapService.apiKey = _swapApiKey;
+    await _store.saveSetting('swap_api_key', trimmed);
+    notifyListeners();
+  }
+
+  Future<void> setSwapSlippageBps(int? value) async {
+    _swapSlippageBps = _normalizeSwapSlippageBps(value);
+    await _store.saveSetting('swap_slippage_bps', _swapSlippageBps);
     notifyListeners();
   }
 
@@ -1672,10 +4141,12 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   Future<void> refreshSubmittedTransfers() async {
+    await _syncAllOfflineVoucherTransferStatuses();
     final List<PendingTransfer> submitted = _pendingTransfers
         .where((PendingTransfer transfer) {
           return transfer.walletEngine == WalletEngine.local &&
               transfer.transactionSignature != null &&
+              transfer.transactionSignature!.trim().isNotEmpty &&
               transfer.chain == _activeChain &&
               transfer.network == _activeNetwork &&
               (transfer.status == TransferStatus.sentOffline ||
@@ -1843,7 +4314,7 @@ class BitsendAppState extends ChangeNotifier {
         .map(
           (PendingTransfer transfer) => PendingTransferListItem(
             transferId: transfer.transferId,
-            amountLabel: Formatters.asset(transfer.amountSol, transfer.chain),
+            amountLabel: Formatters.transferAmount(transfer),
             counterpartyLabel: Formatters.shortAddress(
               transfer.counterpartyAddress,
             ),
@@ -1855,7 +4326,7 @@ class BitsendAppState extends ChangeNotifier {
         .toList(growable: false);
   }
 
-  List<PendingTransfer> recentActivity() => pendingTransfers
+  List<PendingTransfer> recentActivity() => transferHistory
       .where(
         (PendingTransfer transfer) =>
             transfer.chain == _activeChain &&
@@ -1874,6 +4345,29 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   List<TransferTimelineState> timelineFor(PendingTransfer transfer) {
+    List<TransferTimelineState> buildTimeline(
+      List<_TimelineNode> steps,
+      int currentIndex,
+    ) {
+      final List<TransferTimelineState> timeline = <TransferTimelineState>[];
+      for (int index = 0; index < steps.length; index++) {
+        final _TimelineNode step = steps[index];
+        timeline.add(
+          TransferTimelineState(
+            title: step.title,
+            caption: step.caption,
+            isComplete:
+                index < currentIndex ||
+                (transfer.status == TransferStatus.confirmed &&
+                    index <= currentIndex),
+            isCurrent: index == currentIndex,
+            isError: transfer.status.isError && index == currentIndex,
+          ),
+        );
+      }
+      return timeline;
+    }
+
     if (transfer.walletEngine == WalletEngine.bitgo) {
       final int currentIndex = switch (transfer.status) {
         TransferStatus.created => 0,
@@ -1902,23 +4396,71 @@ class BitsendAppState extends ChangeNotifier {
           caption: 'The transfer reached confirmed on-chain status.',
         ),
       ];
-      final List<TransferTimelineState> timeline = <TransferTimelineState>[];
-      for (int index = 0; index < steps.length; index++) {
-        final _TimelineNode step = steps[index];
-        timeline.add(
-          TransferTimelineState(
-            title: step.title,
-            caption: step.caption,
-            isComplete:
-                index < currentIndex ||
-                (transfer.status == TransferStatus.confirmed &&
-                    index <= currentIndex),
-            isCurrent: index == currentIndex,
-            isError: transfer.status.isError && index == currentIndex,
-          ),
-        );
-      }
-      return timeline;
+      return buildTimeline(steps, currentIndex);
+    }
+
+    if (transfer.isDirectOnchainTransfer) {
+      final List<_TimelineNode> steps = <_TimelineNode>[
+        const _TimelineNode(
+          title: 'Prepared',
+          caption:
+              'Transaction was prepared and signed locally from the sending wallet.',
+        ),
+        const _TimelineNode(
+          title: 'Submitted',
+          caption: 'The chain RPC accepted the transaction signature.',
+        ),
+        const _TimelineNode(
+          title: 'Confirmed',
+          caption: 'The transfer reached confirmed status on-chain.',
+        ),
+      ];
+      final int currentIndex = switch (transfer.status) {
+        TransferStatus.created => 0,
+        TransferStatus.sentOffline ||
+        TransferStatus.receivedPendingBroadcast ||
+        TransferStatus.broadcasting ||
+        TransferStatus.broadcastSubmitted => 1,
+        TransferStatus.confirmed => 2,
+        TransferStatus.broadcastFailed || TransferStatus.expired => 1,
+      };
+      return buildTimeline(steps, currentIndex);
+    }
+
+    if (transfer.usesVoucherSettlement) {
+      final List<_TimelineNode> steps = <_TimelineNode>[
+        _TimelineNode(
+          title: transfer.isInbound ? 'Accepted offline' : 'Sent offline',
+          caption: transfer.isInbound
+              ? 'Receiver verified the escrow-backed voucher bundle locally.'
+              : 'Escrow-backed voucher bundle was delivered over the local link.',
+        ),
+        const _TimelineNode(
+          title: 'Claiming',
+          caption:
+              'Bitsend is preparing an on-chain claim against the funded escrow.',
+        ),
+        const _TimelineNode(
+          title: 'Submitted',
+          caption:
+              'The claim transaction was submitted to the settlement contract.',
+        ),
+        const _TimelineNode(
+          title: 'Confirmed',
+          caption: 'The escrow claim is confirmed on-chain.',
+        ),
+      ];
+
+      final int currentIndex = switch (transfer.status) {
+        TransferStatus.created ||
+        TransferStatus.sentOffline ||
+        TransferStatus.receivedPendingBroadcast => 0,
+        TransferStatus.broadcasting => 1,
+        TransferStatus.broadcastSubmitted => 2,
+        TransferStatus.confirmed => 3,
+        TransferStatus.broadcastFailed || TransferStatus.expired => 1,
+      };
+      return buildTimeline(steps, currentIndex);
     }
 
     final List<_TimelineNode> steps = <_TimelineNode>[
@@ -1958,23 +4500,7 @@ class BitsendAppState extends ChangeNotifier {
       TransferStatus.broadcastFailed || TransferStatus.expired => 2,
     };
 
-    final List<TransferTimelineState> timeline = <TransferTimelineState>[];
-    for (int index = 0; index < steps.length; index++) {
-      final _TimelineNode step = steps[index];
-      timeline.add(
-        TransferTimelineState(
-          title: step.title,
-          caption: step.caption,
-          isComplete:
-              index < currentIndex ||
-              (transfer.status == TransferStatus.confirmed &&
-                  index <= currentIndex),
-          isCurrent: index == currentIndex,
-          isError: transfer.status.isError && index == currentIndex,
-        ),
-      );
-    }
-    return timeline;
+    return buildTimeline(steps, currentIndex);
   }
 
   Future<void> clearLocalData() async {
@@ -1998,6 +4524,14 @@ class BitsendAppState extends ChangeNotifier {
         defaultBaseTestnetRpcEndpoint;
     _rpcEndpoints[_scopeKey(ChainKind.base, ChainNetwork.mainnet)] =
         defaultBaseMainnetRpcEndpoint;
+    _rpcEndpoints[_scopeKey(ChainKind.bnb, ChainNetwork.testnet)] =
+        defaultBnbTestnetRpcEndpoint;
+    _rpcEndpoints[_scopeKey(ChainKind.bnb, ChainNetwork.mainnet)] =
+        defaultBnbMainnetRpcEndpoint;
+    _rpcEndpoints[_scopeKey(ChainKind.polygon, ChainNetwork.testnet)] =
+        defaultPolygonTestnetRpcEndpoint;
+    _rpcEndpoints[_scopeKey(ChainKind.polygon, ChainNetwork.mainnet)] =
+        defaultPolygonMainnetRpcEndpoint;
     _rpcEndpoint = defaultEthereumTestnetRpcEndpoint;
     _solanaService.rpcEndpoint = defaultSolanaTestnetRpcEndpoint;
     _solanaService.network = ChainNetwork.testnet;
@@ -2013,6 +4547,8 @@ class BitsendAppState extends ChangeNotifier {
     _bitgoBackendMode = BitGoBackendMode.unknown;
     _wallets.clear();
     _offlineWallets.clear();
+    _selectedAccountSlots.clear();
+    _accountCounts.clear();
     _walletEngines.clear();
     _bitgoWallets.clear();
     _cachedBlockhash = null;
@@ -2021,11 +4557,22 @@ class BitsendAppState extends ChangeNotifier {
     _offlineBalanceLamports = 0;
     _mainBalances.clear();
     _offlineBalances.clear();
+    _mainTrackedAssetBalances.clear();
+    _offlineTrackedAssetBalances.clear();
+    _contacts.clear();
+    _allowanceEntries.clear();
+    _discoveredTrackedAssets.clear();
+    _erc20DiscoveryHighWaterMarks.clear();
+    _nftHoldingsByScope.clear();
+    _usdPrices.clear();
     _bitgoEndpoint = defaultBitGoBackendEndpoint;
     _bitGoClientService.endpoint = defaultBitGoBackendEndpoint;
     _bitGoClientService.clearSession();
     _fileverseClientService.endpoint = defaultBitGoBackendEndpoint;
     _fileverseClientService.clearSession();
+    _swapApiKey = defaultZeroExSwapApiKey;
+    _swapSlippageBps = null;
+    _effectiveSwapService.apiKey = _swapApiKey;
     _relayClientService.endpoint = defaultBitGoBackendEndpoint;
     _sendDraft = const SendDraft();
     _receiveTransport = TransportKind.hotspot;
@@ -2035,6 +4582,9 @@ class BitsendAppState extends ChangeNotifier {
     _ultrasonicListenerRunning = false;
     _activeUltrasonicSession = null;
     _pendingRelaySessions.clear();
+    _offlineVoucherEscrowSessionsByScope.clear();
+    _offlineVoucherSettlementContracts.clear();
+    _offlineVoucherClaimAttempts.clear();
     _lastSentTransferId = null;
     _lastReceivedTransferId = null;
     _statusMessage = null;
@@ -2042,6 +4592,8 @@ class BitsendAppState extends ChangeNotifier {
     _deviceAuthAvailable = false;
     _deviceAuthHasBiometricOption = false;
     _deviceUnlocked = true;
+    _pendingHomeWidgetRoute = null;
+    await _syncHomeScreenWidgets();
     notifyListeners();
   }
 
@@ -2056,6 +4608,7 @@ class BitsendAppState extends ChangeNotifier {
     } else {
       _pendingTransfers[index] = transfer;
     }
+    _scheduleAutoReadinessRefresh();
     notifyListeners();
   }
 
@@ -2207,6 +4760,245 @@ class BitsendAppState extends ChangeNotifier {
     _syncActiveUltrasonicSessionForScope();
   }
 
+  Future<void> _loadOfflineVoucherClaimAttempts() async {
+    _offlineVoucherClaimAttempts.clear();
+    final List<dynamic>? rawClaims = await _store.loadSetting<List<dynamic>>(
+      _offlineVoucherClaimsKey,
+    );
+    if (rawClaims == null) {
+      return;
+    }
+    for (final dynamic item in rawClaims) {
+      if (item is! Map) {
+        continue;
+      }
+      try {
+        final OfflineVoucherClaimAttempt claim =
+            OfflineVoucherClaimAttempt.fromJson(
+              Map<String, dynamic>.from(item),
+            );
+        _offlineVoucherClaimAttempts[claim.voucherId] = claim;
+      } catch (_) {
+        // Ignore corrupted persisted queue entries so the app can recover.
+      }
+    }
+    await _syncAllOfflineVoucherTransferStatuses();
+  }
+
+  Future<void> _saveOfflineVoucherClaimAttempts() {
+    return _store.saveSetting(
+      _offlineVoucherClaimsKey,
+      _offlineVoucherClaimAttempts.values
+          .map((OfflineVoucherClaimAttempt claim) => claim.toJson())
+          .toList(growable: false),
+    );
+  }
+
+  Future<void> _loadOfflineVoucherEscrowSessions() async {
+    _offlineVoucherEscrowSessionsByScope.clear();
+    final Map<String, dynamic>? raw = await _store.loadSetting<Map<String, dynamic>>(
+      _offlineVoucherEscrowSessionsKey,
+    );
+    if (raw == null) {
+      return;
+    }
+    for (final MapEntry<String, dynamic> entry in raw.entries) {
+      if (entry.value is! List) {
+        continue;
+      }
+      final List<OfflineVoucherEscrowSession> sessions =
+          <OfflineVoucherEscrowSession>[];
+      for (final dynamic item in entry.value as List<dynamic>) {
+        if (item is! Map) {
+          continue;
+        }
+        try {
+          sessions.add(
+            OfflineVoucherEscrowSession.fromJson(
+              Map<String, dynamic>.from(item),
+            ),
+          );
+        } catch (_) {
+          // Ignore corrupted cached sessions.
+        }
+      }
+      _offlineVoucherEscrowSessionsByScope[entry.key] = sessions;
+    }
+  }
+
+  Future<void> _saveOfflineVoucherEscrowSessions() {
+    final Map<String, Object?> payload = <String, Object?>{
+      for (final MapEntry<String, List<OfflineVoucherEscrowSession>> entry
+          in _offlineVoucherEscrowSessionsByScope.entries)
+        entry.key: entry.value
+            .map((OfflineVoucherEscrowSession session) => session.toJson())
+            .toList(growable: false),
+    };
+    return _store.saveSetting(_offlineVoucherEscrowSessionsKey, payload);
+  }
+
+  Future<void> _loadOfflineVoucherSettlementContracts() async {
+    _offlineVoucherSettlementContracts.clear();
+    final Map<String, dynamic>? raw = await _store.loadSetting<Map<String, dynamic>>(
+      _offlineVoucherSettlementContractsKey,
+    );
+    if (raw == null) {
+      return;
+    }
+    for (final MapEntry<String, dynamic> entry in raw.entries) {
+      final String value = '${entry.value ?? ''}'.trim();
+      if (value.isEmpty) {
+        continue;
+      }
+      _offlineVoucherSettlementContracts[entry.key] = value;
+    }
+  }
+
+  Future<void> _saveOfflineVoucherSettlementContracts() {
+    return _store.saveSetting(
+      _offlineVoucherSettlementContractsKey,
+      _offlineVoucherSettlementContracts,
+    );
+  }
+
+  Future<void> _upsertOfflineVoucherEscrowSession(
+    String scopeKey,
+    OfflineVoucherEscrowSession session,
+  ) async {
+    final List<OfflineVoucherEscrowSession> sessions =
+        List<OfflineVoucherEscrowSession>.from(
+      _offlineVoucherEscrowSessionsByScope[scopeKey] ??
+          const <OfflineVoucherEscrowSession>[],
+    );
+    final int index = sessions.indexWhere(
+      (OfflineVoucherEscrowSession item) =>
+          item.commitment.escrowId == session.commitment.escrowId,
+    );
+    if (index == -1) {
+      sessions.add(session);
+    } else {
+      sessions[index] = session;
+    }
+    _offlineVoucherEscrowSessionsByScope[scopeKey] = sessions;
+    await _saveOfflineVoucherEscrowSessions();
+    notifyListeners();
+  }
+
+  Future<void> queueOfflineVoucherTransferBundleForSettlement(
+    OfflineVoucherTransferBundle bundle,
+  ) async {
+    final int slot = _selectedAccountSlots[bundle.chain] ?? 0;
+    final DateTime now = _clock().toUtc();
+    for (final OfflineVoucherPayment payment in bundle.payments) {
+        _offlineVoucherClaimAttempts[payment.voucher.voucherId] =
+          OfflineVoucherClaimAttempt(
+            version: OfflineVoucherClaimAttempt.currentVersion,
+            transferId: bundle.transferId,
+            voucherId: payment.voucher.voucherId,
+            txId: payment.txId,
+            escrowId: payment.voucher.escrowId,
+            chain: bundle.chain,
+            network: bundle.network,
+            accountSlot: slot,
+            claimerAddress: bundle.receiverAddress,
+            settlementContractAddress: bundle.settlementContractAddress,
+            voucher: payment.voucher,
+            assignmentSignatureHex: payment.senderSignature,
+            voucherProof: payment.proofBundle.voucherProof,
+            status: OfflineVoucherClaimStatus.accepted,
+            queuedAt: now,
+            nextAttemptAt: now,
+          );
+    }
+    await _saveOfflineVoucherClaimAttempts();
+    await _syncOfflineVoucherTransferStatus(bundle.transferId);
+    notifyListeners();
+    if (_hasInternet) {
+      unawaited(_processOfflineVoucherClaimQueue());
+    }
+  }
+
+  Future<OfflineVoucherRefundEligibility?> fetchOfflineVoucherRefundEligibility(
+    String escrowId,
+  ) {
+    return _offlineVoucherClientService.fetchRefundEligibility(escrowId);
+  }
+
+  Future<void> _loadDiscoveredTrackedAssets() async {
+    _discoveredTrackedAssets.clear();
+    final Map<String, dynamic>? raw = await _store.loadSetting<Map<String, dynamic>>(
+      _discoveredTrackedAssetsKey,
+    );
+    if (raw == null) {
+      return;
+    }
+    for (final MapEntry<String, dynamic> entry in raw.entries) {
+      if (entry.value is! List) {
+        continue;
+      }
+      final Map<String, TrackedAssetDefinition> assetsForScope =
+          <String, TrackedAssetDefinition>{};
+      for (final dynamic item in entry.value as List<dynamic>) {
+        if (item is! Map) {
+          continue;
+        }
+        try {
+          final TrackedAssetDefinition asset = TrackedAssetDefinition.fromJson(
+            Map<String, dynamic>.from(item),
+          );
+          if (asset.isNative) {
+            continue;
+          }
+          assetsForScope[trackedAssetLookupKey(asset)] = asset;
+        } catch (_) {
+          // Ignore malformed cached asset metadata.
+        }
+      }
+      if (assetsForScope.isNotEmpty) {
+        _discoveredTrackedAssets[entry.key] = assetsForScope;
+      }
+    }
+  }
+
+  Future<void> _saveDiscoveredTrackedAssets() async {
+    final Map<String, Object?> payload = <String, Object?>{};
+    for (final MapEntry<String, Map<String, TrackedAssetDefinition>> entry
+        in _discoveredTrackedAssets.entries) {
+      if (entry.value.isEmpty) {
+        continue;
+      }
+      payload[entry.key] = entry.value.values
+          .map((TrackedAssetDefinition asset) => asset.toJson())
+          .toList(growable: false);
+    }
+    await _store.saveSetting(_discoveredTrackedAssetsKey, payload);
+  }
+
+  Future<void> _loadErc20DiscoveryHighWaterMarks() async {
+    _erc20DiscoveryHighWaterMarks.clear();
+    final Map<String, dynamic>? raw = await _store.loadSetting<Map<String, dynamic>>(
+      _erc20DiscoveryHighWaterMarksKey,
+    );
+    if (raw == null) {
+      return;
+    }
+    for (final MapEntry<String, dynamic> entry in raw.entries) {
+      final Object? value = entry.value;
+      if (value is int) {
+        _erc20DiscoveryHighWaterMarks[entry.key] = value;
+      } else if (value is num) {
+        _erc20DiscoveryHighWaterMarks[entry.key] = value.toInt();
+      }
+    }
+  }
+
+  Future<void> _saveErc20DiscoveryHighWaterMarks() async {
+    await _store.saveSetting(
+      _erc20DiscoveryHighWaterMarksKey,
+      _erc20DiscoveryHighWaterMarks,
+    );
+  }
+
   Future<void> _savePendingRelaySessions() async {
     await _store.saveSetting(
       _relaySessionsKey,
@@ -2242,6 +5034,84 @@ class BitsendAppState extends ChangeNotifier {
             return latest;
           },
         );
+  }
+
+  Future<void> _loadContacts() async {
+    _contacts.clear();
+    final List<dynamic>? raw = await _store.loadSetting<List<dynamic>>(
+      _contactsKey,
+    );
+    if (raw == null) {
+      return;
+    }
+    for (final dynamic item in raw) {
+      if (item is! Map) {
+        continue;
+      }
+      try {
+        _contacts.add(SendContact.fromJson(Map<String, dynamic>.from(item)));
+      } catch (_) {
+        // Ignore malformed cached contacts.
+      }
+    }
+    _contacts.sort((SendContact a, SendContact b) => a.name.compareTo(b.name));
+  }
+
+  Future<void> _saveContacts() async {
+    await _store.saveSetting(
+      _contactsKey,
+      _contacts
+          .map((SendContact contact) => contact.toJson())
+          .toList(growable: false),
+    );
+  }
+
+  Future<void> _loadAllowanceEntries() async {
+    _allowanceEntries.clear();
+    final List<dynamic>? raw = await _store.loadSetting<List<dynamic>>(
+      _allowanceEntriesKey,
+    );
+    if (raw == null) {
+      return;
+    }
+    for (final dynamic item in raw) {
+      if (item is! Map) {
+        continue;
+      }
+      try {
+        _allowanceEntries.add(
+          TokenAllowanceEntry.fromJson(Map<String, dynamic>.from(item)),
+        );
+      } catch (_) {
+        // Ignore malformed cached allowance entries.
+      }
+    }
+    _allowanceEntries.sort(
+      (TokenAllowanceEntry a, TokenAllowanceEntry b) =>
+          b.updatedAt.compareTo(a.updatedAt),
+    );
+  }
+
+  Future<void> _saveAllowanceEntries() async {
+    await _store.saveSetting(
+      _allowanceEntriesKey,
+      _allowanceEntries
+          .map((TokenAllowanceEntry entry) => entry.toJson())
+          .toList(growable: false),
+    );
+  }
+
+  Future<void> _upsertAllowanceEntry(TokenAllowanceEntry entry) async {
+    _allowanceEntries.removeWhere(
+      (TokenAllowanceEntry existing) => existing.id == entry.id,
+    );
+    _allowanceEntries.add(entry);
+    _allowanceEntries.sort(
+      (TokenAllowanceEntry a, TokenAllowanceEntry b) =>
+          b.updatedAt.compareTo(a.updatedAt),
+    );
+    await _saveAllowanceEntries();
+    notifyListeners();
   }
 
   Future<void> _importPendingRelayCapsules() async {
@@ -2448,11 +5318,11 @@ class BitsendAppState extends ChangeNotifier {
       _hasDevnet = false;
     }
     _hasInternet = _hasDevnet;
+    _scheduleAutoReadinessRefresh();
     notifyListeners();
   }
 
   Future<void> _refreshLocalPermissions() async {
-    final PermissionStatus location = await Permission.locationWhenInUse.status;
     final PermissionStatus bluetoothScan =
         await Permission.bluetoothScan.status;
     final PermissionStatus bluetoothConnect =
@@ -2462,7 +5332,6 @@ class BitsendAppState extends ChangeNotifier {
     final PermissionStatus microphone = await Permission.microphone.status;
     _localPermissionsGranted =
         <PermissionStatus>[
-          location,
           bluetoothScan,
           bluetoothConnect,
           bluetoothAdvertise,
@@ -2501,7 +5370,7 @@ class BitsendAppState extends ChangeNotifier {
         return;
       } catch (_) {
         throw const FormatException(
-          'Refresh offline send readiness while online before sending from the offline wallet.',
+          'Connect online so Bitsend can refresh offline send readiness before sending from the offline wallet.',
         );
       }
     }
@@ -2527,7 +5396,7 @@ class BitsendAppState extends ChangeNotifier {
     if (_cachedEthereumContext == null || _isCachedEthereumContextExpired) {
       if (!_hasInternet || _offlineWallet == null) {
         throw const FormatException(
-          'Refresh offline send readiness while online before sending from the offline wallet.',
+          'Connect online so Bitsend can refresh offline send readiness before sending from the offline wallet.',
         );
       }
       await _updateCachedEthereumContext(
@@ -2554,33 +5423,39 @@ class BitsendAppState extends ChangeNotifier {
     _cachedEthereumContext = null;
     final Map<String, dynamic>? cachedBlockhashJson = await _store
         .loadSetting<Map<String, dynamic>>(
-          _cachedBlockhashKey(_activeScopeKey),
+          _cachedBlockhashKey(_activeReadinessScopeKey),
         );
     if (cachedBlockhashJson != null) {
       _cachedBlockhash = CachedBlockhash.fromJson(cachedBlockhashJson);
     }
     final Map<String, dynamic>? cachedEthereumContextJson = await _store
         .loadSetting<Map<String, dynamic>>(
-          _cachedEthereumContextKey(_activeScopeKey),
+          _cachedEthereumContextKey(_activeReadinessScopeKey),
         );
     if (cachedEthereumContextJson != null) {
       _cachedEthereumContext = EthereumPreparedContext.fromJson(
         cachedEthereumContextJson,
       );
     }
+    _scheduleAutoReadinessRefresh();
   }
 
   Future<void> _updateCachedBlockhash(CachedBlockhash blockhash) async {
     _cachedBlockhash = blockhash;
     await _store.saveSetting(
-      _cachedBlockhashKey(_activeScopeKey),
+      _cachedBlockhashKey(_activeReadinessScopeKey),
       blockhash.toJson(),
     );
+    _scheduleAutoReadinessRefresh();
   }
 
   Future<void> _clearCachedBlockhash() async {
     _cachedBlockhash = null;
-    await _store.saveSetting(_cachedBlockhashKey(_activeScopeKey), null);
+    await _store.saveSetting(
+      _cachedBlockhashKey(_activeReadinessScopeKey),
+      null,
+    );
+    _scheduleAutoReadinessRefresh();
   }
 
   Future<void> _updateCachedEthereumContext(
@@ -2588,9 +5463,145 @@ class BitsendAppState extends ChangeNotifier {
   ) async {
     _cachedEthereumContext = context;
     await _store.saveSetting(
-      _cachedEthereumContextKey(_activeScopeKey),
+      _cachedEthereumContextKey(_activeReadinessScopeKey),
       context.toJson(),
     );
+    _scheduleAutoReadinessRefresh();
+  }
+
+  bool get _shouldAutoRefreshReadiness {
+    return _initialized &&
+        _activeWalletEngine == WalletEngine.local &&
+        _offlineWallet != null &&
+        hasOfflineFunds &&
+        _hasInternet;
+  }
+
+  bool get _readinessNeedsAutoRefresh {
+    if (!_shouldAutoRefreshReadiness) {
+      return false;
+    }
+    if (_activeChain == ChainKind.solana) {
+      if (_cachedBlockhash == null) {
+        return true;
+      }
+      final Duration age = _clock().difference(_cachedBlockhash!.fetchedAt);
+      return age >=
+          blockhashFreshnessWindow - solanaReadinessAutoRefreshLead;
+    }
+    if (_cachedEthereumContext == null) {
+      return true;
+    }
+    final Duration age = _clock().difference(_cachedEthereumContext!.fetchedAt);
+    return age >=
+        ethereumContextFreshnessWindow - evmReadinessAutoRefreshLead;
+  }
+
+  Duration _nextAutoReadinessRefreshDelay() {
+    if (!_shouldAutoRefreshReadiness) {
+      return Duration.zero;
+    }
+    if (_activeChain == ChainKind.solana) {
+      if (_cachedBlockhash == null) {
+        return Duration.zero;
+      }
+      final Duration remaining =
+          blockhashFreshnessWindow -
+          _clock().difference(_cachedBlockhash!.fetchedAt) -
+          solanaReadinessAutoRefreshLead;
+      return remaining.isNegative ? Duration.zero : remaining;
+    }
+    if (_cachedEthereumContext == null) {
+      return Duration.zero;
+    }
+    final Duration remaining =
+        ethereumContextFreshnessWindow -
+        _clock().difference(_cachedEthereumContext!.fetchedAt) -
+        evmReadinessAutoRefreshLead;
+    return remaining.isNegative ? Duration.zero : remaining;
+  }
+
+  void _scheduleAutoReadinessRefresh({Duration? retryDelay}) {
+    _autoReadinessRefreshTimer?.cancel();
+    _autoReadinessRefreshTimer = null;
+    if (!_shouldAutoRefreshReadiness) {
+      return;
+    }
+    final Duration delay = retryDelay ?? _nextAutoReadinessRefreshDelay();
+    _autoReadinessRefreshTimer = Timer(delay, () {
+      unawaited(_autoRefreshReadinessIfNeeded());
+    });
+  }
+
+  Future<void> _autoRefreshReadinessIfNeeded() async {
+    _autoReadinessRefreshTimer?.cancel();
+    _autoReadinessRefreshTimer = null;
+    if (!_shouldAutoRefreshReadiness) {
+      return;
+    }
+    if (_autoRefreshingReadiness) {
+      return;
+    }
+    if (_working) {
+      _scheduleAutoReadinessRefresh(
+        retryDelay: const Duration(seconds: 5),
+      );
+      return;
+    }
+    if (!_readinessNeedsAutoRefresh) {
+      _scheduleAutoReadinessRefresh();
+      return;
+    }
+
+    _autoRefreshingReadiness = true;
+    notifyListeners();
+    final String scopeKey = _activeScopeKey;
+    final ChainKind chain = _activeChain;
+    final ChainNetwork network = _activeNetwork;
+    final String? offlineAddress = _offlineWallet?.address;
+    bool refreshed = false;
+    try {
+      if (offlineAddress == null) {
+        return;
+      }
+      if (chain == ChainKind.solana) {
+        final CachedBlockhash blockhash = await _solanaService
+            .getFreshBlockhash();
+        if (_activeScopeKey == scopeKey &&
+            _activeChain == chain &&
+            _activeNetwork == network &&
+            _activeWalletEngine == WalletEngine.local &&
+            _offlineWallet?.address == offlineAddress) {
+          await _updateCachedBlockhash(blockhash);
+          refreshed = true;
+        }
+      } else {
+        final EthereumPreparedContext context = await _ethereumService
+            .prepareTransferContext(offlineAddress);
+        if (_activeScopeKey == scopeKey &&
+            _activeChain == chain &&
+            _activeNetwork == network &&
+            _activeWalletEngine == WalletEngine.local &&
+            _offlineWallet?.address == offlineAddress) {
+          await _updateCachedEthereumContext(context);
+          refreshed = true;
+        }
+      }
+    } catch (_) {
+      _scheduleAutoReadinessRefresh(retryDelay: readinessAutoRetryDelay);
+    } finally {
+      _autoRefreshingReadiness = false;
+      if (!refreshed) {
+        _scheduleAutoReadinessRefresh(
+          retryDelay: _shouldAutoRefreshReadiness
+              ? readinessAutoRetryDelay
+              : null,
+        );
+      } else {
+        _scheduleAutoReadinessRefresh();
+      }
+      notifyListeners();
+    }
   }
 
   Future<void> _startRealtimeSettlementSync() async {
@@ -2617,6 +5628,414 @@ class BitsendAppState extends ChangeNotifier {
     } finally {
       _realtimeSettlementSyncRunning = false;
     }
+  }
+
+  Future<void> _processOfflineVoucherClaimQueue() async {
+    if (_offlineVoucherClaimSyncRunning ||
+        !_hasInternet ||
+        _offlineVoucherClaimAttempts.isEmpty) {
+      return;
+    }
+    _offlineVoucherClaimSyncRunning = true;
+    try {
+      final DateTime now = _clock().toUtc();
+      final List<OfflineVoucherClaimAttempt> dueClaims =
+          _offlineVoucherClaimAttempts.values
+              .where(
+                (OfflineVoucherClaimAttempt claim) =>
+                    !claim.isTerminal &&
+                    !claim.nextAttemptAt.isAfter(now),
+              )
+              .toList(growable: false)
+            ..sort(
+              (
+                OfflineVoucherClaimAttempt a,
+                OfflineVoucherClaimAttempt b,
+              ) => a.nextAttemptAt.compareTo(b.nextAttemptAt),
+            );
+      for (final OfflineVoucherClaimAttempt claim in dueClaims) {
+        await _processSingleOfflineVoucherClaim(claim);
+      }
+    } finally {
+      _offlineVoucherClaimSyncRunning = false;
+      _applyActiveChainSnapshot();
+    }
+  }
+
+  Future<void> _processSingleOfflineVoucherClaim(
+    OfflineVoucherClaimAttempt claim,
+  ) async {
+    final DateTime now = _clock().toUtc();
+    if (!claim.chain.isEvm) {
+      await _persistOfflineVoucherClaimAttempt(
+        claim.copyWith(
+          status: OfflineVoucherClaimStatus.invalidRejected,
+          lastAttemptedAt: now,
+          lastError:
+              'Offline voucher settlement is EVM-only in this build.',
+        ),
+      );
+      return;
+    }
+
+    final OfflineVoucherClaimSubmission submission =
+        OfflineVoucherClaimSubmission(
+          version: OfflineVoucherClaimSubmission.currentVersion,
+          voucherId: claim.voucherId,
+          txId: claim.txId,
+          escrowId: claim.escrowId,
+          claimerAddress: claim.claimerAddress,
+          createdAt: now,
+        );
+
+    try {
+      final OfflineVoucherClaimRecord backendClaim =
+          await _offlineVoucherClientService.submitClaim(submission);
+      if (backendClaim.status == OfflineVoucherClaimStatus.expiredRejected ||
+          backendClaim.status == OfflineVoucherClaimStatus.invalidRejected ||
+          backendClaim.status == OfflineVoucherClaimStatus.duplicateRejected) {
+        await _persistOfflineVoucherClaimAttempt(
+          claim.copyWith(
+            status: backendClaim.status,
+            submissionMode: backendClaim.submissionMode,
+            lastAttemptedAt: now,
+            lastError: backendClaim.lastError ?? backendClaim.status.name,
+          ),
+        );
+        return;
+      }
+    } on FormatException catch (error) {
+      await _scheduleOfflineVoucherClaimRetry(
+        claim,
+        error.message,
+        attemptedAt: now,
+      );
+      return;
+    }
+
+    _ethereumService
+      ..chain = claim.chain
+      ..network = claim.network
+      ..rpcEndpoint =
+          _rpcEndpoints[_scopeKey(claim.chain, claim.network)] ??
+          _defaultRpcEndpointFor(claim.chain, claim.network);
+
+    try {
+      final bool alreadyClaimed = await _ethereumService.isOfflineVoucherClaimed(
+        contractAddress: claim.settlementContractAddress,
+        voucherId: claim.voucherId,
+      );
+      if (alreadyClaimed) {
+        await _offlineVoucherClientService.updateClaimSettlement(
+          OfflineVoucherClaimSettlementUpdate(
+            version: OfflineVoucherClaimSettlementUpdate.currentVersion,
+            voucherId: claim.voucherId,
+            txId: claim.txId,
+            escrowId: claim.escrowId,
+            status: OfflineVoucherClaimStatus.confirmedOnchain,
+            updatedAt: now,
+          ),
+        );
+        await _persistOfflineVoucherClaimAttempt(
+          claim.copyWith(
+            status: OfflineVoucherClaimStatus.confirmedOnchain,
+            lastAttemptedAt: now,
+            confirmedAt: now,
+            clearLastError: true,
+          ),
+        );
+        return;
+      }
+
+      if (claim.submittedTransactionHash != null &&
+          claim.submittedTransactionHash!.isNotEmpty) {
+        final TransactionReceipt? receipt = await _ethereumService
+            .getTransactionReceipt(claim.submittedTransactionHash!);
+        if (receipt == null) {
+          await _persistOfflineVoucherClaimAttempt(
+            claim.copyWith(
+              status: OfflineVoucherClaimStatus.submittedOnchain,
+              lastAttemptedAt: now,
+              nextAttemptAt: now.add(offlineVoucherClaimReceiptPollDelay),
+            ),
+          );
+          return;
+        }
+        if (receipt.status == true) {
+          await _offlineVoucherClientService.updateClaimSettlement(
+            OfflineVoucherClaimSettlementUpdate(
+              version: OfflineVoucherClaimSettlementUpdate.currentVersion,
+              voucherId: claim.voucherId,
+              txId: claim.txId,
+              escrowId: claim.escrowId,
+              status: OfflineVoucherClaimStatus.confirmedOnchain,
+              updatedAt: now,
+              settlementTransactionHash: claim.submittedTransactionHash,
+            ),
+          );
+          await _persistOfflineVoucherClaimAttempt(
+            claim.copyWith(
+              status: OfflineVoucherClaimStatus.confirmedOnchain,
+              lastAttemptedAt: now,
+              confirmedAt: now,
+              clearLastError: true,
+            ),
+          );
+          return;
+        }
+        await _scheduleOfflineVoucherClaimRetry(
+          claim.copyWith(submittedTransactionHash: ''),
+          '${claim.chain.label} rejected the offline voucher claim transaction.',
+          attemptedAt: now,
+        );
+        return;
+      }
+
+      final EthPrivateKey signer = await _walletService.loadEvmSigningCredentials(
+        chain: claim.chain,
+        account: claim.accountSlot,
+      );
+      final String signerAddress = (await signer.extractAddress()).hexEip55;
+      if (signerAddress.toLowerCase() != claim.claimerAddress.toLowerCase()) {
+        await _persistOfflineVoucherClaimAttempt(
+          claim.copyWith(
+            status: OfflineVoucherClaimStatus.invalidRejected,
+            lastAttemptedAt: now,
+            lastError:
+                'The queued receiver account is no longer available on this device.',
+          ),
+        );
+        return;
+      }
+
+      final String transactionHash = await _ethereumService.claimOfflineVoucherNow(
+        sender: signer,
+        senderAddress: signerAddress,
+        contractAddress: claim.settlementContractAddress,
+        voucher: claim.voucher,
+        receiverAddress: claim.claimerAddress,
+        assignmentSignatureHex: claim.assignmentSignatureHex,
+        voucherProof: claim.voucherProof,
+      );
+
+      final OfflineVoucherClaimRecord settled =
+          await _offlineVoucherClientService.updateClaimSettlement(
+            OfflineVoucherClaimSettlementUpdate(
+              version: OfflineVoucherClaimSettlementUpdate.currentVersion,
+              voucherId: claim.voucherId,
+              txId: claim.txId,
+              escrowId: claim.escrowId,
+              status: OfflineVoucherClaimStatus.submittedOnchain,
+              updatedAt: now,
+              settlementTransactionHash: transactionHash,
+            ),
+          );
+      await _persistOfflineVoucherClaimAttempt(
+        claim.copyWith(
+          status: OfflineVoucherClaimStatus.submittedOnchain,
+          submissionMode: settled.submissionMode,
+          attemptCount: claim.attemptCount + 1,
+          lastAttemptedAt: now,
+          submittedTransactionHash: transactionHash,
+          nextAttemptAt: now.add(offlineVoucherClaimReceiptPollDelay),
+          clearLastError: true,
+        ),
+      );
+    } catch (error) {
+      await _scheduleOfflineVoucherClaimRetry(
+        claim,
+        error.toString(),
+        attemptedAt: now,
+      );
+    }
+  }
+
+  Future<void> _scheduleOfflineVoucherClaimRetry(
+    OfflineVoucherClaimAttempt claim,
+    String message, {
+    required DateTime attemptedAt,
+  }) async {
+    final int nextAttemptCount = claim.attemptCount + 1;
+    bool sponsoredFallbackRequested = claim.sponsoredFallbackRequested;
+    OfflineVoucherClaimSubmissionMode? submissionMode = claim.submissionMode;
+    if (!sponsoredFallbackRequested &&
+        nextAttemptCount >= offlineVoucherClaimSponsorThreshold) {
+      try {
+        final OfflineVoucherClaimRecord sponsored =
+            await _offlineVoucherClientService.requestSponsoredClaim(
+              OfflineVoucherClaimSubmission(
+                version: OfflineVoucherClaimSubmission.currentVersion,
+                voucherId: claim.voucherId,
+                txId: claim.txId,
+                escrowId: claim.escrowId,
+                claimerAddress: claim.claimerAddress,
+                createdAt: attemptedAt,
+              ),
+            );
+        sponsoredFallbackRequested = true;
+        submissionMode = sponsored.submissionMode;
+      } catch (_) {
+        // Keep local retries active even if the sponsored queue could not be registered.
+      }
+    }
+
+    await _persistOfflineVoucherClaimAttempt(
+      claim.copyWith(
+        status: claim.submittedTransactionHash != null &&
+                claim.submittedTransactionHash!.isNotEmpty
+            ? OfflineVoucherClaimStatus.submittedOnchain
+            : OfflineVoucherClaimStatus.accepted,
+        submissionMode: submissionMode,
+        attemptCount: nextAttemptCount,
+        lastAttemptedAt: attemptedAt,
+        nextAttemptAt: attemptedAt.add(
+          _offlineVoucherClaimRetryDelay(nextAttemptCount),
+        ),
+        sponsoredFallbackRequested: sponsoredFallbackRequested,
+        lastError: message,
+      ),
+    );
+  }
+
+  Duration _offlineVoucherClaimRetryDelay(int attemptCount) {
+    if (attemptCount <= 1) {
+      return offlineVoucherClaimRetryBaseDelay;
+    }
+    final int multiplier = 1 << (attemptCount - 1);
+    final int delayMs =
+        offlineVoucherClaimRetryBaseDelay.inMilliseconds * multiplier;
+    return Duration(
+      milliseconds: min(
+        delayMs,
+        offlineVoucherClaimRetryMaxDelay.inMilliseconds,
+      ),
+    );
+  }
+
+  Future<void> _persistOfflineVoucherClaimAttempt(
+    OfflineVoucherClaimAttempt claim,
+  ) async {
+    _offlineVoucherClaimAttempts[claim.voucherId] = claim;
+    await _saveOfflineVoucherClaimAttempts();
+    await _syncOfflineVoucherTransferStatus(claim.transferId);
+    notifyListeners();
+  }
+
+  Future<void> _syncAllOfflineVoucherTransferStatuses() async {
+    final Set<String> transferIds = _offlineVoucherClaimAttempts.values
+        .map((OfflineVoucherClaimAttempt claim) => claim.transferId)
+        .where((String transferId) => transferId.isNotEmpty)
+        .toSet();
+    for (final String transferId in transferIds) {
+      await _syncOfflineVoucherTransferStatus(transferId);
+    }
+  }
+
+  Future<void> _syncOfflineVoucherTransferStatus(String transferId) async {
+    if (transferId.isEmpty) {
+      return;
+    }
+    final PendingTransfer? transfer = transferById(transferId);
+    if (transfer == null || !transfer.usesVoucherSettlement) {
+      return;
+    }
+    final List<OfflineVoucherClaimAttempt> claims =
+        _offlineVoucherClaimAttempts.values
+            .where((OfflineVoucherClaimAttempt claim) => claim.transferId == transferId)
+            .toList(growable: false);
+    if (claims.isEmpty) {
+      return;
+    }
+
+    final bool allConfirmed = claims.every(
+      (OfflineVoucherClaimAttempt claim) =>
+          claim.status == OfflineVoucherClaimStatus.confirmedOnchain,
+    );
+    final bool anyRejected = claims.any(
+      (OfflineVoucherClaimAttempt claim) =>
+          claim.status == OfflineVoucherClaimStatus.invalidRejected ||
+          claim.status == OfflineVoucherClaimStatus.duplicateRejected,
+    );
+    final bool anyExpired = claims.any(
+      (OfflineVoucherClaimAttempt claim) =>
+          claim.status == OfflineVoucherClaimStatus.expiredRejected,
+    );
+    final bool anySubmitted = claims.any(
+      (OfflineVoucherClaimAttempt claim) =>
+          claim.status == OfflineVoucherClaimStatus.submittedOnchain ||
+          claim.status == OfflineVoucherClaimStatus.confirmedOnchain,
+    );
+    final bool anyAttempted = claims.any(
+      (OfflineVoucherClaimAttempt claim) =>
+          claim.attemptCount > 0 || claim.lastAttemptedAt != null,
+    );
+    final String? settlementHash = claims
+        .map((OfflineVoucherClaimAttempt claim) => claim.submittedTransactionHash)
+        .whereType<String>()
+        .firstWhere(
+          (String value) => value.trim().isNotEmpty,
+          orElse: () => '',
+        )
+        .trim()
+        .isEmpty
+        ? null
+        : claims
+            .map((OfflineVoucherClaimAttempt claim) => claim.submittedTransactionHash)
+            .whereType<String>()
+            .firstWhere((String value) => value.trim().isNotEmpty);
+    final List<String> errors = claims
+        .map((OfflineVoucherClaimAttempt claim) => claim.lastError?.trim() ?? '')
+        .where((String value) => value.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final DateTime? confirmedAt = claims
+        .map((OfflineVoucherClaimAttempt claim) => claim.confirmedAt)
+        .whereType<DateTime>()
+        .fold<DateTime?>(null, (DateTime? latest, DateTime current) {
+          if (latest == null || current.isAfter(latest)) {
+            return current;
+          }
+          return latest;
+        });
+
+    final TransferStatus nextStatus = allConfirmed
+        ? TransferStatus.confirmed
+        : anyRejected
+        ? TransferStatus.broadcastFailed
+        : anyExpired
+        ? TransferStatus.expired
+        : anySubmitted
+        ? TransferStatus.broadcastSubmitted
+        : anyAttempted
+        ? TransferStatus.broadcasting
+        : TransferStatus.receivedPendingBroadcast;
+    final String? nextError = switch (nextStatus) {
+      TransferStatus.broadcastFailed || TransferStatus.expired => errors.isEmpty
+          ? null
+          : errors.join(' '),
+      _ => null,
+    };
+    if (transfer.status == nextStatus &&
+        transfer.transactionSignature == settlementHash &&
+        transfer.confirmedAt == confirmedAt &&
+        transfer.lastError == nextError) {
+      return;
+    }
+    await _persistTransfer(
+      transfer.copyWith(
+        status: nextStatus,
+        updatedAt: _clock(),
+        transactionSignature: settlementHash,
+        explorerUrl: settlementHash == null || !transfer.chain.isEvm
+            ? transfer.explorerUrl
+            : _ethereumService
+                .explorerUrlFor(settlementHash)
+                .toString(),
+        confirmedAt: confirmedAt,
+        lastError: nextError,
+        clearLastError: nextError == null,
+      ),
+    );
   }
 
   Future<void> _broadcastTransferInBackground(PendingTransfer transfer) async {
@@ -2825,6 +6244,7 @@ class BitsendAppState extends ChangeNotifier {
       await refreshWalletData();
       await broadcastPendingTransfers();
       await refreshSubmittedTransfers();
+      await _processOfflineVoucherClaimQueue();
     } catch (_) {
       notifyListeners();
     }
@@ -2941,6 +6361,18 @@ class BitsendAppState extends ChangeNotifier {
   }
 
   static const String _relaySessionsKey = 'pending_relay_sessions';
+  static const String _offlineVoucherEscrowSessionsKey =
+      'offline_voucher_escrow_sessions';
+  static const String _offlineVoucherSettlementContractsKey =
+      'offline_voucher_settlement_contracts';
+  static const String _offlineVoucherClaimsKey = 'offline_voucher_claims';
+  static const String _contactsKey = 'send_contacts';
+  static const String _allowanceEntriesKey = 'token_allowance_entries';
+  static const String _selectedAccountSlotsKey = 'selected_account_slots';
+  static const String _accountCountsKey = 'account_counts';
+  static const String _discoveredTrackedAssetsKey = 'discovered_tracked_assets';
+  static const String _erc20DiscoveryHighWaterMarksKey =
+      'erc20_discovery_high_water_marks';
 
   String _cachedBlockhashKey(String scopeKey) => 'cached_blockhash_$scopeKey';
 
@@ -2948,6 +6380,107 @@ class BitsendAppState extends ChangeNotifier {
       'cached_eth_context_$scopeKey';
 
   String _walletEngineKey(String scopeKey) => 'wallet_engine_$scopeKey';
+
+  String _erc20DiscoveryCursorKey(String scopeKey, String address) =>
+      '$scopeKey:${address.trim().toLowerCase()}';
+
+  int _initialErc20DiscoveryStartBlock(int latestBlock) {
+    final int startBlock =
+        latestBlock - erc20InitialDiscoveryLookbackBlocks + 1;
+    return startBlock < 0 ? 0 : startBlock;
+  }
+
+  int _applyGasSpeedToWei(int gasPriceWei) {
+    return (gasPriceWei * _sendDraft.gasSpeed.multiplier).round();
+  }
+
+  Uint8List _decodeDappPayloadBytes(DappSignRequest request) {
+    final String payloadHex = (request.payloadHex ?? '').trim();
+    if (payloadHex.startsWith('0x') &&
+        payloadHex.length > 2 &&
+        payloadHex.length.isEven) {
+      try {
+        final List<int> bytes = <int>[];
+        for (int index = 2; index < payloadHex.length; index += 2) {
+          bytes.add(
+            int.parse(payloadHex.substring(index, index + 2), radix: 16),
+          );
+        }
+        return Uint8List.fromList(bytes);
+      } catch (_) {
+        // Fall back to utf8 bytes.
+      }
+    }
+    final String text = request.message ?? payloadHex;
+    return Uint8List.fromList(utf8.encode(text));
+  }
+
+  TrackedAssetDefinition _nativeAssetForScope(
+    ChainKind chain,
+    ChainNetwork network,
+  ) {
+    return _trackedAssetsForScope(
+      chain,
+      network,
+    ).firstWhere((TrackedAssetDefinition asset) => asset.isNative);
+  }
+
+  String _defaultSendAssetIdFor(ChainKind chain, ChainNetwork network) =>
+      _nativeAssetForScope(chain, network).id;
+
+  TrackedAssetDefinition _sendAssetDefinitionForDraft(SendDraft draft) {
+    return _sendAssetDefinitionFor(
+      chain: draft.chain,
+      network: draft.network,
+      assetId: draft.assetId,
+    );
+  }
+
+  TrackedAssetDefinition _sendAssetDefinitionFor({
+    required ChainKind chain,
+    required ChainNetwork network,
+    required String assetId,
+  }) {
+    final List<TrackedAssetDefinition> assets = _trackedAssetsForScope(
+      chain,
+      network,
+    );
+    if (assetId.isNotEmpty) {
+      for (final TrackedAssetDefinition asset in assets) {
+        if (asset.id == assetId) {
+          return asset;
+        }
+      }
+    }
+    return assets.firstWhere((TrackedAssetDefinition asset) => asset.isNative);
+  }
+
+  AssetPortfolioHolding _holdingForTrackedAsset(TrackedAssetDefinition asset) {
+    for (final AssetPortfolioHolding holding in portfolioHoldings) {
+      if (holding.chain == asset.chain &&
+          holding.network == asset.network &&
+          holding.resolvedAssetId == asset.id) {
+        return holding;
+      }
+    }
+    return AssetPortfolioHolding(
+      chain: asset.chain,
+      network: asset.network,
+      totalBalance: 0,
+      mainBalance: 0,
+      protectedBalance: 0,
+      spendableBalance: 0,
+      reservedBalance: 0,
+      assetId: asset.id,
+      symbol: asset.symbol,
+      displayName: asset.displayName,
+      assetDecimals: asset.decimals,
+      contractAddress: asset.contractAddress,
+      isNative: asset.isNative,
+      mainAddress: _wallets[asset.chain]?.address,
+      protectedAddress: _offlineWallets[asset.chain]?.address,
+    );
+  }
 
   String _cleanErrorMessage(Object error) {
     final String text = error.toString();
@@ -3034,6 +6567,8 @@ class BitsendAppState extends ChangeNotifier {
   @override
   void dispose() {
     _connectivitySubscription?.cancel();
+    _homeWidgetLaunchRouteSubscription?.cancel();
+    _autoReadinessRefreshTimer?.cancel();
     unawaited(_hotspotTransportService.stop());
     unawaited(_bleTransportService.dispose());
     unawaited(_ultrasonicTransportService.stop());
@@ -3097,6 +6632,19 @@ class BitsendAppState extends ChangeNotifier {
       return true;
     }
     return first == 172 && second >= 16 && second <= 31;
+  }
+
+  int _parseFlexibleInt(Object? value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    if (value is String) {
+      return int.tryParse(value.trim()) ?? 0;
+    }
+    return 0;
   }
 }
 

@@ -58,6 +58,38 @@ flutter run
 flutter test
 ```
 
+## Google Play Release Checklist
+
+1. Create a release keystore and add `android/key.properties` (do not commit secrets):
+
+```properties
+storeFile=../keystore/upload-keystore.jks
+storePassword=YOUR_STORE_PASSWORD
+keyAlias=upload
+keyPassword=YOUR_KEY_PASSWORD
+```
+
+2. Build an Android App Bundle:
+
+```powershell
+flutter build appbundle --release
+```
+
+3. In Play Console, complete policy declarations:
+- Data safety form for nearby devices (Bluetooth), microphone (ultrasonic receive), camera (QR scan), and network usage.
+- App content declarations (encryption, ads, target audience, and any financial app disclosures that apply).
+- Add a public privacy policy URL and keep it aligned with runtime permissions.
+
+4. Upload `build/app/outputs/bundle/release/app-release.aab` to internal testing first, then verify pre-launch report warnings.
+
+5. Ensure release builds are signed with your upload key (this project falls back to debug signing only when `android/key.properties` is missing).
+
+## Legal Documents
+
+- Terms and Conditions: `docs/legal/terms-and-conditions.md`
+- Privacy Policy: `docs/legal/privacy-policy.md`
+- Contact Information: `docs/legal/contact.md`
+
 ## Backend Worker
 
 ### Install dependencies

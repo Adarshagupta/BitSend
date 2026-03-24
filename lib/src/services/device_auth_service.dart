@@ -32,9 +32,10 @@ class DeviceAuthService {
       final List<BiometricType> biometrics = canCheckBiometrics
           ? await _localAuthentication.getAvailableBiometrics()
           : const <BiometricType>[];
+      final bool biometricReady = biometrics.isNotEmpty;
       return DeviceAuthSupport(
-        isAvailable: isSupported || canCheckBiometrics,
-        hasBiometricOption: biometrics.isNotEmpty,
+        isAvailable: isSupported && biometricReady,
+        hasBiometricOption: biometricReady,
       );
     } on PlatformException {
       return const DeviceAuthSupport.unavailable();
@@ -46,7 +47,7 @@ class DeviceAuthService {
       return _localAuthentication.authenticate(
         localizedReason: reason,
         options: const AuthenticationOptions(
-          biometricOnly: false,
+          biometricOnly: true,
           stickyAuth: true,
           sensitiveTransaction: true,
           useErrorDialogs: true,

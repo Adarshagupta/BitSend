@@ -12,6 +12,14 @@ abstract final class AppRoutes {
   static const String onboardingPrepare = '/onboarding/prepare';
   static const String unlock = '/unlock';
   static const String home = '/home';
+  static const String assets = '/assets';
+  static const String accounts = '/accounts';
+  static const String approvals = '/approvals';
+  static const String nfts = '/nfts';
+  static const String buy = '/buy';
+  static const String swap = '/swap';
+  static const String bridge = '/bridge';
+  static const String dappConnect = '/dapp-connect';
   static const String deposit = '/deposit';
   static const String prepare = '/prepare';
   static const String sendTransport = '/send/transport';
@@ -41,15 +49,22 @@ class _BitsendAppState extends State<BitsendApp> with WidgetsBindingObserver {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   final _TrackingNavigatorObserver _navigatorObserver =
       _TrackingNavigatorObserver();
+  bool _authRedirectScheduled = false;
+  bool _widgetRedirectScheduled = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    widget.appState.addListener(_syncAuthGate);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncAuthGate();
+    });
   }
 
   @override
   void dispose() {
+    widget.appState.removeListener(_syncAuthGate);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -65,15 +80,83 @@ class _BitsendAppState extends State<BitsendApp> with WidgetsBindingObserver {
     if (state != AppLifecycleState.resumed) {
       return;
     }
-    if (!widget.appState.requiresDeviceUnlock ||
-        _navigatorObserver.currentRouteName == AppRoutes.unlock) {
+    _syncAuthGate();
+  }
+
+  void _syncAuthGate() {
+    final bool authBlocked =
+        widget.appState.requiresBiometricSetup ||
+        widget.appState.requiresDeviceUnlock;
+    if (!authBlocked) {
+      _flushPendingWidgetRouteIfNeeded();
       return;
     }
-    final NavigatorState? navigator = _navigatorKey.currentState;
-    if (navigator == null) {
+    if (_authRedirectScheduled) {
       return;
     }
-    navigator.pushNamed(AppRoutes.unlock);
+    final String? currentRoute = _navigatorObserver.currentRouteName;
+    if (currentRoute == AppRoutes.unlock) {
+      return;
+    }
+    _authRedirectScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _authRedirectScheduled = false;
+      if (!mounted) {
+        return;
+      }
+      final bool stillBlocked =
+          widget.appState.requiresBiometricSetup ||
+          widget.appState.requiresDeviceUnlock;
+      if (!stillBlocked ||
+          _navigatorObserver.currentRouteName == AppRoutes.unlock) {
+        return;
+      }
+      final NavigatorState? navigator = _navigatorKey.currentState;
+      if (navigator == null) {
+        return;
+      }
+      navigator.pushNamedAndRemoveUntil(
+        AppRoutes.unlock,
+        (Route<dynamic> _) => false,
+      );
+    });
+  }
+
+  void _flushPendingWidgetRouteIfNeeded() {
+    if (_widgetRedirectScheduled || !widget.appState.hasWallet) {
+      return;
+    }
+    final String? targetRoute = widget.appState.pendingHomeWidgetRoute;
+    final String? currentRoute = _navigatorObserver.currentRouteName;
+    if (targetRoute == null ||
+        targetRoute.isEmpty ||
+        currentRoute == null ||
+        currentRoute == AppRoutes.boot ||
+        currentRoute == AppRoutes.unlock ||
+        currentRoute == targetRoute) {
+      return;
+    }
+    _widgetRedirectScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _widgetRedirectScheduled = false;
+      if (!mounted) {
+        return;
+      }
+      if (widget.appState.requiresBiometricSetup ||
+          widget.appState.requiresDeviceUnlock) {
+        return;
+      }
+      final NavigatorState? navigator = _navigatorKey.currentState;
+      final String? pendingRoute = widget.appState.pendingHomeWidgetRoute;
+      if (navigator == null || pendingRoute == null || pendingRoute.isEmpty) {
+        return;
+      }
+      widget.appState.clearPendingHomeWidgetRoute();
+      navigator.pushNamedAndRemoveUntil(
+        pendingRoute,
+        (Route<dynamic> _) => false,
+      );
+    });
   }
 
   @override
@@ -94,6 +177,18 @@ class _BitsendAppState extends State<BitsendApp> with WidgetsBindingObserver {
 
   Route<dynamic> _routeFor(RouteSettings settings) {
     final String name = settings.name ?? AppRoutes.boot;
+    final bool authBlocked =
+        widget.appState.requiresBiometricSetup ||
+        widget.appState.requiresDeviceUnlock;
+    final bool allowWithoutUnlock =
+        name == AppRoutes.boot || name == AppRoutes.unlock;
+
+    if (authBlocked && !allowWithoutUnlock) {
+      return _page(
+        const RouteSettings(name: AppRoutes.unlock),
+        const UnlockScreen(),
+      );
+    }
     if (name.startsWith('/transfer/')) {
       final String transferId = name.replaceFirst('/transfer/', '');
       return _page(settings, TransferDetailScreen(transferId: transferId));
@@ -110,7 +205,22 @@ class _BitsendAppState extends State<BitsendApp> with WidgetsBindingObserver {
       ),
       AppRoutes.unlock => _page(settings, const UnlockScreen()),
       AppRoutes.home => _page(settings, const HomeDashboardScreen()),
-      AppRoutes.deposit => _page(settings, const DepositScreen()),
+      AppRoutes.assets => _page(settings, const AssetsScreen()),
+      AppRoutes.accounts => _page(settings, const AccountsScreen()),
+      AppRoutes.approvals => _page(settings, const ApprovalsScreen()),
+      AppRoutes.nfts => _page(settings, const NftsScreen()),
+      AppRoutes.buy => _page(settings, const BuyScreen()),
+      AppRoutes.swap => _page(settings, const SwapScreen()),
+      AppRoutes.bridge => _page(settings, const BridgeScreen()),
+      AppRoutes.dappConnect => _page(settings, const DappConnectScreen()),
+      AppRoutes.deposit => _page(
+        settings,
+        DepositScreen(
+          initialTarget: settings.arguments is DepositWalletTarget
+              ? settings.arguments as DepositWalletTarget
+              : null,
+        ),
+      ),
       AppRoutes.prepare => _page(settings, const PrepareOfflineScreen()),
       AppRoutes.sendTransport => _page(settings, const SendTransportScreen()),
       AppRoutes.sendAmount => _page(settings, const SendAmountScreen()),
@@ -121,9 +231,7 @@ class _BitsendAppState extends State<BitsendApp> with WidgetsBindingObserver {
       AppRoutes.receiveListen => _page(settings, const ReceiveListenScreen()),
       AppRoutes.receiveResult => _page(
         settings,
-        ReceiveResultScreen(
-          transferId: settings.arguments as String?,
-        ),
+        ReceiveResultScreen(transferId: settings.arguments as String?),
       ),
       AppRoutes.pending => _page(settings, const PendingScreen()),
       AppRoutes.settings => _page(settings, const SettingsScreen()),

@@ -3,13 +3,13 @@ import 'package:flutter/material.dart';
 class AppColors {
   const AppColors._();
 
-  static const Color canvas = Color(0xFFF6F0E7);
-  static const Color canvasWarm = Color(0xFFFFFAF4);
-  static const Color canvasTint = Color(0xFFF9F5EE);
-  static const Color surface = Color(0xFFFDF8F1);
+  static const Color canvas = Color(0xFFFFFFFF);
+  static const Color canvasWarm = Color(0xFFFFFFFF);
+  static const Color canvasTint = Color(0xFFFBFCFD);
+  static const Color surface = Color(0xFFFFFFFF);
   static const Color ink = Color(0xFF17171B);
   static const Color mutedInk = Color(0xFF484C55);
-  static const Color line = Color(0xFFE4D8C7);
+  static const Color line = Color(0xFFE8ECF1);
   static const Color heroStart = Color(0xFF123C31);
   static const Color heroEnd = Color(0xFF2C7560);
   static const Color emerald = Color(0xFF1F8A61);
@@ -46,24 +46,24 @@ ThemeData buildBitsendTheme() {
         displaySmall: const TextStyle(
           fontSize: 40,
           height: 1.02,
-          fontWeight: FontWeight.w800,
-          letterSpacing: -1.2,
+          fontWeight: FontWeight.w700,
+          letterSpacing: -1.0,
         ),
         headlineSmall: const TextStyle(
           fontSize: 28,
           height: 1.1,
-          fontWeight: FontWeight.w800,
+          fontWeight: FontWeight.w700,
           letterSpacing: -0.7,
         ),
         titleLarge: const TextStyle(
           fontSize: 20,
           height: 1.25,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
         ),
         titleMedium: const TextStyle(
           fontSize: 16,
           height: 1.3,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
         ),
         bodyLarge: const TextStyle(
           fontSize: 16,
@@ -79,13 +79,13 @@ ThemeData buildBitsendTheme() {
         bodySmall: const TextStyle(
           fontSize: 13,
           height: 1.45,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w500,
           color: AppColors.mutedInk,
         ),
         labelLarge: const TextStyle(
           fontSize: 14,
           height: 1.1,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
           letterSpacing: 0.1,
         ),
       );

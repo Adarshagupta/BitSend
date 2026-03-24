@@ -1,6 +1,7 @@
 import 'package:bitsend/src/app/app.dart';
 import 'package:bitsend/src/models/app_models.dart';
 import 'package:bitsend/src/screens/screens.dart';
+import 'package:bitsend/src/services/swap_service.dart';
 import 'package:bitsend/src/state/app_state.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -34,24 +35,25 @@ void main() {
     expect(find.text('Send now. Settle later.'), findsOneWidget);
   });
 
-  testWidgets('boot routes an existing wallet into unlock when device auth is required', (
-    WidgetTester tester,
-  ) async {
-    final _TestBitsendAppState state = _TestBitsendAppState(
-      bootRouteValue: AppRoutes.unlock,
-      walletValue: _wallet,
-      deviceAuthAvailableValue: true,
-      deviceAuthHasBiometricOptionValue: true,
-      requiresDeviceUnlockValue: true,
-      authenticateDeviceResultValue: false,
-    );
+  testWidgets(
+    'boot routes an existing wallet into unlock when device auth is required',
+    (WidgetTester tester) async {
+      final _TestBitsendAppState state = _TestBitsendAppState(
+        bootRouteValue: AppRoutes.unlock,
+        walletValue: _wallet,
+        deviceAuthAvailableValue: true,
+        deviceAuthHasBiometricOptionValue: true,
+        requiresDeviceUnlockValue: true,
+        authenticateDeviceResultValue: false,
+      );
 
-    await tester.pumpWidget(BitsendApp(appState: state));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(BitsendApp(appState: state));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Unlock wallet'), findsOneWidget);
-    expect(find.text('Unlock now'), findsOneWidget);
-  });
+      expect(find.text('Unlock wallet'), findsOneWidget);
+      expect(find.text('Unlock now'), findsOneWidget);
+    },
+  );
 
   testWidgets('home shows send prep card when not prepared', (
     WidgetTester tester,
@@ -80,18 +82,193 @@ void main() {
       child: const HomeDashboardScreen(),
     );
 
-    expect(find.text('Fund'), findsOneWidget);
-    expect(find.text('Refresh'), findsAtLeastNWidgets(1));
+    expect(find.text('Deposit'), findsOneWidget);
+    expect(find.text('Assets'), findsOneWidget);
     expect(find.text('Send'), findsOneWidget);
-    expect(find.text('Offline Wallet'), findsAtLeastNWidgets(1));
-    expect(
-      find.textContaining('Move funds to the offline wallet'),
-      findsOneWidget,
-    );
-    expect(find.byTooltip('Scan pair code and send'), findsOneWidget);
+    expect(find.text('More'), findsOneWidget);
+    expect(find.text('Transactions'), findsOneWidget);
+    expect(find.byKey(const Key('primary-nav-scan-button')), findsOneWidget);
+    expect(find.text('Queue'), findsNothing);
+    expect(find.text('Funds'), findsNothing);
+    expect(find.text('Move + sync'), findsNothing);
+    expect(find.text('Est. chain value'), findsOneWidget);
   });
 
-  testWidgets('home explains offline balance is reserved instead of asking for top up', (
+  testWidgets('home hero follows the selected chain total', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      activeChainValue: ChainKind.bnb,
+      activeNetworkValue: ChainNetwork.mainnet,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.bnb,
+        network: ChainNetwork.mainnet,
+        balanceSol: 0.02,
+        offlineBalanceSol: 0,
+        offlineAvailableSol: 0,
+        offlineWalletAddress: '0x1234567890abcdef1234567890abcdef12345678',
+        readyForOffline: false,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+      portfolioUsdTotalValue: 999.99,
+      activeScopeUsdTotalValue: 1.17,
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const HomeDashboardScreen(),
+    );
+
+    expect(find.text('Est. chain value'), findsOneWidget);
+    expect(find.text('\$1.17'), findsOneWidget);
+    expect(find.text('\$999.99'), findsNothing);
+    expect(find.text('BNB'), findsWidgets);
+  });
+
+  testWidgets('swap screen asks for a 0x key before enabling swaps', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      activeChainValue: ChainKind.bnb,
+      activeNetworkValue: ChainNetwork.mainnet,
+      swapSupportedOnActiveScopeValue: true,
+      hasSwapApiKeyValue: false,
+      portfolioHoldingsValue: const <AssetPortfolioHolding>[
+        AssetPortfolioHolding(
+          chain: ChainKind.bnb,
+          network: ChainNetwork.mainnet,
+          totalBalance: 1.0,
+          mainBalance: 1.0,
+          protectedBalance: 0,
+          spendableBalance: 0,
+          reservedBalance: 0,
+          assetId: 'bnb:mainnet:native',
+          symbol: 'BNB',
+          displayName: 'BNB Chain',
+        ),
+      ],
+      tokenAssetsValue: const <TrackedAssetDefinition>[
+        TrackedAssetDefinition(
+          id: 'bnb:mainnet:native',
+          chain: ChainKind.bnb,
+          network: ChainNetwork.mainnet,
+          symbol: 'BNB',
+          displayName: 'BNB Chain',
+          decimals: 18,
+        ),
+      ],
+    );
+
+    await pumpWithState(tester, state: state, child: const SwapScreen());
+
+    expect(find.text('Add your 0x API key'), findsOneWidget);
+    expect(find.text('Open settings'), findsOneWidget);
+  });
+
+  testWidgets('swap screen renders a live quote after review', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      activeChainValue: ChainKind.bnb,
+      activeNetworkValue: ChainNetwork.mainnet,
+      swapSupportedOnActiveScopeValue: true,
+      hasSwapApiKeyValue: true,
+      swapApiKeyValue: 'test-key',
+      swapSlippageBpsValue: 100,
+      portfolioHoldingsValue: const <AssetPortfolioHolding>[
+        AssetPortfolioHolding(
+          chain: ChainKind.bnb,
+          network: ChainNetwork.mainnet,
+          totalBalance: 2.0,
+          mainBalance: 2.0,
+          protectedBalance: 0,
+          spendableBalance: 0,
+          reservedBalance: 0,
+          assetId: 'bnb:mainnet:native',
+          symbol: 'BNB',
+          displayName: 'BNB Chain',
+        ),
+        AssetPortfolioHolding(
+          chain: ChainKind.bnb,
+          network: ChainNetwork.mainnet,
+          totalBalance: 12.5,
+          mainBalance: 12.5,
+          protectedBalance: 0,
+          spendableBalance: 0,
+          reservedBalance: 0,
+          assetId: 'bnb:mainnet:usdt',
+          symbol: 'USDT',
+          displayName: 'Tether USD',
+          contractAddress: '0x55d398326f99059fF775485246999027B3197955',
+          isNative: false,
+        ),
+      ],
+      tokenAssetsValue: const <TrackedAssetDefinition>[
+        TrackedAssetDefinition(
+          id: 'bnb:mainnet:native',
+          chain: ChainKind.bnb,
+          network: ChainNetwork.mainnet,
+          symbol: 'BNB',
+          displayName: 'BNB Chain',
+          decimals: 18,
+        ),
+        TrackedAssetDefinition(
+          id: 'bnb:mainnet:usdt',
+          chain: ChainKind.bnb,
+          network: ChainNetwork.mainnet,
+          symbol: 'USDT',
+          displayName: 'Tether USD',
+          decimals: 18,
+          contractAddress: '0x55d398326f99059fF775485246999027B3197955',
+        ),
+      ],
+      quoteSwapHandler: ({
+        required String sellAssetId,
+        required String buyAssetId,
+        required double sellAmount,
+      }) async {
+        expect(sellAssetId, 'bnb:mainnet:native');
+        expect(buyAssetId, 'bnb:mainnet:usdt');
+        expect(sellAmount, 1.0);
+        return const SwapQuote(
+          sellTokenAddress: SwapService.nativeTokenAddress,
+          buyTokenAddress: '0x55d398326f99059fF775485246999027B3197955',
+          sellAmountBaseUnits: 1000000000000000000,
+          buyAmountBaseUnits: 610000000000000000000,
+          minBuyAmountBaseUnits: 600000000000000000000,
+          liquidityAvailable: true,
+          routeFills: <SwapRouteFill>[
+            SwapRouteFill(
+              fromTokenAddress: SwapService.nativeTokenAddress,
+              toTokenAddress: '0x55d398326f99059fF775485246999027B3197955',
+              source: 'PancakeSwap_V2',
+              proportionBps: 10000,
+            ),
+          ],
+          isFirmQuote: false,
+          totalNetworkFeeBaseUnits: 1000000000000000,
+        );
+      },
+    );
+
+    await pumpWithState(tester, state: state, child: const SwapScreen());
+
+    await tester.enterText(find.byType(TextField).first, '1');
+    await tester.tap(find.text('Review swap'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Live quote'), findsOneWidget);
+    expect(find.text('Route'), findsOneWidget);
+    expect(find.text('PancakeSwap_V2'), findsOneWidget);
+    expect(find.text('Swap now'), findsOneWidget);
+  });
+
+  testWidgets('home keeps reserved offline state quiet', (
     WidgetTester tester,
   ) async {
     final _TestBitsendAppState state = _TestBitsendAppState(
@@ -118,11 +295,335 @@ void main() {
       child: const HomeDashboardScreen(),
     );
 
-    expect(find.text('Funds reserved'), findsOneWidget);
+    expect(find.text('Funds reserved'), findsNothing);
     expect(
       find.textContaining('fully reserved by pending transfers'),
+      findsNothing,
+    );
+    expect(find.text('Deposit'), findsOneWidget);
+    expect(find.text('Move funds to send'), findsOneWidget);
+    expect(find.text('Send balance'), findsOneWidget);
+    expect(find.text('Can send now'), findsOneWidget);
+    expect(find.text('Pending'), findsOneWidget);
+  });
+
+  testWidgets('offline wallet card shows info explainer', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      hasEnoughFundingValue: true,
+      hasOfflineFundsValue: true,
+      hasOfflineReadyBlockhashValue: true,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.ethereum,
+        network: ChainNetwork.testnet,
+        balanceSol: 1.2,
+        offlineBalanceSol: 0.7,
+        offlineAvailableSol: 0.55,
+        offlineWalletAddress: '0x1234567890abcdef1234567890abcdef12345678',
+        readyForOffline: true,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const HomeDashboardScreen(),
+    );
+
+    expect(find.byKey(const Key('offline-wallet-info-button')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('offline-wallet-info-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('How the offline wallet works'), findsOneWidget);
+    expect(find.text('Top it up from the main wallet'), findsOneWidget);
+    expect(find.text('What the card numbers mean'), findsOneWidget);
+    expect(find.text('Can send now'), findsOneWidget);
+  });
+
+  testWidgets('offline wallet card shows top up and receive actions', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      hasEnoughFundingValue: true,
+      hasOfflineFundsValue: true,
+      hasOfflineReadyBlockhashValue: true,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        balanceSol: 1.2,
+        offlineBalanceSol: 0.4,
+        offlineAvailableSol: 0.4,
+        offlineWalletAddress: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+        readyForOffline: true,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const HomeDashboardScreen(),
+    );
+
+    expect(find.text('Top up'), findsOneWidget);
+    expect(find.text('Receive'), findsOneWidget);
+    expect(find.text('Main'), findsNothing);
+    expect(find.text('Offline'), findsOneWidget);
+    expect(find.text('Can send'), findsOneWidget);
+  });
+
+  testWidgets('offline wallet receive action opens local receive screen', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      hasEnoughFundingValue: true,
+      hasOfflineFundsValue: true,
+      hasOfflineReadyBlockhashValue: true,
+      ultrasonicSupportedValue: true,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        balanceSol: 1.2,
+        offlineBalanceSol: 0.4,
+        offlineAvailableSol: 0.4,
+        offlineWalletAddress: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+        readyForOffline: true,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+    );
+
+    await tester.pumpWidget(
+      BitsendStateScope(
+        notifier: state,
+        child: MaterialApp(
+          onGenerateRoute: (RouteSettings settings) {
+            return MaterialPageRoute<void>(
+              settings: settings,
+              builder: (BuildContext context) {
+                if (settings.name == AppRoutes.receiveListen) {
+                  return const ReceiveListenScreen();
+                }
+                return const HomeDashboardScreen();
+              },
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Receive'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Catch a signed handoff over hotspot, BLE, or ultrasonic.'),
       findsOneWidget,
     );
+    expect(find.text('Hotspot'), findsOneWidget);
+    expect(find.text('BLE'), findsOneWidget);
+    expect(find.text('Ultrasonic'), findsOneWidget);
+  });
+
+  testWidgets('deposit screen can open on offline wallet tab', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      offlineWalletValue: _offlineWallet,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        balanceSol: 1.25,
+        offlineBalanceSol: 0.5,
+        offlineAvailableSol: 0.35,
+        offlineWalletAddress: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+        readyForOffline: true,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+    );
+
+    await pumpWithState(
+      tester,
+      state: state,
+      child: const DepositScreen(initialTarget: DepositWalletTarget.offline),
+    );
+
+    expect(find.text('Offline wallet'), findsWidgets);
+    expect(
+      find.text('5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('assets screen shows active chain holdings details', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      offlineWalletValue: _offlineWallet,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.ethereum,
+        network: ChainNetwork.testnet,
+        balanceSol: 1.25,
+        offlineBalanceSol: 0.5,
+        offlineAvailableSol: 0.35,
+        offlineWalletAddress: '0x1234567890abcdef1234567890abcdef12345678',
+        readyForOffline: true,
+        blockhashAge: null,
+        localEndpoint: null,
+        primaryAddress: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+      ),
+      portfolioHoldingsValue: const <AssetPortfolioHolding>[
+        AssetPortfolioHolding(
+          chain: ChainKind.ethereum,
+          network: ChainNetwork.testnet,
+          totalBalance: 1.75,
+          mainBalance: 1.25,
+          protectedBalance: 0.5,
+          spendableBalance: 0.35,
+          reservedBalance: 0.15,
+          mainAddress: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+          protectedAddress: '0x1234567890abcdef1234567890abcdef12345678',
+        ),
+        AssetPortfolioHolding(
+          chain: ChainKind.ethereum,
+          network: ChainNetwork.testnet,
+          totalBalance: 48.2,
+          mainBalance: 48.2,
+          protectedBalance: 0,
+          spendableBalance: 0,
+          reservedBalance: 0,
+          assetId: 'ethereum:testnet:usdc',
+          symbol: 'USDC',
+          displayName: 'USD Coin',
+          assetDecimals: 6,
+          contractAddress: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
+          isNative: false,
+          mainAddress: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        ),
+        AssetPortfolioHolding(
+          chain: ChainKind.solana,
+          network: ChainNetwork.testnet,
+          totalBalance: 3.4,
+          mainBalance: 3.4,
+          protectedBalance: 0,
+          spendableBalance: 0,
+          reservedBalance: 0,
+          mainAddress: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+        ),
+      ],
+    );
+
+    await pumpWithState(tester, state: state, child: const AssetsScreen());
+
+    expect(find.text('Assets'), findsOneWidget);
+    expect(find.text('ETH'), findsWidgets);
+    expect(find.text('USDC'), findsWidgets);
+    expect(find.text('All assets'), findsOneWidget);
+    expect(find.text('SOL'), findsWidgets);
+    expect(find.text('Reserved'), findsWidgets);
+    expect(find.text('3 assets'), findsOneWidget);
+  });
+
+  testWidgets('accounts screen shows derived wallet accounts', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      offlineWalletValue: _offlineWallet,
+      accountSummariesValue: const <WalletAccountSummary>[
+        WalletAccountSummary(
+          chain: ChainKind.ethereum,
+          slotIndex: 0,
+          mainWallet: WalletProfile(
+            chain: ChainKind.ethereum,
+            address: '0x1111111111111111111111111111111111111111',
+            displayAddress: '0x1111...1111',
+            seedPhrase: 'alpha beta gamma',
+            mode: WalletSetupMode.created,
+          ),
+          protectedWallet: WalletProfile(
+            chain: ChainKind.ethereum,
+            address: '0x2222222222222222222222222222222222222222',
+            displayAddress: '0x2222...2222',
+            seedPhrase: 'alpha beta gamma',
+            mode: WalletSetupMode.created,
+          ),
+          selected: true,
+        ),
+      ],
+    );
+
+    await pumpWithState(tester, state: state, child: const AccountsScreen());
+
+    expect(find.text('Accounts'), findsOneWidget);
+    expect(find.text('Account 1'), findsOneWidget);
+    expect(find.text('Add account'), findsOneWidget);
+  });
+
+  testWidgets('approvals screen shows approval controls for imported tokens', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      activeChainValue: ChainKind.ethereum,
+      tokenAssetsValue: const <TrackedAssetDefinition>[
+        TrackedAssetDefinition(
+          id: 'ethereum:testnet:usdc',
+          chain: ChainKind.ethereum,
+          network: ChainNetwork.testnet,
+          symbol: 'USDC',
+          displayName: 'USD Coin',
+          decimals: 6,
+          contractAddress: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
+        ),
+      ],
+    );
+
+    await pumpWithState(tester, state: state, child: const ApprovalsScreen());
+
+    expect(find.text('Approvals'), findsOneWidget);
+    expect(find.text('Refresh allowance'), findsOneWidget);
+    expect(find.text('Approve'), findsOneWidget);
+    expect(find.text('Revoke'), findsOneWidget);
+  });
+
+  testWidgets('nfts screen renders discovered ERC-721 holdings', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      activeChainValue: ChainKind.ethereum,
+      nftHoldingsValue: const <NftHolding>[
+        NftHolding(
+          chain: ChainKind.ethereum,
+          network: ChainNetwork.testnet,
+          contractAddress: '0x9999999999999999999999999999999999999999',
+          tokenId: '42',
+          ownerAddress: '0x1111111111111111111111111111111111111111',
+          updatedAt: DateTime(2026, 3, 20, 12),
+          collectionName: 'Demo Collection',
+          symbol: 'DEMO',
+          tokenUri: 'ipfs://demo/42',
+        ),
+      ],
+    );
+
+    await pumpWithState(tester, state: state, child: const NftsScreen());
+
+    expect(find.text('NFTs'), findsOneWidget);
+    expect(find.text('Demo Collection'), findsOneWidget);
+    expect(find.text('DEMO #42'), findsOneWidget);
   });
 
   testWidgets('wallet setup shows backup actions after a wallet exists', (
@@ -168,11 +669,74 @@ void main() {
 
     expect(find.text(_wallet.seedPhrase), findsNothing);
     expect(find.text('Reveal phrase'), findsOneWidget);
+    expect(find.textContaining('biometric unlock'), findsOneWidget);
+  });
+
+  testWidgets('clear local data exports backup before final confirmation', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      offlineWalletValue: _offlineWallet,
+      deviceAuthAvailableValue: true,
+      deviceAuthHasBiometricOptionValue: true,
+    );
+
+    await tester.pumpWidget(
+      BitsendStateScope(
+        notifier: state,
+        child: MaterialApp(
+          home: const SettingsScreen(),
+          routes: <String, WidgetBuilder>{
+            AppRoutes.onboardingWelcome: (_) =>
+                const Scaffold(body: Text('Reset complete')),
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Clear local data'));
+    await tester.pumpAndSettle();
+
+    expect(state.authenticateDeviceCallCount, 1);
+    expect(state.exportWalletBackupCallCount, 1);
+    expect(state.clearLocalDataCallCount, 0);
+    expect(find.text('Clear local data?'), findsOneWidget);
     expect(
-      find.textContaining('fingerprint or phone passcode'),
+      find.textContaining('A recovery backup was downloaded before reset.'),
       findsOneWidget,
     );
+    expect(find.text('/tmp/bitsend-wallet-backup-test.json'), findsOneWidget);
+    expect(
+      find.textContaining('device-bound and will be deleted permanently'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('I saved the backup, clear data'));
+    await tester.pumpAndSettle();
+
+    expect(state.clearLocalDataCallCount, 1);
+    expect(find.text('Reset complete'), findsOneWidget);
   });
+
+  testWidgets(
+    'unlock screen blocks wallet access until biometrics are set up',
+    (WidgetTester tester) async {
+      final _TestBitsendAppState state = _TestBitsendAppState(
+        walletValue: _wallet,
+        deviceAuthAvailableValue: false,
+        deviceAuthHasBiometricOptionValue: false,
+        requiresBiometricSetupValue: true,
+      );
+
+      await pumpWithState(tester, state: state, child: const UnlockScreen());
+
+      expect(find.text('Set up biometrics'), findsOneWidget);
+      expect(find.text('Open settings'), findsOneWidget);
+      expect(find.text('Check again'), findsOneWidget);
+    },
+  );
 
   testWidgets('fund screen allows skipping when wallet is not funded', (
     WidgetTester tester,
@@ -227,6 +791,159 @@ void main() {
     expect(find.text('Moving funds...'), findsOneWidget);
   });
 
+  testWidgets('offline top up can switch to a token asset', (
+    WidgetTester tester,
+  ) async {
+    const WalletProfile evmWallet = WalletProfile(
+      chain: ChainKind.bnb,
+      address: '0xfB0000000000000000000000000000000000867A',
+      displayAddress: '0xfb...867a',
+      seedPhrase:
+          'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
+      mode: WalletSetupMode.created,
+    );
+    const WalletProfile evmOfflineWallet = WalletProfile(
+      chain: ChainKind.bnb,
+      address: '0xD80000000000000000000000000000000000dB1C',
+      displayAddress: '0xD8...dB1C',
+      seedPhrase:
+          'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
+      mode: WalletSetupMode.created,
+    );
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: evmWallet,
+      offlineWalletValue: evmOfflineWallet,
+      activeChainValue: ChainKind.bnb,
+      activeNetworkValue: ChainNetwork.mainnet,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.bnb,
+        network: ChainNetwork.mainnet,
+        balanceSol: 0.000009,
+        offlineBalanceSol: 0,
+        offlineAvailableSol: 0,
+        offlineWalletAddress: '0x1234567890abcdef1234567890abcdef12345678',
+        readyForOffline: false,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+      portfolioHoldingsValue: const <AssetPortfolioHolding>[
+        AssetPortfolioHolding(
+          chain: ChainKind.bnb,
+          network: ChainNetwork.mainnet,
+          totalBalance: 0.000009,
+          mainBalance: 0.000009,
+          protectedBalance: 0,
+          spendableBalance: 0,
+          reservedBalance: 0,
+          assetId: 'bnb:mainnet:native',
+          symbol: 'BNB',
+          displayName: 'BNB Chain',
+          assetDecimals: 18,
+          isNative: true,
+          mainAddress: '0xfB0000000000000000000000000000000000867A',
+          protectedAddress: '0xD80000000000000000000000000000000000dB1C',
+        ),
+        AssetPortfolioHolding(
+          chain: ChainKind.bnb,
+          network: ChainNetwork.mainnet,
+          totalBalance: 1.16483,
+          mainBalance: 1.16483,
+          protectedBalance: 0,
+          spendableBalance: 0,
+          reservedBalance: 0,
+          assetId: 'bnb:mainnet:usdt',
+          symbol: 'USDT',
+          displayName: 'Tether USD',
+          assetDecimals: 18,
+          contractAddress: '0x55d398326f99059fF775485246999027B3197955',
+          isNative: false,
+          mainAddress: '0xfB0000000000000000000000000000000000867A',
+          protectedAddress: '0xD80000000000000000000000000000000000dB1C',
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      BitsendStateScope(
+        notifier: state,
+        child: const MaterialApp(home: PrepareOfflineScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('offline-topup-asset')), findsOneWidget);
+    expect(find.text('Move BNB from Main to Offline.'), findsOneWidget);
+    expect(find.text('Keep some BNB in Main for gas.'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('offline-topup-asset')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('USDT  ·  1.165 USDT').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Move USDT into Offline.'), findsOneWidget);
+    expect(find.text('Keep some BNB in Main for gas.'), findsOneWidget);
+    expect(find.text('1.165 USDT'), findsWidgets);
+  });
+
+  testWidgets('offline page opens deposit for the selected wallet target', (
+    WidgetTester tester,
+  ) async {
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      offlineWalletValue: _offlineWallet,
+      walletSummaryValue: const WalletSummary(
+        chain: ChainKind.solana,
+        network: ChainNetwork.testnet,
+        balanceSol: 1.2,
+        offlineBalanceSol: 0.5,
+        offlineAvailableSol: 0.5,
+        offlineWalletAddress: '5g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1Z',
+        readyForOffline: true,
+        blockhashAge: null,
+        localEndpoint: null,
+      ),
+    );
+
+    await tester.pumpWidget(
+      BitsendStateScope(
+        notifier: state,
+        child: MaterialApp(
+          onGenerateRoute: (RouteSettings settings) {
+            return MaterialPageRoute<void>(
+              settings: settings,
+              builder: (BuildContext context) {
+                if (settings.name == AppRoutes.deposit) {
+                  return DepositScreen(
+                    initialTarget: settings.arguments is DepositWalletTarget
+                        ? settings.arguments as DepositWalletTarget
+                        : null,
+                  );
+                }
+                return const PrepareOfflineScreen();
+              },
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('offline-page-deposit-main')), findsOneWidget);
+    expect(
+      find.byKey(const Key('offline-page-deposit-offline')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('offline-page-deposit-main')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Deposit SOL'), findsOneWidget);
+    expect(
+      find.text('6g7hH9bN2YpQkFjYB1rR5L8uD1sWnXwqJ8z2tP5eQk1R'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('receive screen shows the integrated receive panel', (
     WidgetTester tester,
   ) async {
@@ -244,11 +961,11 @@ void main() {
     );
 
     expect(find.text('Ready to catch a handoff'), findsOneWidget);
-    expect(find.text('Share pair code'), findsOneWidget);
+    expect(find.text('Share QR code'), findsOneWidget);
     expect(find.text('Stop listener'), findsOneWidget);
   });
 
-  testWidgets('receive screen shows Bitsend Pair relay details when supported', (
+  testWidgets('receive screen shows ultrasonic relay details when supported', (
     WidgetTester tester,
   ) async {
     final _TestBitsendAppState state = _TestBitsendAppState(
@@ -272,10 +989,10 @@ void main() {
       child: const ReceiveListenScreen(),
     );
 
-    expect(find.text('Bitsend Pair'), findsAtLeastNWidgets(1));
+    expect(find.text('Ultrasonic'), findsAtLeastNWidgets(1));
     expect(find.text('Relay ID:'), findsOneWidget);
     expect(find.text('relay-session-1'), findsOneWidget);
-    expect(find.text('Copy pair code'), findsOneWidget);
+    expect(find.text('Copy QR data'), findsOneWidget);
   });
 
   testWidgets('receive result screen shows the stored transfer details', (
@@ -329,6 +1046,28 @@ void main() {
     expect(find.text('Open pending'), findsOneWidget);
   });
 
+  testWidgets('send success screen uses on-chain copy for direct submits', (
+    WidgetTester tester,
+  ) async {
+    final PendingTransfer outbound = _transfer(
+      transferId: 'outgoing-online',
+      direction: TransferDirection.outbound,
+      status: TransferStatus.broadcastSubmitted,
+      senderAddress: _wallet.address,
+      receiverAddress: 'Receiver11111111111111111111111111111111',
+      amountLamports: 500000000,
+      transport: TransportKind.online,
+    );
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      lastSentTransferValue: outbound,
+    );
+
+    await pumpWithState(tester, state: state, child: const SendSuccessScreen());
+
+    expect(find.text('Submitted on-chain'), findsOneWidget);
+    expect(find.text('Sent offline'), findsNothing);
+  });
+
   testWidgets('transfer detail shows Fileverse link when present', (
     WidgetTester tester,
   ) async {
@@ -363,7 +1102,7 @@ void main() {
     expect(find.text('Copy Fileverse link'), findsOneWidget);
   });
 
-  testWidgets('receive screen hides hotspot pair code until listener is live', (
+  testWidgets('receive screen hides hotspot QR code until listener is live', (
     WidgetTester tester,
   ) async {
     final _TestBitsendAppState state = _TestBitsendAppState(
@@ -380,10 +1119,10 @@ void main() {
     );
 
     expect(
-      find.text('Start hotspot receive to show the live pair code.'),
+      find.text('Start hotspot receive to show the live QR code.'),
       findsOneWidget,
     );
-    expect(find.text('Copy pair code'), findsNothing);
+    expect(find.text('Copy QR data'), findsNothing);
   });
 
   testWidgets(
@@ -421,6 +1160,35 @@ void main() {
       expect(find.text('Outbound transfer'), findsOneWidget);
     },
   );
+
+  testWidgets('pending screen hides confirmed transfers', (
+    WidgetTester tester,
+  ) async {
+    final PendingTransfer confirmed = _transfer(
+      transferId: 'confirmed-1',
+      direction: TransferDirection.inbound,
+      status: TransferStatus.confirmed,
+      senderAddress: 'Sender1111111111111111111111111111111111',
+      receiverAddress: _wallet.address,
+      amountLamports: 250000000,
+    );
+    final PendingTransfer pending = _transfer(
+      transferId: 'pending-1',
+      direction: TransferDirection.inbound,
+      status: TransferStatus.receivedPendingBroadcast,
+      senderAddress: 'Sender2222222222222222222222222222222222',
+      receiverAddress: _wallet.address,
+      amountLamports: 500000000,
+    );
+    final _TestBitsendAppState state = _TestBitsendAppState(
+      inboundTransfers: <PendingTransfer>[confirmed, pending],
+    );
+
+    await pumpWithState(tester, state: state, child: const PendingScreen());
+
+    expect(find.text('◎0.5000'), findsOneWidget);
+    expect(find.text('◎0.2500'), findsNothing);
+  });
 
   testWidgets('transfer detail renders timeline and status', (
     WidgetTester tester,
@@ -564,25 +1332,24 @@ void main() {
       child: const SendTransportScreen(),
     );
 
-    expect(find.text('Endpoint not needed'), findsOneWidget);
-    expect(find.text('Receiver endpoint'), findsNothing);
+    expect(find.text('Address only'), findsOneWidget);
+    expect(find.text('Endpoint'), findsNothing);
     expect(
       find.textContaining('Send will switch to Local mode automatically'),
       findsOneWidget,
     );
   });
 
-  testWidgets('send transport shows full scanned address instead of short label', (
+  testWidgets('send transport shows route and recipient sections', (
     WidgetTester tester,
   ) async {
-    const String receiverAddress =
-        '0x38Ff8bE6A9C12D0f5D3f90E9cD7bE1A24546aBcd';
     final _TestBitsendAppState state = _TestBitsendAppState(
+      walletValue: _wallet,
+      activeWalletEngineValue: WalletEngine.local,
+      hasInternetValue: true,
       sendDraftValue: const SendDraft(
-        chain: ChainKind.ethereum,
-        network: ChainNetwork.testnet,
-        receiverAddress: receiverAddress,
-        receiverLabel: '0x38...aBcd',
+        walletEngine: WalletEngine.local,
+        transport: TransportKind.online,
       ),
     );
 
@@ -592,11 +1359,39 @@ void main() {
       child: const SendTransportScreen(),
     );
 
-    final TextField addressField = tester.widget<TextField>(
-      find.byType(TextField).first,
-    );
-    expect(addressField.controller?.text, receiverAddress);
+    expect(find.text('Send'), findsOneWidget);
+    expect(find.text('To'), findsOneWidget);
+    expect(find.text('Scan QR'), findsOneWidget);
+    expect(find.text('Online'), findsWidgets);
+    expect(find.text('Offline'), findsOneWidget);
   });
+
+  testWidgets(
+    'send transport shows full scanned address instead of short label',
+    (WidgetTester tester) async {
+      const String receiverAddress =
+          '0x38Ff8bE6A9C12D0f5D3f90E9cD7bE1A24546aBcd';
+      final _TestBitsendAppState state = _TestBitsendAppState(
+        sendDraftValue: const SendDraft(
+          chain: ChainKind.ethereum,
+          network: ChainNetwork.testnet,
+          receiverAddress: receiverAddress,
+          receiverLabel: '0x38...aBcd',
+        ),
+      );
+
+      await pumpWithState(
+        tester,
+        state: state,
+        child: const SendTransportScreen(),
+      );
+
+      final TextField addressField = tester.widget<TextField>(
+        find.byType(TextField).first,
+      );
+      expect(addressField.controller?.text, receiverAddress);
+    },
+  );
 
   testWidgets('send amount blocks oversized local transfer before review', (
     WidgetTester tester,
@@ -627,11 +1422,7 @@ void main() {
       },
     );
 
-    await pumpWithState(
-      tester,
-      state: state,
-      child: const SendAmountScreen(),
-    );
+    await pumpWithState(tester, state: state, child: const SendAmountScreen());
 
     expect(find.text('Spendable now'), findsOneWidget);
     expect(find.text('Reserved by pending'), findsOneWidget);
@@ -649,59 +1440,60 @@ void main() {
     );
   });
 
-  testWidgets('send review disables signing when amount exceeds spendable balance', (
-    WidgetTester tester,
-  ) async {
-    final _TestBitsendAppState state = _TestBitsendAppState(
-      walletValue: _wallet,
-      offlineWalletValue: _offlineWallet,
-      hasOfflineFundsValue: true,
-      hasOfflineReadyBlockhashValue: true,
-      walletSummaryValue: const WalletSummary(
-        chain: ChainKind.ethereum,
-        network: ChainNetwork.testnet,
-        balanceSol: 0.2,
-        offlineBalanceSol: 9.27,
-        offlineAvailableSol: 0.04,
-        offlineWalletAddress: '0x1111111111111111111111111111111111111111',
-        readyForOffline: true,
-        blockhashAge: null,
-        localEndpoint: null,
-      ),
-      sendDraftValue: const SendDraft(
-        chain: ChainKind.ethereum,
-        network: ChainNetwork.testnet,
-        transport: TransportKind.hotspot,
-        receiverAddress: '0x2222222222222222222222222222222222222222',
-        amountSol: 9.23,
-      ),
-      validateSendAmountHandler: (double amountSol) {
-        if (amountSol > 0.039) {
-          return 'Amount exceeds the available offline wallet balance after network fees.';
-        }
-        return null;
-      },
-    );
+  testWidgets(
+    'send review disables signing when amount exceeds spendable balance',
+    (WidgetTester tester) async {
+      final _TestBitsendAppState state = _TestBitsendAppState(
+        walletValue: _wallet,
+        offlineWalletValue: _offlineWallet,
+        hasOfflineFundsValue: true,
+        hasOfflineReadyBlockhashValue: true,
+        walletSummaryValue: const WalletSummary(
+          chain: ChainKind.ethereum,
+          network: ChainNetwork.testnet,
+          balanceSol: 0.2,
+          offlineBalanceSol: 9.27,
+          offlineAvailableSol: 0.04,
+          offlineWalletAddress: '0x1111111111111111111111111111111111111111',
+          readyForOffline: true,
+          blockhashAge: null,
+          localEndpoint: null,
+        ),
+        sendDraftValue: const SendDraft(
+          chain: ChainKind.ethereum,
+          network: ChainNetwork.testnet,
+          transport: TransportKind.hotspot,
+          receiverAddress: '0x2222222222222222222222222222222222222222',
+          amountSol: 9.23,
+        ),
+        validateSendAmountHandler: (double amountSol) {
+          if (amountSol > 0.039) {
+            return 'Amount exceeds the available offline wallet balance after network fees.';
+          }
+          return null;
+        },
+      );
 
-    await pumpWithState(
-      tester,
-      state: state,
-      child: const SendReviewScreen(),
-    );
+      await pumpWithState(
+        tester,
+        state: state,
+        child: const SendReviewScreen(),
+      );
 
-    expect(find.text('Amount too high'), findsOneWidget);
-    expect(
-      find.text(
-        'Amount exceeds the available offline wallet balance after network fees.',
-      ),
-      findsOneWidget,
-    );
+      expect(find.text('Amount too high'), findsOneWidget);
+      expect(
+        find.text(
+          'Amount exceeds the available offline wallet balance after network fees.',
+        ),
+        findsOneWidget,
+      );
 
-    final ElevatedButton button = tester.widget<ElevatedButton>(
-      find.widgetWithText(ElevatedButton, 'Sign and send'),
-    );
-    expect(button.onPressed, isNull);
-  });
+      final ElevatedButton button = tester.widget<ElevatedButton>(
+        find.widgetWithText(ElevatedButton, 'Sign and send'),
+      );
+      expect(button.onPressed, isNull);
+    },
+  );
 
   testWidgets('home explains non-live BitGo backend falls back to Local send', (
     WidgetTester tester,
@@ -786,34 +1578,41 @@ PendingTransfer _transfer({
   required String senderAddress,
   required String receiverAddress,
   required int amountLamports,
+  TransportKind transport = TransportKind.hotspot,
+  WalletEngine walletEngine = WalletEngine.local,
+  String? transactionSignature,
 }) {
   final DateTime now = DateTime(2026, 3, 13, 12);
-  final OfflineEnvelope envelope = OfflineEnvelope.create(
-    transferId: transferId,
-    createdAt: now,
-    chain: ChainKind.solana,
-    network: ChainNetwork.testnet,
-    senderAddress: senderAddress,
-    receiverAddress: receiverAddress,
-    amountLamports: amountLamports,
-    signedTransactionBase64: 'ZW5jb2RlZA==',
-    transportKind: TransportKind.hotspot,
-  );
+  final OfflineEnvelope? envelope = transport == TransportKind.online
+      ? null
+      : OfflineEnvelope.create(
+          transferId: transferId,
+          createdAt: now,
+          chain: ChainKind.solana,
+          network: ChainNetwork.testnet,
+          senderAddress: senderAddress,
+          receiverAddress: receiverAddress,
+          amountLamports: amountLamports,
+          signedTransactionBase64: 'ZW5jb2RlZA==',
+          transportKind: transport,
+        );
   return PendingTransfer(
     transferId: transferId,
     chain: ChainKind.solana,
     network: ChainNetwork.testnet,
-    walletEngine: WalletEngine.local,
+    walletEngine: walletEngine,
     direction: direction,
     status: status,
     amountLamports: amountLamports,
     senderAddress: senderAddress,
     receiverAddress: receiverAddress,
-    transport: TransportKind.hotspot,
+    transport: transport,
     createdAt: now,
     updatedAt: now,
     envelope: envelope,
-    transactionSignature: '5vzWQyrGExdHJ9pQxV7j1U8QGSoK8Vw1w2h4bB2ZvFQq1n3R9Y7',
+    transactionSignature:
+        transactionSignature ??
+        '5vzWQyrGExdHJ9pQxV7j1U8QGSoK8Vw1w2h4bB2ZvFQq1n3R9Y7',
   );
 }
 
@@ -822,6 +1621,8 @@ class _TestBitsendAppState extends BitsendAppState {
     this.bootRouteValue = AppRoutes.home,
     this.walletValue,
     this.offlineWalletValue,
+    this.activeChainValue = ChainKind.ethereum,
+    this.activeNetworkValue = ChainNetwork.testnet,
     this.activeWalletEngineValue = WalletEngine.local,
     this.hasEnoughFundingValue = false,
     this.hasOfflineFundsValue = false,
@@ -866,13 +1667,37 @@ class _TestBitsendAppState extends BitsendAppState {
     this.validateSendAmountHandler,
     this.deviceAuthAvailableValue = false,
     this.deviceAuthHasBiometricOptionValue = false,
+    this.requiresBiometricSetupValue = false,
     this.requiresDeviceUnlockValue = false,
     this.authenticateDeviceResultValue = true,
-  }) : super(clock: () => DateTime(2026, 3, 13, 12));
+    this.exportWalletBackupValue = const WalletBackupExport(
+      fileName: 'bitsend-wallet-backup-test.json',
+      filePath: '/tmp/bitsend-wallet-backup-test.json',
+    ),
+    this.exportWalletBackupError,
+    this.clearLocalDataError,
+    this.portfolioHoldingsValue = const <AssetPortfolioHolding>[],
+    this.portfolioUsdTotalValue = 0,
+    double? activeScopeUsdTotalValue,
+    this.accountSummariesValue = const <WalletAccountSummary>[],
+    this.tokenAssetsValue = const <TrackedAssetDefinition>[],
+    this.allowanceEntriesValue = const <TokenAllowanceEntry>[],
+    this.nftHoldingsValue = const <NftHolding>[],
+    this.swapApiKeyValue = '',
+    this.hasSwapApiKeyValue = false,
+    this.swapSlippageBpsValue,
+    this.swapSupportedOnActiveScopeValue = false,
+    this.quoteSwapHandler,
+    this.executeSwapHandler,
+  }) : activeScopeUsdTotalValue =
+           activeScopeUsdTotalValue ?? portfolioUsdTotalValue,
+       super(clock: () => DateTime(2026, 3, 13, 12));
 
   final String bootRouteValue;
   final WalletProfile? walletValue;
   final WalletProfile? offlineWalletValue;
+  final ChainKind activeChainValue;
+  final ChainNetwork activeNetworkValue;
   final WalletEngine activeWalletEngineValue;
   final bool hasEnoughFundingValue;
   final bool hasOfflineFundsValue;
@@ -907,8 +1732,36 @@ class _TestBitsendAppState extends BitsendAppState {
   final String? Function(double amountSol)? validateSendAmountHandler;
   final bool deviceAuthAvailableValue;
   final bool deviceAuthHasBiometricOptionValue;
+  final bool requiresBiometricSetupValue;
   final bool requiresDeviceUnlockValue;
   final bool authenticateDeviceResultValue;
+  final WalletBackupExport exportWalletBackupValue;
+  final Object? exportWalletBackupError;
+  final Object? clearLocalDataError;
+  final List<AssetPortfolioHolding> portfolioHoldingsValue;
+  final double? portfolioUsdTotalValue;
+  final double? activeScopeUsdTotalValue;
+  final List<WalletAccountSummary> accountSummariesValue;
+  final List<TrackedAssetDefinition> tokenAssetsValue;
+  final List<TokenAllowanceEntry> allowanceEntriesValue;
+  final List<NftHolding> nftHoldingsValue;
+  final String swapApiKeyValue;
+  final bool hasSwapApiKeyValue;
+  final int? swapSlippageBpsValue;
+  final bool swapSupportedOnActiveScopeValue;
+  final Future<SwapQuote> Function({
+    required String sellAssetId,
+    required String buyAssetId,
+    required double sellAmount,
+  })? quoteSwapHandler;
+  final Future<PendingTransfer> Function({
+    required String sellAssetId,
+    required String buyAssetId,
+    required double sellAmount,
+  })? executeSwapHandler;
+  int authenticateDeviceCallCount = 0;
+  int exportWalletBackupCallCount = 0;
+  int clearLocalDataCallCount = 0;
 
   @override
   Future<void> initialize() async {}
@@ -921,6 +1774,12 @@ class _TestBitsendAppState extends BitsendAppState {
 
   @override
   WalletProfile? get offlineWallet => offlineWalletValue;
+
+  @override
+  ChainKind get activeChain => activeChainValue;
+
+  @override
+  ChainNetwork get activeNetwork => activeNetworkValue;
 
   @override
   WalletEngine get activeWalletEngine => activeWalletEngineValue;
@@ -944,22 +1803,45 @@ class _TestBitsendAppState extends BitsendAppState {
   bool get deviceAuthAvailable => deviceAuthAvailableValue;
 
   @override
-  bool get deviceAuthHasBiometricOption =>
-      deviceAuthHasBiometricOptionValue;
+  bool get deviceAuthHasBiometricOption => deviceAuthHasBiometricOptionValue;
+
+  @override
+  bool get requiresBiometricSetup => requiresBiometricSetupValue;
 
   @override
   bool get requiresDeviceUnlock => requiresDeviceUnlockValue;
 
   @override
-  String get deviceUnlockMethodLabel => deviceAuthHasBiometricOptionValue
-      ? 'fingerprint or phone passcode'
-      : 'phone passcode';
+  String get deviceUnlockMethodLabel => 'biometric unlock';
 
   @override
   Future<bool> authenticateDevice({
     String? reason,
     bool forcePrompt = false,
-  }) async => authenticateDeviceResultValue;
+  }) async {
+    authenticateDeviceCallCount += 1;
+    return authenticateDeviceResultValue;
+  }
+
+  @override
+  Future<WalletBackupExport> exportWalletBackup() async {
+    exportWalletBackupCallCount += 1;
+    if (exportWalletBackupError != null) {
+      throw exportWalletBackupError!;
+    }
+    return exportWalletBackupValue;
+  }
+
+  @override
+  Future<void> clearLocalData() async {
+    clearLocalDataCallCount += 1;
+    if (clearLocalDataError != null) {
+      throw clearLocalDataError!;
+    }
+  }
+
+  @override
+  Future<bool> openSystemSettings() async => true;
 
   @override
   bool get hasEnoughFunding => hasEnoughFundingValue;
@@ -977,10 +1859,49 @@ class _TestBitsendAppState extends BitsendAppState {
   double get offlineBalanceSol => walletSummaryValue.offlineBalanceSol;
 
   @override
-  double get offlineSpendableBalanceSol => walletSummaryValue.offlineAvailableSol;
+  double get offlineSpendableBalanceSol =>
+      walletSummaryValue.offlineAvailableSol;
 
   @override
   WalletSummary get walletSummary => walletSummaryValue;
+
+  @override
+  List<AssetPortfolioHolding> get portfolioHoldings => portfolioHoldingsValue;
+
+  @override
+  List<TrackedAssetDefinition> get tokenAssetsForActiveScope =>
+      tokenAssetsValue;
+
+  @override
+  List<TokenAllowanceEntry> get allowanceEntriesForActiveScope =>
+      allowanceEntriesValue;
+
+  @override
+  List<NftHolding> get nftHoldingsForActiveScope => nftHoldingsValue;
+
+  @override
+  double? get portfolioUsdTotal => portfolioUsdTotalValue;
+
+  @override
+  double? get activeScopeUsdTotal => activeScopeUsdTotalValue;
+
+  @override
+  String get swapApiKey => swapApiKeyValue;
+
+  @override
+  bool get hasSwapApiKey => hasSwapApiKeyValue;
+
+  @override
+  int? get swapSlippageBps => swapSlippageBpsValue;
+
+  @override
+  bool get swapSupportedOnActiveScope => swapSupportedOnActiveScopeValue;
+
+  @override
+  Future<void> setSwapApiKey(String value) async {}
+
+  @override
+  Future<void> setSwapSlippageBps(int? value) async {}
 
   @override
   double get estimatedSendFeeHeadroomSol => estimatedSendFeeHeadroomSolValue;
@@ -1064,16 +1985,35 @@ class _TestBitsendAppState extends BitsendAppState {
   Future<void> stopReceiver() async {}
 
   @override
-  List<PendingTransfer> recentActivity() => <PendingTransfer>[
-    ...inboundTransfers,
-    ...outboundTransfers,
-  ];
+  List<PendingTransfer> get pendingTransfers {
+    return <PendingTransfer>[
+      ...inboundTransfers,
+      ...outboundTransfers,
+    ]
+        .where((PendingTransfer transfer) => transfer.isVisibleInPendingQueue)
+        .toList(growable: false);
+  }
+
+  @override
+  List<PendingTransfer> recentActivity() {
+    final List<PendingTransfer> sorted = <PendingTransfer>[
+      ...inboundTransfers,
+      ...outboundTransfers,
+    ]..sort(
+      (PendingTransfer a, PendingTransfer b) =>
+          b.updatedAt.compareTo(a.updatedAt),
+    );
+    return sorted;
+  }
 
   @override
   List<PendingTransfer> transfersFor(TransferDirection direction) {
-    return direction == TransferDirection.inbound
+    final List<PendingTransfer> transfers = direction == TransferDirection.inbound
         ? inboundTransfers
         : outboundTransfers;
+    return transfers
+        .where((PendingTransfer transfer) => transfer.isVisibleInPendingQueue)
+        .toList(growable: false);
   }
 
   @override
@@ -1086,4 +2026,48 @@ class _TestBitsendAppState extends BitsendAppState {
   @override
   String? validateSendAmount(double amountSol) =>
       validateSendAmountHandler?.call(amountSol);
+
+  @override
+  Future<void> refreshPortfolioBalances() async {}
+
+  @override
+  Future<SwapQuote> quoteSwap({
+    required String sellAssetId,
+    required String buyAssetId,
+    required double sellAmount,
+  }) async {
+    if (quoteSwapHandler == null) {
+      throw UnimplementedError('quoteSwapHandler not provided');
+    }
+    return quoteSwapHandler!(
+      sellAssetId: sellAssetId,
+      buyAssetId: buyAssetId,
+      sellAmount: sellAmount,
+    );
+  }
+
+  @override
+  Future<PendingTransfer> executeSwap({
+    required String sellAssetId,
+    required String buyAssetId,
+    required double sellAmount,
+  }) async {
+    if (executeSwapHandler == null) {
+      throw UnimplementedError('executeSwapHandler not provided');
+    }
+    return executeSwapHandler!(
+      sellAssetId: sellAssetId,
+      buyAssetId: buyAssetId,
+      sellAmount: sellAmount,
+    );
+  }
+
+  @override
+  Future<List<WalletAccountSummary>>
+  loadAccountSummariesForActiveChain() async {
+    return accountSummariesValue;
+  }
+
+  @override
+  Future<void> refreshNftHoldings() async {}
 }

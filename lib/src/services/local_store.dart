@@ -18,7 +18,7 @@ class LocalStore {
     final dbPath = path.join(directory.path, 'bitsend.db');
     _database = await openDatabase(
       dbPath,
-      version: 6,
+      version: 7,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE pending_transfers (
@@ -34,6 +34,12 @@ class LocalStore {
             transport_hint TEXT NOT NULL,
             created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL,
+            asset_id TEXT,
+            asset_symbol TEXT,
+            asset_display_name TEXT,
+            asset_decimals INTEGER,
+            asset_contract_address TEXT,
+            asset_is_native INTEGER NOT NULL DEFAULT 1,
             envelope_json TEXT NOT NULL,
             remote_endpoint TEXT,
             tx_signature TEXT,
@@ -59,46 +65,117 @@ class LocalStore {
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
         if (oldVersion < 2) {
-          await db.execute(
-            "ALTER TABLE pending_transfers ADD COLUMN chain TEXT NOT NULL DEFAULT 'solana'",
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'chain',
+            definition: "TEXT NOT NULL DEFAULT 'solana'",
           );
         }
         if (oldVersion < 3) {
-          await db.execute(
-            "ALTER TABLE pending_transfers ADD COLUMN network TEXT NOT NULL DEFAULT 'testnet'",
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'network',
+            definition: "TEXT NOT NULL DEFAULT 'testnet'",
           );
         }
         if (oldVersion < 4) {
-          await db.execute(
-            "ALTER TABLE pending_transfers ADD COLUMN wallet_engine TEXT NOT NULL DEFAULT 'local'",
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'wallet_engine',
+            definition: "TEXT NOT NULL DEFAULT 'local'",
           );
-          await db.execute(
-            'ALTER TABLE pending_transfers ADD COLUMN bitgo_wallet_id TEXT',
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'bitgo_wallet_id',
+            definition: 'TEXT',
           );
-          await db.execute(
-            'ALTER TABLE pending_transfers ADD COLUMN bitgo_transfer_id TEXT',
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'bitgo_transfer_id',
+            definition: 'TEXT',
           );
-          await db.execute(
-            'ALTER TABLE pending_transfers ADD COLUMN backend_status TEXT',
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'backend_status',
+            definition: 'TEXT',
           );
         }
         if (oldVersion < 5) {
-          await db.execute(
-            'ALTER TABLE pending_transfers ADD COLUMN fileverse_receipt_id TEXT',
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'fileverse_receipt_id',
+            definition: 'TEXT',
           );
-          await db.execute(
-            'ALTER TABLE pending_transfers ADD COLUMN fileverse_receipt_url TEXT',
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'fileverse_receipt_url',
+            definition: 'TEXT',
           );
-          await db.execute(
-            'ALTER TABLE pending_transfers ADD COLUMN fileverse_saved_at_ms INTEGER',
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'fileverse_saved_at_ms',
+            definition: 'INTEGER',
           );
         }
         if (oldVersion < 6) {
-          await db.execute(
-            'ALTER TABLE pending_transfers ADD COLUMN fileverse_storage_mode TEXT',
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'fileverse_storage_mode',
+            definition: 'TEXT',
           );
-          await db.execute(
-            'ALTER TABLE pending_transfers ADD COLUMN fileverse_message TEXT',
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'fileverse_message',
+            definition: 'TEXT',
+          );
+        }
+        if (oldVersion < 7) {
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'asset_id',
+            definition: 'TEXT',
+          );
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'asset_symbol',
+            definition: 'TEXT',
+          );
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'asset_display_name',
+            definition: 'TEXT',
+          );
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'asset_decimals',
+            definition: 'INTEGER',
+          );
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'asset_contract_address',
+            definition: 'TEXT',
+          );
+          await _addColumnIfMissing(
+            db,
+            table: 'pending_transfers',
+            column: 'asset_is_native',
+            definition: 'INTEGER NOT NULL DEFAULT 1',
           );
         }
       },
@@ -183,5 +260,23 @@ class LocalStore {
     final Database db = await database;
     await db.delete('pending_transfers');
     await db.delete('settings');
+  }
+
+  Future<void> _addColumnIfMissing(
+    Database db, {
+    required String table,
+    required String column,
+    required String definition,
+  }) async {
+    final List<Map<String, Object?>> columns = await db.rawQuery(
+      'PRAGMA table_info($table)',
+    );
+    final bool exists = columns.any(
+      (Map<String, Object?> item) => item['name'] == column,
+    );
+    if (exists) {
+      return;
+    }
+    await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
   }
 }

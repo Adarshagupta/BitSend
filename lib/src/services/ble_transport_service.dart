@@ -9,6 +9,110 @@ import 'package:solana/solana.dart' show isValidAddress;
 import '../models/app_models.dart';
 import 'transport_contract.dart';
 
+enum BleFailureStage { scan, advertise, connect, transfer }
+
+Object normalizeBleTransportError(
+  Object error, {
+  required BleFailureStage stage,
+}) {
+  if (error is FormatException ||
+      error is SocketException ||
+      error is TimeoutException ||
+      error is UnsupportedError) {
+    return error;
+  }
+
+  final String raw = error.toString();
+  final String message = raw.toLowerCase();
+
+  if (message.contains('start advertising failed with error code: 1')) {
+    return const FormatException(
+      'Bluetooth advertising payload was too large for this device. The receiver profile was simplified; try again.',
+    );
+  }
+  if (message.contains('start advertising failed with error code: 2') ||
+      message.contains('start advertising failed with error code: 4') ||
+      message.contains('start discovery failed with error code: 2') ||
+      message.contains('start discovery failed with error code: 3') ||
+      message.contains('start discovery failed with error code: 5') ||
+      message.contains('bluetoothleadvertiser') ||
+      message.contains('bluetoothlescanner')) {
+    return const FormatException(
+      'Bluetooth is busy on this phone, often because another accessory or app is already using it. Disconnect AirPods or other Bluetooth devices, then try BLE again.',
+    );
+  }
+  if (message.contains('start advertising failed with error code: 3')) {
+    return const FormatException('Bluetooth receive is already running.');
+  }
+  if (message.contains('start advertising failed with error code: 5') ||
+      message.contains('start discovery failed with error code: 4')) {
+    return const FormatException(
+      'Bluetooth Low Energy is not supported on this device.',
+    );
+  }
+  if (message.contains('start discovery failed with error code: 1')) {
+    return const FormatException('Bluetooth scan is already running.');
+  }
+  if (message.contains('start discovery failed with error code: 6')) {
+    return const FormatException(
+      'Bluetooth scan was started too often. Wait a few seconds and try again.',
+    );
+  }
+  if (message.contains('connect failed with status: 133') ||
+      message.contains('gatt is disconnected with status: 133') ||
+      message.contains('connect failed with status: 8') ||
+      message.contains('gatt is disconnected with status: 8') ||
+      message.contains('connect failed with status: 62') ||
+      message.contains('gatt is disconnected with status: 62') ||
+      message.contains('connect failed with status: 257') ||
+      message.contains('gatt is disconnected with status: 257')) {
+    return const FormatException(
+      'Bluetooth connection could not be established. If AirPods or another Bluetooth accessory is connected, disconnect it and try again.',
+    );
+  }
+  if (message.contains('discover gatt failed with status:') ||
+      message.contains('read characteristic failed with status:') ||
+      message.contains('write characteristic failed with status:') ||
+      message.contains('read descriptor failed with status:') ||
+      message.contains('write descriptor failed with status:') ||
+      message.contains('send response failed')) {
+    return const FormatException(
+      'Bluetooth transfer was interrupted. Keep both phones nearby and disconnect other active Bluetooth accessories, then try again.',
+    );
+  }
+  if (message.contains('illegalstateexception')) {
+    return switch (stage) {
+      BleFailureStage.scan => const FormatException(
+        'Bluetooth scan could not start cleanly. If another Bluetooth accessory is active, disconnect it and try again.',
+      ),
+      BleFailureStage.advertise => const FormatException(
+        'Bluetooth receive could not start cleanly. If another Bluetooth accessory is active, disconnect it and try again.',
+      ),
+      BleFailureStage.connect => const FormatException(
+        'Bluetooth connection failed. Disconnect other active Bluetooth accessories and try again.',
+      ),
+      BleFailureStage.transfer => const FormatException(
+        'Bluetooth transfer failed. Disconnect other active Bluetooth accessories and retry.',
+      ),
+    };
+  }
+
+  return switch (stage) {
+    BleFailureStage.scan => const FormatException(
+      'Bluetooth scan failed. If another Bluetooth accessory is active, disconnect it and try again.',
+    ),
+    BleFailureStage.advertise => const FormatException(
+      'Bluetooth receive failed to start. If another Bluetooth accessory is active, disconnect it and try again.',
+    ),
+    BleFailureStage.connect => const FormatException(
+      'Bluetooth connection failed. Move the devices closer and try again.',
+    ),
+    BleFailureStage.transfer => const FormatException(
+      'Bluetooth transfer failed. Keep both phones nearby and try again.',
+    ),
+  };
+}
+
 class BleTransportService {
   BleTransportService({
     CentralManager? centralManager,
@@ -50,7 +154,7 @@ class BleTransportService {
   final Map<String, _BleInboundSession> _sessions = <String, _BleInboundSession>{};
   final Map<String, Uint8List> _acks = <String, Uint8List>{};
 
-  EnvelopeHandler? _onEnvelope;
+  TransportPayloadHandler? _onPayload;
   TransportActivityHandler? _onActivity;
   bool _advertising = false;
   bool _discovering = false;
@@ -88,6 +192,8 @@ class BleTransportService {
         }
       }
       await _hydrateReceiverMetadata(manager);
+    } catch (error) {
+      throw normalizeBleTransportError(error, stage: BleFailureStage.scan);
     } finally {
       _discovering = false;
     }
@@ -95,7 +201,7 @@ class BleTransportService {
   }
 
   Future<void> start({
-    required EnvelopeHandler onEnvelope,
+    required TransportPayloadHandler onPayload,
     required String receiverDisplayAddress,
     required String receiverAddress,
     required ChainKind receiverChain,
@@ -109,54 +215,53 @@ class BleTransportService {
     final PeripheralManager manager = _peripheral;
     _ensurePeripheralInitialized();
     await _ensureManagerReady(manager);
-    _onEnvelope = onEnvelope;
+    _onPayload = onPayload;
     _onActivity = onActivity;
     _sessions.clear();
     _acks.clear();
 
-    await manager.removeAllServices();
-    await manager.addService(
-      GATTService(
-        uuid: serviceUuid,
-        isPrimary: true,
-        includedServices: const <GATTService>[],
-        characteristics: <GATTCharacteristic>[
-          GATTCharacteristic.immutable(
-            uuid: receiverInfoCharacteristicUuid,
-            value: _receiverInfoBytes(
-              receiverChain: receiverChain,
-              receiverNetwork: receiverNetwork,
-              receiverAddress: receiverAddress,
-              receiverDisplayAddress: receiverDisplayAddress,
-            ),
-            descriptors: const <GATTDescriptor>[],
-          ),
-          GATTCharacteristic.mutable(
-            uuid: writeCharacteristicUuid,
-            properties: <GATTCharacteristicProperty>[
-              GATTCharacteristicProperty.write,
-              GATTCharacteristicProperty.writeWithoutResponse,
-            ],
-            permissions: <GATTCharacteristicPermission>[
-              GATTCharacteristicPermission.write,
-            ],
-            descriptors: const <GATTDescriptor>[],
-          ),
-          GATTCharacteristic.mutable(
-            uuid: ackCharacteristicUuid,
-            properties: <GATTCharacteristicProperty>[
-              GATTCharacteristicProperty.read,
-            ],
-            permissions: <GATTCharacteristicPermission>[
-              GATTCharacteristicPermission.read,
-            ],
-            descriptors: const <GATTDescriptor>[],
-          ),
-        ],
-      ),
-    );
-
     try {
+      await manager.removeAllServices();
+      await manager.addService(
+        GATTService(
+          uuid: serviceUuid,
+          isPrimary: true,
+          includedServices: const <GATTService>[],
+          characteristics: <GATTCharacteristic>[
+            GATTCharacteristic.immutable(
+              uuid: receiverInfoCharacteristicUuid,
+              value: _receiverInfoBytes(
+                receiverChain: receiverChain,
+                receiverNetwork: receiverNetwork,
+                receiverAddress: receiverAddress,
+                receiverDisplayAddress: receiverDisplayAddress,
+              ),
+              descriptors: const <GATTDescriptor>[],
+            ),
+            GATTCharacteristic.mutable(
+              uuid: writeCharacteristicUuid,
+              properties: <GATTCharacteristicProperty>[
+                GATTCharacteristicProperty.write,
+                GATTCharacteristicProperty.writeWithoutResponse,
+              ],
+              permissions: <GATTCharacteristicPermission>[
+                GATTCharacteristicPermission.write,
+              ],
+              descriptors: const <GATTDescriptor>[],
+            ),
+            GATTCharacteristic.mutable(
+              uuid: ackCharacteristicUuid,
+              properties: <GATTCharacteristicProperty>[
+                GATTCharacteristicProperty.read,
+              ],
+              permissions: <GATTCharacteristicPermission>[
+                GATTCharacteristicPermission.read,
+              ],
+              descriptors: const <GATTDescriptor>[],
+            ),
+          ],
+        ),
+      );
       await manager.startAdvertising(
         Advertisement(
           name: Platform.isWindows
@@ -167,7 +272,11 @@ class BleTransportService {
         ),
       );
     } catch (error) {
-      throw _mapAdvertisingError(error);
+      _onPayload = null;
+      _onActivity = null;
+      _sessions.clear();
+      _acks.clear();
+      throw normalizeBleTransportError(error, stage: BleFailureStage.advertise);
     }
     _advertising = true;
   }
@@ -193,7 +302,7 @@ class BleTransportService {
 
   Future<void> send({
     required String peripheralId,
-    required OfflineEnvelope envelope,
+    required OfflineTransportPayload payload,
   }) async {
     final CentralManager manager = _central;
     _ensureCentralInitialized();
@@ -203,8 +312,8 @@ class BleTransportService {
       throw const FormatException('BLE receiver is not available. Scan again and retry.');
     }
 
-    final Uint8List payload = Uint8List.fromList(
-      utf8.encode(jsonEncode(envelope.toJson())),
+    final Uint8List payloadBytes = Uint8List.fromList(
+      utf8.encode(jsonEncode(payload.toJson())),
     );
 
     try {
@@ -256,17 +365,17 @@ class BleTransportService {
         manager.writeCharacteristic(
           peripheral,
           writeCharacteristic,
-          value: _startFrame(payload.length),
+          value: _startFrame(payloadBytes.length),
           type: GATTCharacteristicWriteType.withResponse,
         ),
         message: 'BLE transfer could not start. Try again.',
         timeout: _ioTimeout,
       );
 
-      for (int offset = 0; offset < payload.length; offset += chunkLength) {
-        final int end = (offset + chunkLength).clamp(0, payload.length);
+      for (int offset = 0; offset < payloadBytes.length; offset += chunkLength) {
+        final int end = (offset + chunkLength).clamp(0, payloadBytes.length);
         final Uint8List frame = Uint8List.fromList(
-          <int>[_frameChunk, ...payload.sublist(offset, end)],
+          <int>[_frameChunk, ...payloadBytes.sublist(offset, end)],
         );
         await _withTimeout(
           manager.writeCharacteristic(
@@ -303,6 +412,8 @@ class BleTransportService {
       if (ack['accepted'] != true) {
         throw FormatException(ack['message'] as String? ?? 'BLE transfer rejected.');
       }
+    } catch (error) {
+      throw normalizeBleTransportError(error, stage: BleFailureStage.transfer);
     } finally {
       try {
         await _withTimeout(
@@ -625,14 +736,16 @@ class BleTransportService {
         }
         final Map<String, dynamic> payload =
             jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-        final OfflineEnvelope envelope = OfflineEnvelope.fromJson(payload);
-        final TransportReceiveResult result = await (_onEnvelope?.call(envelope) ??
-            Future<TransportReceiveResult>.value(
-              const TransportReceiveResult(
-                accepted: false,
-                message: 'BLE receiver is not ready.',
-              ),
-            ));
+        final OfflineTransportPayload transportPayload =
+            OfflineTransportPayload.fromJson(payload);
+        final TransportReceiveResult result =
+            await (_onPayload?.call(transportPayload) ??
+                Future<TransportReceiveResult>.value(
+                  const TransportReceiveResult(
+                    accepted: false,
+                    message: 'BLE receiver is not ready.',
+                  ),
+                ));
         _acks[centralId] = _ackBytes(result);
       } else {
         throw const FormatException('Unknown BLE frame type.');
@@ -841,36 +954,6 @@ class BleTransportService {
         ? display
         : display.substring(display.length - 4);
     return 'bitsend-$prefix$suffix';
-  }
-
-  Object _mapAdvertisingError(Object error) {
-    final String message = error.toString();
-    if (message.contains('error code: 1')) {
-      return const FormatException(
-        'Bluetooth advertising payload was too large for this device. The receiver profile was simplified; try again.',
-      );
-    }
-    if (message.contains('error code: 2')) {
-      return const FormatException(
-        'This device cannot start another Bluetooth advertiser right now. Close other Bluetooth-sharing apps and try again.',
-      );
-    }
-    if (message.contains('error code: 3')) {
-      return const FormatException(
-        'Bluetooth receive is already running.',
-      );
-    }
-    if (message.contains('error code: 4')) {
-      return const FormatException(
-        'Android reported an internal Bluetooth advertising error. Toggle Bluetooth off and on, then try again.',
-      );
-    }
-    if (message.contains('error code: 5')) {
-      return const FormatException(
-        'Bluetooth advertising is not supported on this device.',
-      );
-    }
-    return error;
   }
 
   Future<T> _withTimeout<T>(
