@@ -111,6 +111,27 @@ npm run dev
 npm run deploy
 ```
 
+### Host the Android alpha APK on Cloudflare
+
+Create the R2 bucket once:
+
+```powershell
+cd backend-worker
+wrangler r2 bucket create bitsend-downloads --location=apac
+```
+
+Upload the APK:
+
+```powershell
+wrangler r2 object put bitsend-downloads/bitsend-alpha.apk --file=..\site\assets\downloads\bitsend-alpha.apk
+```
+
+Then deploy the Worker and point the microsite config at:
+
+```text
+https://bitsend-bitgo-backend.blueadarsh1.workers.dev/downloads/bitsend-alpha.apk
+```
+
 ## Worker Environment
 
 Configure the wallet and receipt backend through Worker environment variables.

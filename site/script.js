@@ -4,11 +4,14 @@
 
   const config = window.BITSEND_CONFIG || {};
   const appTargetUrl = config.APP_TARGET_URL || "/app/";
+  const apkDownloadUrl =
+    config.APK_DOWNLOAD_URL || "assets/downloads/bitsend-alpha.apk";
   const prefersReducedMotion = window.matchMedia(
     "(prefers-reduced-motion: reduce)",
   );
 
   const appLinks = document.querySelectorAll("[data-app-link]");
+  const apkLinks = document.querySelectorAll("[data-apk-link]");
   const main = document.getElementById("main");
   const sections = Array.from(document.querySelectorAll("[data-section]"));
   const navLinks = Array.from(document.querySelectorAll("[data-nav-link]"));
@@ -42,6 +45,10 @@
 
   appLinks.forEach((link) => {
     link.setAttribute("href", appTargetUrl);
+  });
+
+  apkLinks.forEach((link) => {
+    link.setAttribute("href", apkDownloadUrl);
   });
 
   const phoneNavMedia = window.matchMedia("(max-width: 520px)");

@@ -17,6 +17,12 @@
       }
     ]
   },
+  "r2_buckets": [
+    {
+      "binding": "APK_DOWNLOADS",
+      "bucket_name": "bitsend-downloads"
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",

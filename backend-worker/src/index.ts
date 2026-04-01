@@ -236,6 +236,7 @@ type StoredFileverseReceiptRecord = FileverseReceiptRecord & {
 
 interface Env {
   BITGO_STATE: DurableObjectNamespace<BitGoState>;
+  APK_DOWNLOADS?: R2Bucket;
   BITGO_ENV?: 'test' | 'prod';
   BITGO_ACCESS_TOKEN?: string;
   BITGO_API_BASE_URL?: string;
@@ -269,11 +270,14 @@ const offlineMaxRelayPayloadBytes = 24 * 1024;
 const fileverseSyncPollAttempts = 45;
 const fileverseSyncPollDelayMs = 2000;
 const bitgoRequestTimeoutMs = 20000;
-const backendVersion = '2026.03.15.3';
+const apkDownloadPath = '/downloads/bitsend-alpha.apk';
+const apkDownloadObjectKey = 'bitsend-alpha.apk';
+const apkDownloadFilename = 'bitsend-alpha.apk';
+const backendVersion = '2026.04.01.1';
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
 };
 
 class HttpError extends Error {
@@ -308,6 +312,18 @@ export default {
           mode: getGatewayMode(env),
           version: backendVersion,
         });
+      }
+
+      if (
+        (request.method === 'GET' || request.method === 'HEAD') &&
+        url.pathname === apkDownloadPath
+      ) {
+        return serveBucketDownload(
+          env,
+          request,
+          apkDownloadObjectKey,
+          apkDownloadFilename,
+        );
       }
 
       if (
@@ -2600,6 +2616,59 @@ function jsonResponse(body: unknown, status = 200): Response {
       ...corsHeaders,
     },
   });
+}
+
+async function serveBucketDownload(
+  env: Env,
+  request: Request,
+  objectKey: string,
+  filename: string,
+): Promise<Response> {
+  if (!env.APK_DOWNLOADS) {
+    return jsonResponse(
+      { message: 'APK download bucket is not configured.' },
+      503,
+    );
+  }
+
+  const object = await env.APK_DOWNLOADS.get(objectKey);
+  if (!object) {
+    return jsonResponse(
+      { message: 'APK file was not found in the download bucket.' },
+      404,
+    );
+  }
+
+  const headers = new Headers(corsHeaders);
+  object.writeHttpMetadata(headers);
+  headers.set('Cache-Control', 'public, max-age=3600');
+  headers.set('Content-Disposition', contentDispositionAttachment(filename));
+  headers.set(
+    'Content-Type',
+    headers.get('Content-Type') ?? 'application/vnd.android.package-archive',
+  );
+  headers.set('Content-Length', object.size.toString());
+  headers.set('ETag', object.httpEtag);
+  headers.set('X-Content-Type-Options', 'nosniff');
+
+  if (request.method === 'HEAD') {
+    return new Response(null, {
+      status: 200,
+      headers,
+    });
+  }
+
+  return new Response(object.body, {
+    status: 200,
+    headers,
+  });
+}
+
+function contentDispositionAttachment(filename: string): string {
+  const safeFilename = filename
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"');
+  return `attachment; filename="${safeFilename}"`;
 }
 
 function coinForScope(chain: AppChain, network: AppNetwork): string {
