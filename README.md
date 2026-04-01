@@ -2,6 +2,25 @@
 
 BitSend is a multichain Flutter payment app built for fast wallet setup, clean transfer flows, and flexible settlement across local and managed wallet paths.
 
+![BitSend home screen](site/gallery/Home_screen.jpg)
+
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="site/gallery/welcome_screen.jpg" alt="BitSend welcome screen" width="220" /></td>
+    <td><img src="site/gallery/setup_screen.jpg" alt="BitSend setup screen" width="220" /></td>
+    <td><img src="site/gallery/secure_screen.jpg" alt="BitSend secure screen" width="220" /></td>
+    <td><img src="site/gallery/Multi_chain.jpg" alt="BitSend multichain screen" width="220" /></td>
+  </tr>
+  <tr>
+    <td><img src="site/gallery/offline_wallet_screen.jpg" alt="BitSend offline wallet screen" width="220" /></td>
+    <td><img src="site/gallery/offline_receve_screen.jpg" alt="BitSend offline receive screen" width="220" /></td>
+    <td><img src="site/gallery/assets_screen.jpg" alt="BitSend assets screen" width="220" /></td>
+    <td><img src="site/gallery/Home_screen.jpg" alt="BitSend home screen" width="220" /></td>
+  </tr>
+</table>
+
 ## Highlights
 
 - Offline-first local wallet flow with hotspot and BLE handoff

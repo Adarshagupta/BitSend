@@ -5,7 +5,8 @@
   const config = window.BITSEND_CONFIG || {};
   const appTargetUrl = config.APP_TARGET_URL || "/app/";
   const apkDownloadUrl =
-    config.APK_DOWNLOAD_URL || "assets/downloads/bitsend-alpha.apk";
+    config.APK_DOWNLOAD_URL ||
+    "https://bitsend-bitgo-backend.blueadarsh1.workers.dev/downloads/bitsend-alpha.apk";
   const prefersReducedMotion = window.matchMedia(
     "(prefers-reduced-motion: reduce)",
   );
