@@ -1,3 +1,0 @@
-Unable to run "adb", check your Android SDK installation and ANDROID_HOME environment variable: C:\Users\adasg\AppData\Local\Android\Sdk\platform-tools\adb.exe
-Error details: Process exited abnormally with exit code 1:
-* daemon not running; starting now at tcp:5037
