@@ -731,13 +731,14 @@ h3 {
 }
 
 .hero-title {
-  max-width: 9.6ch;
+  max-width: none;
   margin: 0;
-  font-size: clamp(3.15rem, 6.4vw, 5.45rem);
+  font-size: clamp(2.7rem, 5.6vw, 4.6rem);
 }
 
 .hero-title-line {
   display: block;
+  white-space: nowrap;
 }
 
 .hero-title-line + .hero-title-line {
@@ -764,6 +765,49 @@ h3 {
 
 .hero-actions {
   margin-top: 1.25rem;
+}
+
+.alpha-download {
+  display: grid;
+  gap: 0.7rem;
+  max-width: 26rem;
+  margin-top: 1.1rem;
+  padding: 1rem;
+  border: 1px solid rgba(196, 154, 58, 0.26);
+  border-radius: 1rem;
+  background:
+    linear-gradient(135deg, rgba(196, 154, 58, 0.12), rgba(255, 255, 255, 0.88)),
+    rgba(255, 255, 255, 0.88);
+  box-shadow: 0 12px 28px rgba(21, 26, 34, 0.08);
+}
+
+.alpha-download-label {
+  color: var(--gold-strong);
+  font-family: "Oxanium", "Manrope", sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.alpha-download-copy {
+  color: var(--ink);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.alpha-download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.alpha-download-button {
+  justify-content: center;
+}
+
+.alpha-download-flow {
+  justify-content: center;
 }
 
 .hero-stage,
@@ -2944,7 +2988,7 @@ html.flow-desktop .story-stage {
 
   .hero-title {
     max-width: 9.1ch;
-    font-size: clamp(2.35rem, 11.4vw, 4rem);
+    font-size: clamp(2.1rem, 9.8vw, 3.4rem);
   }
 
   .eyebrow {
@@ -3225,7 +3269,7 @@ html.flow-desktop .story-stage {
 
   .hero-title {
     max-width: none;
-    font-size: clamp(1.95rem, 9.5vw, 2.85rem);
+    font-size: clamp(1.55rem, 7.4vw, 2.2rem);
     line-height: 1;
     letter-spacing: -0.04em;
   }
@@ -3235,7 +3279,8 @@ html.flow-desktop .story-stage {
   }
 
   .hero-title-line {
-    display: inline-block;
+    display: block;
+    white-space: nowrap;
   }
 
   .hero-copy .lede,
@@ -3426,6 +3471,19 @@ html.flow-desktop .story-stage {
     width: 100%;
   }
 
+  .alpha-download {
+    max-width: none;
+  }
+
+  .alpha-download-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .alpha-download-actions .button {
+    width: 100%;
+  }
+
   .chains-grid {
     grid-template-columns: 1fr;
   }
@@ -3433,7 +3491,7 @@ html.flow-desktop .story-stage {
 
 @media (max-width: 400px) {
   .hero-title {
-    font-size: clamp(1.82rem, 9.6vw, 2.5rem);
+    font-size: clamp(1.4rem, 7.2vw, 1.9rem);
   }
 }
 

@@ -9,9 +9,11 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart' as path_provider;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:solana/solana.dart' show isValidAddress;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app/app.dart';
 import '../app/theme.dart';
@@ -8601,6 +8603,13 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static final Uri _termsUri = Uri.parse('https://bitsend-amber.vercel.app/toc/');
+  static final Uri _tocUri = Uri.parse('https://bitsend-amber.vercel.app/toc/');
+  static final Uri _legalUri = Uri.parse('https://bitsend-amber.vercel.app/privacy/');
+  static final Uri _privacyUri = Uri.parse('https://bitsend-amber.vercel.app/privacy/');
+  static final Uri _contactUri = Uri.parse('https://bitsend-amber.vercel.app/contact/');
+  static const String _supportEmail = 'support@bitsend.app';
+
   late final TextEditingController _rpcController;
   late final TextEditingController _bitgoController;
   late final TextEditingController _swapApiKeyController;
@@ -8652,6 +8661,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (error) {
       _showSnack(context, _messageFor(error));
     }
+  }
+
+  Future<void> _openExternalPage(
+    Uri uri, {
+    LaunchMode mode = LaunchMode.externalApplication,
+  }) async {
+    final bool opened = await launchUrl(
+      uri,
+      mode: mode,
+    );
+    if (!opened && mounted) {
+      _showSnack(context, 'Could not open ${uri.toString()}.');
+    }
+  }
+
+  Future<void> _emailSupport() async {
+    final Uri emailUri = Uri(
+      scheme: 'mailto',
+      path: _supportEmail,
+      queryParameters: <String, String>{
+        'subject': 'BitSend support request',
+      },
+    );
+    await _openExternalPage(emailUri, mode: LaunchMode.platformDefault);
+  }
+
+  Future<void> _showAppAbout() async {
+    final PackageInfo info = await PackageInfo.fromPlatform();
+    if (!mounted) {
+      return;
+    }
+    showAboutDialog(
+      context: context,
+      applicationName: info.appName.isEmpty ? 'BitSend' : info.appName,
+      applicationVersion: '${info.version} (${info.buildNumber})',
+      applicationLegalese: 'BitSend',
+    );
   }
 
   Future<void> _clearAll(BitsendAppState state) async {
@@ -9432,6 +9478,79 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
           FadeSlideIn(
             delay: 100,
+            child: SectionCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const _SettingsSectionIntro(
+                    title: 'Legal and support',
+                    caption:
+                        'Quick links required for app listing, user support, and policy review.',
+                  ),
+                  const SizedBox(height: 14),
+                  SelectableText(
+                    'Support email: $_supportEmail',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: <Widget>[
+                      OutlinedButton.icon(
+                        onPressed: () => _openExternalPage(_termsUri),
+                        icon: const Icon(Icons.gavel_rounded),
+                        label: const Text('Terms & conditions'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _openExternalPage(_tocUri),
+                        icon: const Icon(Icons.article_outlined),
+                        label: const Text('ToC'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _openExternalPage(_legalUri),
+                        icon: const Icon(Icons.privacy_tip_outlined),
+                        label: const Text('Legal'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _openExternalPage(_privacyUri),
+                        icon: const Icon(Icons.policy_outlined),
+                        label: const Text('Privacy policy'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _openExternalPage(_contactUri),
+                        icon: const Icon(Icons.support_agent_rounded),
+                        label: const Text('Contact'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _emailSupport,
+                        icon: const Icon(Icons.email_outlined),
+                        label: const Text('Email support'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          showLicensePage(
+                            context: context,
+                            applicationName: 'BitSend',
+                          );
+                        },
+                        icon: const Icon(Icons.menu_book_rounded),
+                        label: const Text('Open-source licenses'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _showAppAbout,
+                        icon: const Icon(Icons.info_outline_rounded),
+                        label: const Text('About app'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          FadeSlideIn(
+            delay: 120,
             child: SectionCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

@@ -1,5 +1,6 @@
 import java.io.FileInputStream
 import java.util.Properties
+import org.gradle.api.GradleException
 
 plugins {
     id("com.android.application")
@@ -13,6 +14,25 @@ val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
+
+val releaseSigningRequiredKeys = listOf(
+    "storeFile",
+    "storePassword",
+    "keyAlias",
+    "keyPassword",
+)
+
+fun hasValidReleaseSigningConfig(): Boolean {
+    if (!keystorePropertiesFile.exists()) {
+        return false
+    }
+    return releaseSigningRequiredKeys.all { key ->
+        val value = keystoreProperties.getProperty(key)
+        !value.isNullOrBlank()
+    }
+}
+
+val hasReleaseSigningConfig = hasValidReleaseSigningConfig()
 
 android {
     namespace = "com.bitsend.app.bitsend"
@@ -38,7 +58,7 @@ android {
 
     signingConfigs {
         create("release") {
-            if (keystorePropertiesFile.exists()) {
+            if (hasReleaseSigningConfig) {
                 storeFile = file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
                 keyAlias = keystoreProperties["keyAlias"] as String
@@ -53,12 +73,12 @@ android {
             isShrinkResources = false
         }
         release {
-            signingConfig =
-                if (keystorePropertiesFile.exists()) {
-                    signingConfigs.getByName("release")
-                } else {
-                    signingConfigs.getByName("debug")
-                }
+            if (!hasReleaseSigningConfig) {
+                throw GradleException(
+                    "Release signing is not configured. Add android/key.properties with storeFile, storePassword, keyAlias, and keyPassword.",
+                )
+            }
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
