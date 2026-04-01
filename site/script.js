@@ -747,7 +747,7 @@
 
     gsap.utils
       .toArray(
-        ".section-flow .section-heading, .section-flow .story-scrollytelling, .section-feature-showcase .section-heading, .section-feature-showcase .feature-showcase, .section-chains .section-heading, .section-chains .chains-grid, .section-feature-band .feature-marquee, .section-feature-band .section-heading, .section-feature-band .utility-grid, .section-trust .section-heading, .section-trust .trust-grid",
+        ".section-flow .section-heading, .section-feature-showcase .section-heading, .section-feature-showcase .feature-showcase, .section-chains .section-heading, .section-chains .chains-grid, .section-feature-band .feature-marquee, .section-feature-band .section-heading, .section-feature-band .utility-grid, .section-trust .section-heading, .section-trust .trust-grid",
       )
       .forEach((block) => {
         const yOffset = block.classList.contains("section-heading") ? 34 : 44;
